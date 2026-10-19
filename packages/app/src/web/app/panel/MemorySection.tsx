@@ -4,11 +4,11 @@ import { dayName, journalSource, journalSummary } from "../../../shared/activity
 import type { Bot } from "../../../shared/bot";
 import { memoryDeleteRpc, memoryJournalRpc, memoryListRpc, memoryLogDeleteRpc, memoryLogRpc, memoryReadRpc, memoryUndoRpc, memoryWriteRpc } from "../../../shared/rpc";
 import { relativeTime } from "../../../shared/time";
-import { Button, IconButton, Segmented, useAction, useFeedback } from "../../components/ui";
+import { Button, IconButton, Segmented, Toggle, useAction, useFeedback } from "../../components/ui";
 import { rpc } from "../../lib/api";
-import { Section } from "./common";
+import { Section, useUpdateBot } from "./common";
 
-function FileEditor({ botId, name, onDeleted }: { botId: string; name: string; onDeleted: () => void }) {
+function FileEditor({ botId, name, botWrites, onDeleted }: { botId: string; name: string; botWrites: boolean; onDeleted: () => void }) {
   const client = useQueryClient();
   const feedback = useFeedback();
   const { busy, run } = useAction();
@@ -20,7 +20,7 @@ function FileEditor({ botId, name, onDeleted }: { botId: string; name: string; o
   const refresh = () => client.invalidateQueries({ queryKey: ["memory", botId] });
   return (
     <div className="stack" style={{ gap: 8 }}>
-      <textarea className="textarea mono" rows={14} value={value} onChange={(event) => setText(event.target.value)} placeholder={name === "MEMORY.md" ? "Empty. The bot writes here when it learns something worth keeping." : ""} />
+      <textarea className="textarea mono" rows={14} value={value} onChange={(event) => setText(event.target.value)} placeholder={name === "MEMORY.md" ? (botWrites ? "Empty. The bot writes here when it learns something worth keeping." : "Empty. The bot reads this but doesn't write here. Add what it should remember.") : ""} />
       <div className="row">
         <Button
           small
@@ -82,7 +82,7 @@ function Files({ bot }: { bot: Bot }) {
           </button>
         ))}
       </div>
-      <FileEditor botId={bot.id} name={selected} onDeleted={() => setSelected("MEMORY.md")} />
+      <FileEditor botId={bot.id} name={selected} botWrites={bot.memoryAutoWrite} onDeleted={() => setSelected("MEMORY.md")} />
       <div className="row">
         <input className="input" placeholder="new-topic.md" value={newName} onChange={(event) => setNewName(event.target.value)} />
         <Button
@@ -189,8 +189,15 @@ function Changes({ bot }: { bot: Bot }) {
 
 export function MemorySection({ bot }: { bot: Bot }) {
   const [view, setView] = useState<"files" | "log" | "changes">("files");
+  const update = useUpdateBot();
   return (
     <>
+      <Section title="Memory writing" info="Off, the bot can only read its memory; anything it changes there is put back when its turn ends. You can still edit it here, and the daily log is kept either way.">
+        <div className="row">
+          <span style={{ flex: 1 }}>Let the bot write its own memory</span>
+          <Toggle on={bot.memoryAutoWrite} label="Memory writing" onChange={(memoryAutoWrite) => void update(bot.id, { memoryAutoWrite })} />
+        </div>
+      </Section>
       <div style={{ padding: "12px 16px 0" }}>
         <Segmented
           value={view}

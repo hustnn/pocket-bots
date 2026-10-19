@@ -132,9 +132,10 @@ describe("what a bot won't do", () => {
       "Asks before contacting other bots.",
       "Has no connected apps.",
       "Won't act on a schedule.",
+      "Can read its memory but won't write to it; you edit it on the Memory page.",
       "Keeps skills and routines only after you confirm them.",
     ]);
-    const busy = makeBot({ modeId: "bypassPermissions", contactBots: "allow", apps: ["gmail"], routines: [{ id: "r", name: "r", prompt: "p", enabled: true, schedule: { kind: "webhook" }, resultsChatId: null, createdAt: "" }] });
+    const busy = makeBot({ modeId: "bypassPermissions", contactBots: "allow", memoryAutoWrite: true, apps: ["gmail"], routines: [{ id: "r", name: "r", prompt: "p", enabled: true, schedule: { kind: "webhook" }, resultsChatId: null, createdAt: "" }] });
     expect(botLimits(busy, { local: true, appsConfigured: true })).toEqual(["Keeps skills and routines only after you confirm them."]);
     expect(botLimits(busy, { local: false, appsConfigured: true })).toEqual(["Can't contact other bots.", "Has no connected apps."]);
   });

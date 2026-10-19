@@ -181,7 +181,7 @@ export function whenLabel(at: Date, now: Date): string {
 interface JournalRowLike {
   file: string;
   actor: "bot" | "you";
-  via: "chat" | "app" | "disk" | "undo";
+  via: "chat" | "app" | "disk" | "undo" | "restore";
   chat: { title: string } | null;
   kind: "created" | "edited" | "deleted";
   added: number;
@@ -194,6 +194,12 @@ const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ?
 export function journalSummary(row: JournalRowLike, botName: string): string {
   const who = row.actor === "bot" ? botName : "You";
   const target = row.file === "MEMORY.md" ? "MEMORY.md" : `the ${row.file.replace(/\.md$/, "")} topic`;
+  // The app put back what the bot changed, because memory writing is off.
+  if (row.via === "restore") {
+    if (row.kind === "created") return `Put ${target} back after ${botName} deleted it`;
+    if (row.kind === "deleted") return `Removed ${target}, which ${botName} created`;
+    return `Reverted ${botName}'s changes to ${target}`;
+  }
   if (row.kind === "created") return `${who} created ${target}${row.added ? ` with ${plural(row.added, "line")}` : ""}`;
   if (row.kind === "deleted") return `${who} deleted ${target}`;
   if (row.added && !row.removed) return `${who} added ${plural(row.added, "line")} to ${target}`;
@@ -204,6 +210,7 @@ export function journalSummary(row: JournalRowLike, botName: string): string {
 /** Where a change came from. */
 export function journalSource(row: JournalRowLike): string {
   if (row.via === "undo") return "undo";
+  if (row.via === "restore") return "memory writing is off";
   if (row.via === "disk") return "changed outside the app";
   if (row.chat) return `from chat "${row.chat.title}"`;
   return "in the bot's settings";

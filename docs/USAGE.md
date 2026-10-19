@@ -193,15 +193,39 @@ Claude Code 要做需要授权的事（跑命令、写文件、调 MCP 工具）
 
 bot 的长期记忆是它工作目录里的 `MEMORY.md`。每个新聊天开始时，`MEMORY.md` 的前 200 行（最多 24 KB）会放进 system prompt。
 
-让 bot 记东西，直接说：
+### Memory writing 开关
 
-> 请记住：我叫小牛，平时用中文交流，喜欢简洁的回答；我在新加坡，时区是 Asia/Singapore。把这些写进你的长期记忆。
+**Memory** 页签顶部有个 **Memory writing** 开关，**默认关闭**：新建的 bot、升级前就有的 bot、导入的 bot 都是关闭的。
 
-bot 会自己写 `MEMORY.md`。之后在 **Memory** 页签里能看到：
+| | 关闭（默认） | 打开 |
+|---|---|---|
+| bot 读记忆（注入 `MEMORY.md`、Recent work、`search_chats`） | 照常 | 照常 |
+| 你在 Memory 页签查看、编辑、撤销 | 照常 | 照常 |
+| bot 改 `MEMORY.md` 和主题文件 | 不行：这一轮结束时恢复成原样 | 可以 |
+| 每一轮结束记每日日志（pocket-bots 自己记，不是 bot 写的） | 照常 | 照常 |
+
+关闭时，system prompt 的 Memory 段会告诉 bot 记忆是只读的：值得记的事告诉你，由你自己加到 Memory 页签，或者请你打开开关。已经记下的内容（`MEMORY.md`）不受影响，仍会进新聊天的 prompt；每日日志也照常记，Recent work 照常更新。
+
+**兜底是「一轮结束时恢复」，不是「写的时候拦住」。** bot 是用各个 agent 自带的文件工具或命令行改文件的，pocket-bots 拦不住这一下。所以每一轮结束时，pocket-bots 把这一轮开始时的 `MEMORY.md` 和 `memory/<topic>.md` 同现在的比一遍：bot 改过的改回去，新建的删掉，删掉的补回来。**Changes** 里会各记一条：bot 做了什么，以及恢复了什么（来源标着 `memory writing is off`）。恢复这一条也能点撤销，把 bot 的版本放回来。
+
+- 开关在一轮结束时读取，所以改了开关，从下一个结束的轮次起生效。
+- 开着时让 bot 记东西，直接说：
+
+  > 请记住：我叫小牛，平时用中文交流，喜欢简洁的回答；我在新加坡，时区是 Asia/Singapore。把这些写进你的长期记忆。
+
+- 关着时，上面这句话 bot 会回答你应该把什么加进 Memory 页签，而不是自己写。
+- 开关的改动和别的设置一样记在 **History** 里。bot 自己没办法通过「提议」改这个开关。
+- 这个开关写在 prompt 的常驻部分：新开的聊天一定带着新写法；群聊座位续接后的第一条输入前会补发；bot 自己的聊天里，Claude Code 和 Codex 续接的老会话会忽略新传的 prompt，继续按开始时的写法行事。老会话里 bot 即使还以为自己能写，一轮结束时也会被恢复。
+- 同一个 bot 同时在跑好几个聊天（群聊座位、私聊、定时任务）时，bot 在任何一个里写的改动，都在某个聊天结束时被恢复。
+- 局限：恢复只在一轮结束时发生，轮次进行中文件里是 bot 改过的样子；一轮的开始没被看到（后端重启期间结束的轮次）时没法恢复；`memory/log/` 里的每日日志不在恢复范围内；你在轮次进行中用编辑器直接改 `MEMORY.md` 或主题文件，会被当成 bot 的改动恢复掉，不过 Changes 里有这条恢复记录，可以撤销（经 Memory 页签做的编辑不受影响）。
+
+### Memory 页签
+
+bot 的记忆之后在 **Memory** 页签里能看到：
 
 - **Files**：`MEMORY.md` 和主题文件（`memory/<topic>.md`），可以直接编辑保存，也可以 **Add topic** 新建主题文件。主题文件不会自动进 prompt，bot 需要时自己读。
-- **Daily log**：pocket-bots 在每一轮结束时自动记一行（时间、哪个聊天、bot 说了什么、用了哪些工具）。最近两天的最新几行会作为「Recent work」进新聊天的 prompt，bot 也能用 `search_chats` 工具翻。
-- **Changes**：记忆文件的每次改动（bot 改的或你改的），点撤销按钮就能恢复成改之前的样子。
+- **Daily log**：pocket-bots 在每一轮结束时自动记一行（时间、哪个聊天、bot 说了什么、用了哪些工具）。这是 pocket-bots 自己的记录，不受 Memory writing 开关影响。最近两天的最新几行会作为「Recent work」进新聊天的 prompt，bot 也能用 `search_chats` 工具翻。
+- **Changes**：记忆文件的每次改动（bot 改的、你改的、关闭开关时被恢复的），点撤销按钮就能恢复成改之前的样子。
 
 > 记忆日志、撤销记录都是 pocket-bots 后端在每轮开始和结束时记的，所以后端要一直开着。后端停机期间结束的轮次，重启后会补上日志。
 
@@ -218,7 +242,7 @@ bot 会自己写 `MEMORY.md`。之后在 **Memory** 页签里能看到：
 | Skills | 从技能库里给这个 bot 勾选技能 |
 | Access | MCP 服务器、连接的应用、命令白名单、免审批的工具 |
 | Routines | 定时任务和 webhook |
-| Memory | 记忆文件、每日日志、改动记录 |
+| Memory | 记忆写入开关、记忆文件、每日日志、改动记录 |
 | History | 设置的历史快照，可恢复 |
 
 ### 预览 system prompt
@@ -483,7 +507,7 @@ bot 通过 pocket-bots 本地的 relay 调 Composio，relay 只放行你给这�
 ### 导出和导入
 
 - 导出的文件格式是 `"format": "pocket-bots"`；改名之前导出的旧文件也能导入。
-- **New bot → Import**：选文件或直接粘贴 JSON，可以是单个 bot，也可以是多个 bot 的文件（**设置 → Back up** 导出的；旧文件里的团队不会导入）。导入的 bot 是新 bot，名字冲突时自动加编号（比如「Scout 2」）。库里已有的同名技能、同名 MCP 服务器会直接复用；新带进来的技能要先在 **Skills & Tools** 里审阅才会生效，新的 MCP 服务器要先测试才会打开。
+- **New bot → Import**：选文件或直接粘贴 JSON，可以是单个 bot，也可以是多个 bot 的文件（**设置 → Back up** 导出的；旧文件里的团队不会导入）。导入的 bot 是新 bot，名字冲突时自动加编号（比如「Scout 2」），Memory writing 开关是关闭的。库里已有的同名技能、同名 MCP 服务器会直接复用；新带进来的技能要先在 **Skills & Tools** 里审阅才会生效，新的 MCP 服务器要先测试才会打开。
 - **设置 → Back up → Export all bots / Export with memory**：所有 bot 打成一个文件，适合备份或搬到另一台电脑。群聊不在里面。
 
 ### 历史

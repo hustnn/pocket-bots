@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { pixelAvatar, SPRITE_NAMES, SPRITE_SIZE } from "../src/shared/avatar";
-import { botProblems, defaultModelId, EMPTY_LIBRARY, promptSections, StoreSchema, formatPairs, joinArgs, parseMcpJson, parsePairs, splitArgs, type Bot, type Library, type LibraryMcpServer } from "../src/shared/bot";
-import { BOT_TEMPLATES } from "../src/shared/templates";
+import { botLimits, botProblems, defaultModelId, EMPTY_LIBRARY, promptSections, StoreSchema, formatPairs, joinArgs, parseMcpJson, parsePairs, splitArgs, type Bot, type Library, type LibraryMcpServer } from "../src/shared/bot";
+import { BOT_TEMPLATES, newBot } from "../src/shared/templates";
 import { relativeTime } from "../src/shared/time";
 
 function bot(patch: Partial<Bot> = {}): Bot {
@@ -24,6 +24,7 @@ function bot(patch: Partial<Bot> = {}): Bot {
     appRules: {},
     voice: { name: null, readReplies: false },
     contactBots: "ask",
+    memoryAutoWrite: false,
     playbooks: [],
     routines: [],
     pinned: false,
@@ -86,6 +87,26 @@ describe("promptSections", () => {
     expect(sections[4]!.text).toContain('- pdf: PDFs. Read "/m/skills/pdf/SKILL.md"');
   });
 
+  it("tells the bot its memory is read-only unless memory writing is on", () => {
+    const context = { memory: "likes tea", memoryPath: "/m/MEMORY.md", recentWork: [], playbooks: [], skills: [], botTools: false, apps: [] };
+    const memoryText = (patch: Partial<Bot>, volatile = true) => promptSections(bot(patch), context, { volatile }).find((section) => section.title === "Memory")!.text;
+    const off = memoryText({});
+    expect(off).toContain("Your long-term memory lives in /m/MEMORY.md.");
+    expect(off).toContain("read-only for you: don't edit MEMORY.md or the topic files");
+    expect(off).toContain("tell the user so they can add it on the Memory page");
+    expect(off).not.toContain("update that file");
+    // The daily log is the app's own, so both wordings mention it.
+    expect(off).toContain("The app keeps a daily log of your chats in memory/log/");
+    expect(off).toContain("Current memory:\nlikes tea");
+    const on = memoryText({ memoryAutoWrite: true });
+    expect(on).toContain("update that file");
+    expect(on).toContain("The app keeps a daily log of your chats in memory/log/");
+    expect(on).not.toContain("read-only");
+    // The switch is in the standing part of the prompt, so a resumed session is told when it flips.
+    expect(memoryText({}, false)).not.toBe(memoryText({ memoryAutoWrite: true }, false));
+    expect(memoryText({}, false)).not.toContain("likes tea");
+  });
+
   it("leaves out memory and skills when the bot has no local folder", () => {
     expect(promptSections(bot({ soul: "" }), { memory: "", memoryPath: null, recentWork: [], playbooks: [], skills: [], botTools: false, apps: [] }).map((section) => section.title)).toEqual(["Persona"]);
   });
@@ -139,6 +160,20 @@ describe("settings schema", () => {
     expect(StoreSchema.parse({})).toEqual({ bots: [], history: [] });
     const bots = BOT_TEMPLATES.map((template) => bot({ id: template.id, name: template.name, title: template.title, soul: template.soul }));
     expect(StoreSchema.parse({ bots }).bots).toHaveLength(BOT_TEMPLATES.length);
+  });
+
+  it("keeps memory writing off for bots saved before the switch existed", () => {
+    const { memoryAutoWrite: _switch, ...legacy } = bot({ memoryAutoWrite: true });
+    expect(StoreSchema.parse({ bots: [legacy] }).bots[0]!.memoryAutoWrite).toBe(false);
+    expect(StoreSchema.parse({ bots: [bot({ memoryAutoWrite: true })] }).bots[0]!.memoryAutoWrite).toBe(true);
+    expect(newBot("claude").memoryAutoWrite).toBe(false);
+  });
+
+  it("says in the overview that a bot with memory writing off only reads its memory", () => {
+    const facts = { local: true, appsConfigured: true };
+    expect(botLimits(bot(), facts)).toContain("Can read its memory but won't write to it; you edit it on the Memory page.");
+    expect(botLimits(bot({ memoryAutoWrite: true }), facts).some((line) => line.includes("memory"))).toBe(false);
+    expect(botLimits(bot(), { ...facts, local: false }).some((line) => line.includes("memory"))).toBe(false);
   });
 });
 

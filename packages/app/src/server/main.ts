@@ -73,7 +73,7 @@ async function main(): Promise<void> {
   const cards = new ChatCards();
   const scheduler = new RoutineScheduler(host, relay, cards, () => hub.publish({ type: "routines" }));
   const journal = new MemoryJournal();
-  wireActivity({ watcher: chats, journal, scheduler });
+  wireActivity({ watcher: chats, host, journal, scheduler });
   // An answer that outlasted ask_bot's wait goes to the chat that asked, once the asked chat's turn ends.
   chats.on("turn.ended", async ({ agent }) => {
     if (agent.labels?.[ASKED_BY_LABEL]) await answers.ended(agent.id);

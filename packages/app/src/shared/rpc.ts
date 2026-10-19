@@ -77,7 +77,7 @@ const JournalEntrySchema = z.object({
   at: z.string(),
   file: z.string(),
   actor: z.enum(["bot", "you"]),
-  via: z.enum(["chat", "app", "disk", "undo"]),
+  via: z.enum(["chat", "app", "disk", "undo", "restore"]),
   chat: z.object({ id: z.string(), title: z.string() }).nullable(),
   kind: z.enum(["created", "edited", "deleted"]),
   diff: z.string(),

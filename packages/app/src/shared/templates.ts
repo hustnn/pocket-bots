@@ -80,6 +80,7 @@ export function newBot(provider: string, template?: BotTemplate): Bot {
     appRules: {},
     voice: { name: null, readReplies: false },
     contactBots: "ask",
+    memoryAutoWrite: false,
     routines: [],
     playbooks: [],
     cwd: null,

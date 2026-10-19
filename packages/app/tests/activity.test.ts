@@ -103,7 +103,7 @@ describe("memory journal, daily log and search_chats", () => {
     await mkdir(join(main, ".."), { recursive: true });
     await writeFile(main, "# Memory\n- likes tea\n");
 
-    await journal.begin("bot-j");
+    await journal.begin("bot-j", "chat-1");
     await writeFile(main, "# Memory\n- likes tea\n- works Mon-Fri\n");
     await mkdir(join(main, "..", "memory"), { recursive: true });
     await writeFile(memoryFilePath("bot-j", "clients.md"), "# Clients\n");
@@ -118,7 +118,7 @@ describe("memory journal, daily log and search_chats", () => {
 
     // Changed outside the app between turns.
     await writeFile(main, "# Memory\n");
-    await journal.begin("bot-j");
+    await journal.begin("bot-j", "chat-2");
     entries = await journal.list("bot-j");
     expect(entries[0]).toMatchObject({ file: "MEMORY.md", actor: "you", via: "disk", removed: 2 });
 
@@ -134,17 +134,239 @@ describe("memory journal, daily log and search_chats", () => {
     expect((await journal.list("bot-j")).filter((entry) => entry.via === "undo")).toHaveLength(2);
   });
 
+  it("puts back a read-only bot's memory changes when its turn ends, journals them, and lets the person undo", async () => {
+    const { MemoryJournal } = await import("../src/server/journal");
+    const { memoryFilePath } = await import("../src/server/memory");
+    const journal = new MemoryJournal();
+    const main = memoryFilePath("bot-r", "MEMORY.md");
+    const topic = memoryFilePath("bot-r", "clients.md");
+    const chat = { id: "chat-r", title: "Notes" };
+    await mkdir(join(main, ".."), { recursive: true });
+    await mkdir(join(main, "..", "memory"), { recursive: true });
+    await writeFile(main, "# Memory\n- likes tea\n");
+    await writeFile(topic, "# Clients\n- Acme\n");
+
+    // The bot edits MEMORY.md, deletes a topic and creates another.
+    await journal.begin("bot-r", "chat-r");
+    await writeFile(main, "# Memory\n- likes tea\n- works Mon-Fri\n");
+    await rm(topic);
+    await writeFile(memoryFilePath("bot-r", "ideas.md"), "# Ideas\n");
+    await journal.end("bot-r", chat, { readOnly: true });
+    expect(await readFile(main, "utf8")).toBe("# Memory\n- likes tea\n");
+    expect(await readFile(topic, "utf8")).toBe("# Clients\n- Acme\n");
+    await expect(readFile(memoryFilePath("bot-r", "ideas.md"), "utf8")).rejects.toThrow();
+
+    // What the bot did, then what was put back, each in its own entry.
+    const entries = await journal.list("bot-r");
+    const summary = (entry: (typeof entries)[number]) => [entry.file, entry.actor, entry.via, entry.kind];
+    expect(entries.filter((entry) => entry.actor === "bot").map(summary).sort()).toEqual([
+      ["MEMORY.md", "bot", "chat", "edited"],
+      ["clients.md", "bot", "chat", "deleted"],
+      ["ideas.md", "bot", "chat", "created"],
+    ]);
+    expect(entries.filter((entry) => entry.via === "restore").map(summary).sort()).toEqual([
+      ["MEMORY.md", "you", "restore", "edited"],
+      ["clients.md", "you", "restore", "created"],
+      ["ideas.md", "you", "restore", "deleted"],
+    ]);
+    expect(entries.filter((entry) => entry.via === "restore").every((entry) => entry.chat?.id === "chat-r")).toBe(true);
+
+    // The restore was the app's doing: the next turn's start finds nothing changed outside the app.
+    const count = entries.length;
+    await journal.begin("bot-r", "chat-r");
+    expect(await journal.list("bot-r")).toHaveLength(count);
+
+    // Undoing a restore gives the bot's version back.
+    const restoredMain = entries.find((entry) => entry.via === "restore" && entry.file === "MEMORY.md")!;
+    await journal.undo("bot-r", restoredMain.id);
+    expect(await readFile(main, "utf8")).toBe("# Memory\n- likes tea\n- works Mon-Fri\n");
+    const restoredIdeas = entries.find((entry) => entry.via === "restore" && entry.file === "ideas.md")!;
+    await journal.undo("bot-r", restoredIdeas.id);
+    expect(await readFile(memoryFilePath("bot-r", "ideas.md"), "utf8")).toBe("# Ideas\n");
+  });
+
+  it("leaves a bot's memory changes alone when memory writing is on, and never touches the person's edits", async () => {
+    const { MemoryJournal } = await import("../src/server/journal");
+    const { memoryFilePath } = await import("../src/server/memory");
+    const journal = new MemoryJournal();
+    const main = memoryFilePath("bot-w", "MEMORY.md");
+    await mkdir(join(main, ".."), { recursive: true });
+    await writeFile(main, "# Memory\n");
+
+    await journal.begin("bot-w", "c");
+    await writeFile(main, "# Memory\n- by the bot\n");
+    await journal.end("bot-w", { id: "c", title: "t" }, { readOnly: false });
+    expect(await readFile(main, "utf8")).toBe("# Memory\n- by the bot\n");
+    expect((await journal.list("bot-w")).map((entry) => entry.via)).toEqual(["chat"]);
+
+    // The person edits through the app during a read-only bot's turn: that edit stays, the bot's doesn't.
+    await journal.begin("bot-w", "c");
+    await journal.write("bot-w", "MEMORY.md", "# Memory\n- by me\n");
+    await mkdir(join(main, "..", "memory"), { recursive: true });
+    await writeFile(memoryFilePath("bot-w", "later.md"), "bot topic");
+    await journal.end("bot-w", { id: "c", title: "t" }, { readOnly: true });
+    expect(await readFile(main, "utf8")).toBe("# Memory\n- by me\n");
+    await expect(readFile(memoryFilePath("bot-w", "later.md"), "utf8")).rejects.toThrow();
+    // Writing through the journal has no switch to check, and a turn that changed nothing records nothing.
+    const before = (await journal.list("bot-w")).length;
+    await journal.begin("bot-w", "c");
+    await journal.end("bot-w", { id: "c", title: "t" }, { readOnly: true });
+    expect(await journal.list("bot-w")).toHaveLength(before);
+  });
+
+  describe("a bot with several turns running at once", () => {
+    const setup = async (botId: string) => {
+      const { MemoryJournal } = await import("../src/server/journal");
+      const { memoryFilePath } = await import("../src/server/memory");
+      const main = memoryFilePath(botId, "MEMORY.md");
+      await mkdir(join(main, ".."), { recursive: true });
+      await writeFile(main, "# Memory\n");
+      return { journal: new MemoryJournal(), main, chat: (id: string) => ({ id, title: `Chat ${id}` }) };
+    };
+
+    it("still puts back what a read-only bot wrote in a turn that was running when another turn started", async () => {
+      const { journal, main, chat } = await setup("bot-p");
+      await journal.begin("bot-p", "a", { readOnly: true });
+      await writeFile(main, "# Memory\n- written in turn A\n");
+      // B starts while A runs: the change is A's, not the person's.
+      await journal.begin("bot-p", "b", { readOnly: true });
+      expect((await journal.list("bot-p")).filter((entry) => entry.via === "disk")).toEqual([]);
+      await journal.end("bot-p", chat("a"), { readOnly: true });
+      expect(await readFile(main, "utf8")).toBe("# Memory\n");
+      expect((await journal.list("bot-p")).map((entry) => [entry.actor, entry.via, entry.chat?.id])).toEqual([
+        ["you", "restore", "a"],
+        ["bot", "chat", "a"],
+      ]);
+      // B ends with nothing left to find.
+      await journal.end("bot-p", chat("b"), { readOnly: true });
+      expect(await journal.list("bot-p")).toHaveLength(2);
+    });
+
+    it("records a change made on disk with no turn running as the person's, and keeps it", async () => {
+      const { journal, main, chat } = await setup("bot-q");
+      await journal.begin("bot-q", "a", { readOnly: true });
+      await journal.end("bot-q", chat("a"), { readOnly: true });
+      await writeFile(main, "# Memory\n- typed in an editor\n");
+      await journal.begin("bot-q", "b", { readOnly: true });
+      expect((await journal.list("bot-q")).map((entry) => [entry.actor, entry.via])).toEqual([["you", "disk"]]);
+      await journal.end("bot-q", chat("b"), { readOnly: true });
+      expect(await readFile(main, "utf8")).toBe("# Memory\n- typed in an editor\n");
+      expect(await journal.list("bot-q")).toHaveLength(1);
+    });
+
+    it("leaves a turn ended without `end`, or a deleted chat's turn, out of the running turns", async () => {
+      const { journal, main, chat } = await setup("bot-l");
+      await journal.begin("bot-l", "a", { readOnly: true });
+      await journal.begin("bot-l", "b", { readOnly: true });
+      await journal.leave("bot-l", "a");
+      await journal.forget("b");
+      await writeFile(main, "# Memory\n- typed in an editor\n");
+      await journal.begin("bot-l", "c", { readOnly: true });
+      expect((await journal.list("bot-l")).map((entry) => [entry.actor, entry.via])).toEqual([["you", "disk"]]);
+      await journal.end("bot-l", chat("c"), { readOnly: true });
+      expect(await readFile(main, "utf8")).toBe("# Memory\n- typed in an editor\n");
+      // The same chat starting twice is still one running turn.
+      await journal.begin("bot-l", "c", { readOnly: true });
+      await journal.begin("bot-l", "c", { readOnly: true });
+      await journal.end("bot-l", chat("c"), { readOnly: true });
+      await writeFile(main, "# Memory\n- typed again\n");
+      await journal.begin("bot-l", "d", { readOnly: true });
+      expect((await journal.list("bot-l"))[0]).toMatchObject({ actor: "you", via: "disk" });
+    });
+
+    it("behaves as before when memory writing is on", async () => {
+      const { journal, main, chat } = await setup("bot-n");
+      await journal.begin("bot-n", "a");
+      await writeFile(main, "# Memory\n- written in turn A\n");
+      await journal.begin("bot-n", "b");
+      // Taken for a change made outside the app, as it always was.
+      expect((await journal.list("bot-n")).map((entry) => [entry.actor, entry.via])).toEqual([["you", "disk"]]);
+      await journal.end("bot-n", chat("a"));
+      await journal.end("bot-n", chat("b"));
+      expect(await readFile(main, "utf8")).toBe("# Memory\n- written in turn A\n");
+      expect(await journal.list("bot-n")).toHaveLength(1);
+    });
+
+    it("is wired to the chats' turns: a read-only bot's parallel turns, a turn nobody saw start, and a deleted chat", async () => {
+      const { wireActivity } = await import("../src/server/activity");
+      const bot = makeBot({ id: "bot-t", name: "Tern", memoryAutoWrite: false });
+      const { journal, main } = await setup("bot-t");
+      const handlers = new Map<string, (event: unknown, api: unknown) => Promise<void>>();
+      const watcher = { on: (name: string, handler: (event: unknown, api: unknown) => Promise<void>) => void handlers.set(name, handler) };
+      wireActivity({ watcher: watcher as never, host: fakeHost([bot]), journal, scheduler: { finished: async () => {} } as never });
+      const labels = { "pocket-bots": "1", "pocket-bots.bot": "bot-t" };
+      const [a, b, c, d] = ["a", "b", "c", "d"].map((id) => ({ id, cwd: "/", title: `Chat ${id}`, labels }));
+      const started = (agent: unknown) => handlers.get("turn.started")!({ agent }, null);
+      const ended = (agent: unknown, missed = false) => handlers.get("turn.ended")!({ agent, outcome: { kind: "completed" }, timeline: [], missed }, null);
+      const via = async () => (await journal.list("bot-t")).map((entry) => entry.via);
+
+      await started(a);
+      await writeFile(main, "# Memory\n- from a\n");
+      await started(b);
+      await ended(a);
+      expect(await readFile(main, "utf8")).toBe("# Memory\n");
+      expect(await via()).toEqual(["restore", "chat"]);
+
+      // b's end wasn't seen to begin with (missed); c's chat was deleted. Neither keeps later changes from being the person's.
+      await ended(b, true);
+      await started(c);
+      await handlers.get("agent.removed")!({ agentId: "c" }, null);
+      await writeFile(main, "# Memory\n- typed in an editor\n");
+      await started(d);
+      expect(await via()).toEqual(["disk", "restore", "chat"]);
+      await ended(d);
+      expect(await readFile(main, "utf8")).toBe("# Memory\n- typed in an editor\n");
+    });
+  });
+
+  it("with memory writing off, a finished turn loses the bot's memory edits but still gets its daily log line; with it on, the edits stay too", async () => {
+    const { wireActivity } = await import("../src/server/activity");
+    const { MemoryJournal } = await import("../src/server/journal");
+    const { listLogDays, memoryFilePath } = await import("../src/server/memory");
+    const bot = makeBot({ id: "bot-o", name: "Owl", memoryAutoWrite: false });
+    const journal = new MemoryJournal();
+    const handlers = new Map<string, (event: unknown, api: unknown) => Promise<void>>();
+    const watcher = { on: (name: string, handler: (event: unknown, api: unknown) => Promise<void>) => void handlers.set(name, handler) };
+    wireActivity({ watcher: watcher as never, host: fakeHost([bot]), journal, scheduler: { finished: async () => {} } as never });
+    const agent = { id: newUuid(), cwd: "/", title: "Notes", labels: { "pocket-bots": "1", "pocket-bots.bot": "bot-o" } };
+    const timeline = [
+      { type: "user_message", text: "Remember my dentist" },
+      { type: "assistant_message", text: "Noted." },
+    ];
+    const main = memoryFilePath("bot-o", "MEMORY.md");
+    await mkdir(join(main, ".."), { recursive: true });
+    await writeFile(main, "# Memory\n");
+    const turn = async (edit: string) => {
+      await handlers.get("turn.started")!({ agent }, null);
+      await writeFile(main, edit);
+      await handlers.get("turn.ended")!({ agent, outcome: { kind: "completed" }, timeline, missed: false }, null);
+    };
+
+    await turn("# Memory\n- dentist on Friday\n");
+    expect(await readFile(main, "utf8")).toBe("# Memory\n");
+    // The daily log is the app's own record of the turn, so the switch doesn't touch it.
+    expect((await listLogDays("bot-o")).days).toEqual([{ day: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), lines: 1 }]);
+    expect((await journal.list("bot-o")).map((entry) => entry.via).sort()).toEqual(["chat", "restore"]);
+
+    // The switch is read when the turn ends, so flipping it takes effect from the next finished turn.
+    bot.memoryAutoWrite = true;
+    await turn("# Memory\n- dentist on Friday\n");
+    expect(await readFile(main, "utf8")).toBe("# Memory\n- dentist on Friday\n");
+    expect((await listLogDays("bot-o")).days).toEqual([{ day: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), lines: 2 }]);
+    expect((await journal.list("bot-o")).filter((entry) => entry.via === "restore")).toHaveLength(1);
+  });
+
   it("logs finished turns of bot chats and searches chats and memory", async () => {
     const { wireActivity } = await import("../src/server/activity");
     const { MemoryJournal } = await import("../src/server/journal");
     const { listLogDays, recentLogEntries } = await import("../src/server/memory");
     const { searchChats } = await import("../src/server/tools/chats");
-    const host = fakeHost([makeBot({ id: "bot-s", name: "Scout" })]);
+    const host = fakeHost([makeBot({ id: "bot-s", name: "Scout", memoryAutoWrite: true })]);
     // A watcher that hands its handlers to the test.
     const handlers = new Map<string, (event: unknown, api: unknown) => Promise<void>>();
     const watcher = { on: (name: string, handler: (event: unknown, api: unknown) => Promise<void>) => void handlers.set(name, handler) };
     const finished: string[] = [];
-    wireActivity({ watcher: watcher as never, journal: new MemoryJournal(), scheduler: { finished: async (_routine: string, _agent: string, outcome: { kind: string }) => void finished.push(outcome.kind) } as never });
+    wireActivity({ watcher: watcher as never, host, journal: new MemoryJournal(), scheduler: { finished: async (_routine: string, _agent: string, outcome: { kind: string }) => void finished.push(outcome.kind) } as never });
     const turnEnded = (event: unknown) => handlers.get("turn.ended")!(event, null);
     const agent = { id: newUuid(), cwd: "/", title: "Invoices", labels: { "pocket-bots": "1", "pocket-bots.bot": "bot-s" } };
 
