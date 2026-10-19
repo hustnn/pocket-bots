@@ -6,6 +6,7 @@ import { Avatar } from "../../components/Avatar";
 import { Button, Field, Modal, useFeedback } from "../../components/ui";
 import { errorText, rpc } from "../../lib/api";
 import { useStoreDoc } from "../../lib/data";
+import { FolderInput, folderProblem } from "../folders";
 
 /** Bots to tick, two to six of them; archived bots can't join. */
 function BotPicker({ bots, selected, onChange }: { bots: readonly Bot[]; selected: readonly string[]; onChange: (ids: string[]) => void }) {
@@ -57,6 +58,24 @@ function LeaderPicker({ bots, selected, leaderId, onChange }: { bots: readonly B
   );
 }
 
+/** The folder every bot's session for the group works in, like a repo; empty: each bot's own. */
+function GroupFolderField({ value, onChange, existing }: { value: string; onChange: (next: string) => void; existing: boolean }) {
+  return (
+    <Field
+      label="Working folder"
+      hint={
+        <>
+          Where every bot works for this group, like a repo on this computer. Empty: each bot works in its own folder. Their memory and skills stay in their own folders.
+          {existing ? " A change moves each bot there the next time it starts a turn, with a briefing of where it was." : ""}
+        </>
+      }
+      error={folderProblem(value)}
+    >
+      <FolderInput value={value} onChange={onChange} placeholder="Each bot's own folder" />
+    </Field>
+  );
+}
+
 /** New group chat: pick two to six bots; the group is named after them until renamed. */
 export function NewGroupDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (groupId: string) => void }) {
   const doc = useStoreDoc();
@@ -65,14 +84,15 @@ export function NewGroupDialog({ onClose, onCreated }: { onClose: () => void; on
   const [selected, setSelected] = useState<string[]>([]);
   const [leaderId, setLeaderId] = useState<string | null>(null);
   const [name, setName] = useState("");
+  const [folder, setFolder] = useState("");
   const [busy, setBusy] = useState(false);
-  const problem = membersProblem(selected);
+  const problem = membersProblem(selected) ?? folderProblem(folder);
   const generated = defaultGroupName(selected.map((id) => bots.find((bot) => bot.id === id)?.name ?? ""));
   const leader = leaderId && selected.includes(leaderId) ? leaderId : null;
   const create = async () => {
     setBusy(true);
     try {
-      const { groupId } = await rpc(groupCreateRpc, { name: name.trim() || null, memberIds: selected, leaderId: leader });
+      const { groupId } = await rpc(groupCreateRpc, { name: name.trim() || null, memberIds: selected, leaderId: leader, cwd: folder.trim() || null });
       onCreated(groupId);
     } catch (error) {
       feedback.error(errorText(error));
@@ -103,6 +123,7 @@ export function NewGroupDialog({ onClose, onCreated }: { onClose: () => void; on
         <Field label="Name" hint="You can rename it any time.">
           <input className="input" value={name} placeholder={selected.length ? generated : "Named after its bots"} onChange={(event) => setName(event.target.value)} />
         </Field>
+        <GroupFolderField value={folder} onChange={setFolder} existing={false} />
       </div>
     </Modal>
   );
@@ -119,13 +140,15 @@ export function MembersDialog({ group, onClose }: { group: GroupSummary; onClose
   const [wakeMode, setWakeMode] = useState<WakeMode>(group.wakeMode);
   const [leaderId, setLeaderId] = useState<string | null>(group.leaderId);
   const [muted, setMuted] = useState<string[]>(group.muted);
+  const [folder, setFolder] = useState(group.cwd ?? "");
   const [busy, setBusy] = useState(false);
-  const problem = membersProblem(selected);
+  const problem = membersProblem(selected) ?? folderProblem(folder);
   const leader = leaderId && selected.includes(leaderId) ? leaderId : null;
   const save = async () => {
     setBusy(true);
     try {
-      await rpc(groupUpdateRpc, { groupId: group.id, memberIds: selected, wakeMode, ...(leader !== group.leaderId ? { leaderId: leader } : {}) });
+      const cwd = folder.trim() || null;
+      await rpc(groupUpdateRpc, { groupId: group.id, memberIds: selected, wakeMode, ...(leader !== group.leaderId ? { leaderId: leader } : {}), ...(cwd !== group.cwd ? { cwd } : {}) });
       for (const botId of selected) {
         const want = muted.includes(botId);
         if (want !== group.muted.includes(botId)) await rpc(groupMuteRpc, { groupId: group.id, botId, muted: want });
@@ -153,6 +176,7 @@ export function MembersDialog({ group, onClose }: { group: GroupSummary; onClose
     >
       <BotPicker bots={bots} selected={selected} onChange={setSelected} />
       <LeaderPicker bots={bots} selected={selected} leaderId={leader} onChange={setLeaderId} />
+      <GroupFolderField value={folder} onChange={setFolder} existing />
       <Field
         label={leader ? "Who a message wakes the leader for" : "Who a message wakes"}
         hint={

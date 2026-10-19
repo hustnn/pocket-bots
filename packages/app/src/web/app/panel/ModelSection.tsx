@@ -2,10 +2,8 @@ import { defaultModelId, type Bot } from "../../../shared/bot";
 import { CommitInput, Field, Segmented } from "../../components/ui";
 import { useState } from "react";
 import { useProviders, useWorkspaces } from "../../lib/data";
+import { ABSOLUTE_PATH } from "../folders";
 import { Section, useUpdateBot } from "./common";
-
-/** An absolute path: /…, ~/…, C:\… or a \\share. */
-const ABSOLUTE_PATH = /^(\/|~(\/|$)|[A-Za-z]:[\\/]|\\\\)/;
 
 /** Managed, or a folder of the bot's own: picked from the folders other bots work in, or typed. */
 function WorkingFolder({ bot }: { bot: Bot }) {
@@ -31,7 +29,7 @@ function WorkingFolder({ bot }: { bot: Bot }) {
       {custom ? (
         <>
           {list.length ? (
-            <Field label="A folder another bot uses" hint="Folders your other bots work in.">
+            <Field label="A folder already in use" hint="Folders your bots, groups and chats work in.">
               <select
                 className="select"
                 value={picked?.directory ?? ""}

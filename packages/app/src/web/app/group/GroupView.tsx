@@ -16,6 +16,7 @@ import { markTermsIn, pendingTermsFor, placeKey } from "../../lib/highlight";
 import { MOD, useShortcut } from "../../lib/keys";
 import { navigate, replaceRoute } from "../../lib/router";
 import { QuestionForm } from "../chat/Cards";
+import { folderName } from "../folders";
 import { GroupComposer, senderName } from "./GroupComposer";
 import { MembersDialog } from "./GroupDialogs";
 
@@ -897,6 +898,12 @@ export function GroupView({ groupId, at, atThread }: { groupId: string; at?: num
         <div className="title" style={{ cursor: "pointer" }} onClick={() => void rename()} title="Rename">
           {group.name}
           <span className="subtitle"> · {members.map((bot) => (bot.id === group.leaderId ? `${bot.name} (leader)` : bot.name)).join(", ") || "no bots"}</span>
+          {group.cwd ? (
+            <span className="subtitle" title={`The bots work in ${group.cwd}`}>
+              {" · "}
+              <Icon name="folder" size={12} /> {folderName(group.cwd)}
+            </span>
+          ) : null}
         </div>
         <IconButton icon="search" title={`Search this group (${MOD}F)`} onClick={() => setSearching((open) => (open ? 0 : 1))} />
         <IconButton

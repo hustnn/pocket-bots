@@ -480,10 +480,13 @@ const MessageInput = {
 /** The bot's words a message replies to (Reply): quoted in front of it (see reply.ts). */
 const ReplyQuote = z.string().max(20_000).optional();
 
-/** Starts a new chat with a bot. */
+/** A folder on this computer a chat or a group works in: absolute, or under ~/. */
+const WorkFolder = z.string().max(4096);
+
+/** Starts a new chat with a bot; with `cwd`, in that folder instead of the bot's own. */
 export const chatStartRpc = defineRpc({
   name: "pocket.chats.start",
-  input: z.object({ botId: BotId, ...MessageInput }),
+  input: z.object({ botId: BotId, ...MessageInput, cwd: WorkFolder.nullable().optional() }),
   output: z.object({ chatId: z.string() }),
 });
 
@@ -535,7 +538,7 @@ export const chatCardsRpc = defineRpc({
   output: z.object({ cards: z.array(ChatCardSchema) }),
 });
 
-/** Folders bots already work in, to pick a bot's working folder from. */
+/** Folders bots, groups and chats already work in, to pick a working folder from. */
 export const workspacesRpc = defineRpc({
   name: "pocket.workspaces",
   input: z.object({}),
@@ -630,8 +633,11 @@ export const groupsListRpc = defineRpc({
 /** A new group with two to six bots; with no name it's named after them. */
 export const groupCreateRpc = defineRpc({
   name: "pocket.groups.create",
-  /** `leaderId`: one of the bots, which plans and hands out the work; the others take only what it hands them. */
-  input: z.object({ name: z.string().max(GROUP_NAME_MAX).nullable().optional(), memberIds: MemberIds, leaderId: z.string().min(1).nullable().optional() }),
+  /**
+   * `leaderId`: one of the bots, which plans and hands out the work; the others take only what it hands them.
+   * `cwd`: the folder every bot's session for the group works in; without one, each works in its own.
+   */
+  input: z.object({ name: z.string().max(GROUP_NAME_MAX).nullable().optional(), memberIds: MemberIds, leaderId: z.string().min(1).nullable().optional(), cwd: WorkFolder.nullable().optional() }),
   output: z.object({ groupId: z.string() }),
 });
 
@@ -645,6 +651,8 @@ export const groupUpdateRpc = defineRpc({
     wakeMode: WakeModeSchema.nullable().optional(),
     /** A member to lead the group, or null for no leader; left out, the leader stays. */
     leaderId: z.string().min(1).nullable().optional(),
+    /** The group's working folder, or null for each bot's own; left out, it stays. */
+    cwd: WorkFolder.nullable().optional(),
   }),
   output: z.object({ ok: z.boolean() }),
 });

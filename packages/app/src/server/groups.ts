@@ -63,7 +63,7 @@ import { dataPath } from "./bot-home";
 import { briefingPanel } from "./briefing";
 import { isBusy } from "./chat-service";
 import type { StartChatInput } from "./chats";
-import { sendToChat } from "./chats";
+import { botWorkingFolder, sendToChat, workFolder } from "./chats";
 import { RequestError } from "./errors";
 import type { PocketHost } from "./host";
 import {
@@ -332,6 +332,7 @@ export class GroupChats {
       readSeq: this.store.cursor(group.id, USER_ID, 0),
       wakeMode: group.wake_mode,
       leaderId: this.store.leader(group.id),
+      cwd: group.cwd,
       muted: members.filter((member) => member.muted_from_seq !== null).map((member) => member.bot_id),
       unread: unread.length > 0,
       unreadThreads: unread.filter((place) => place.conv).map((place) => place.conv),
@@ -340,8 +341,8 @@ export class GroupChats {
     };
   }
 
-  /** A new group; with `leaderId`, that member plans and hands out the work. */
-  async create(input: { name?: string | null; memberIds: string[]; leaderId?: string | null }): Promise<{ id: string }> {
+  /** A new group; with `leaderId`, that member plans and hands out the work; with `cwd`, every seat works in that folder. */
+  async create(input: { name?: string | null; memberIds: string[]; leaderId?: string | null; cwd?: string | null }): Promise<{ id: string }> {
     const memberIds = [...new Set(input.memberIds)];
     const problem = membersProblem(memberIds);
     if (problem) throw new RequestError(problem);
@@ -349,15 +350,21 @@ export class GroupChats {
     const missing = memberIds.find((id) => !bots.has(id));
     if (missing) throw new RequestError(`There's no bot with the id ${missing}.`);
     if (input.leaderId && !memberIds.includes(input.leaderId)) throw new RequestError("The leader must be one of the group's bots.");
+    const cwd = input.cwd?.trim() ? await workFolder(input.cwd) : null;
     const id = newGroupChatId();
-    this.store.createGroup({ id, name: input.name?.trim() || defaultGroupName(memberIds.map((botId) => bots.get(botId)!.name)), memberIds, leaderId: input.leaderId ?? null });
+    this.store.createGroup({ id, name: input.name?.trim() || defaultGroupName(memberIds.map((botId) => bots.get(botId)!.name)), memberIds, leaderId: input.leaderId ?? null, cwd });
     this.changed(id);
     return { id };
   }
 
-  /** `leaderId`: a member to lead the group, null for no leader; left out, the leader stays. */
-  async update(groupId: string, input: { name?: string | null; memberIds?: string[] | null; wakeMode?: WakeMode | null; leaderId?: string | null }): Promise<void> {
-    this.require(groupId);
+  /**
+   * `leaderId`: a member to lead the group, null for no leader; left out, the leader stays.
+   * `cwd`: the folder its seats work in, null (or empty) for each bot's own; left out, it stays.
+   */
+  async update(groupId: string, input: { name?: string | null; memberIds?: string[] | null; wakeMode?: WakeMode | null; leaderId?: string | null; cwd?: string | null }): Promise<void> {
+    const group = this.require(groupId);
+    // Checked before anything changes, so a folder that isn't there changes nothing.
+    const cwd = input.cwd === undefined ? undefined : input.cwd?.trim() ? await workFolder(input.cwd) : null;
     if (input.name !== undefined && input.name !== null && input.name.trim()) this.store.updateGroup(groupId, { name: input.name.trim() });
     if (input.wakeMode) this.store.updateGroup(groupId, { wakeMode: input.wakeMode });
     const before = this.store.leader(groupId);
@@ -384,7 +391,17 @@ export class GroupChats {
     if (input.leaderId !== undefined) this.store.updateGroup(groupId, { leaderId: input.leaderId });
     const after = this.store.leader(groupId);
     if (after !== before) await this.leaderNote(groupId, after);
+    if (cwd !== undefined && cwd !== group.cwd) {
+      this.store.updateGroup(groupId, { cwd });
+      // A session can't change folders: each seat moves the next time it starts a turn (pump).
+      this.note(groupId, cwd ? `📁 the user set the group's working folder to ${cwd}: each bot's next turn here runs there.` : "📁 the user removed the group's working folder: each bot's next turn here runs in its own folder.", "group.folder", USER_ID);
+    }
     this.changed(groupId);
+  }
+
+  /** The folder a member's seat works in: the group's, or the bot's own. */
+  private seatFolder(group: GroupRow, bot: Bot): string {
+    return group.cwd ?? botWorkingFolder(bot);
   }
 
   /**
@@ -1928,13 +1945,16 @@ export class GroupChats {
     // resumed: the seat starts over now, with a briefing, as a stale one does.
     const reset = !!seat && !busy && !!this.host.chats.sessionNeedsReset?.(seat.id);
     if (reset) this.note(groupId, `${bot.name}'s session failed context compaction too many times in a row to be resumed, so ${bot.name} starts over in a new session with a briefing of the group.`, "seat.turn_failed", botId);
-    if (seat && !busy && (reset || this.stale(seat))) {
+    // The group's folder (or the bot's own) changed since the seat started: it starts over there, with a briefing.
+    const folder = this.seatFolder(group, bot);
+    const moved = !!seat && !busy && !reset && seat.cwd !== folder;
+    if (seat && !busy && (reset || moved || this.stale(seat))) {
       // Cheaper to start over than to resume a big context whose cache has gone cold; the new
       // seat starts with a briefing built from the old one.
       const entries = this.host.chats.timeline(seat.id, { direction: "tail", limit: 500 }).entries;
       const inbox = new Set(pending.map((entry) => entry.message.seq));
       const seen = this.store.history(groupId, botId, BRIEFING_MESSAGES).filter((message) => !inbox.has(message.seq));
-      briefing = await briefingPanel({ messages: seen, entries, cwd: seat.cwd, meId: bot.id, parents: this.parents(groupId, seen), ...(reset ? { reason: "reset" as const } : {}) });
+      briefing = await briefingPanel({ messages: seen, entries, cwd: seat.cwd, meId: bot.id, parents: this.parents(groupId, seen), ...(reset ? { reason: "reset" as const } : moved ? { reason: "moved" as const, folder } : {}) });
       await this.host.chats.archive(seat.id).catch(() => undefined);
       this.store.setSeat(groupId, botId, null);
       this.clearBackoff(key);
@@ -1982,6 +2002,7 @@ export class GroupChats {
         const chatId = await this.startSeat(bot, {
           prompt: text,
           title: `Group · ${group.name}`,
+          cwd: folder,
           labels: { [GROUP_LABEL]: groupId },
           group: { id: groupId, name: group.name },
           clientMessageId,

@@ -384,6 +384,50 @@ describe("group chats", () => {
     expect(text).not.toContain("second thing");
   });
 
+  it("starts seats in the group's folder, and moves an idle seat to a new one with a briefing", async () => {
+    const group = await setup(reads(() => null));
+    stop = group.stop;
+    const repo = await mkdtemp(join(tmpdir(), "bots-groups-repo-"));
+    const other = await mkdtemp(join(tmpdir(), "bots-groups-other-"));
+    try {
+      await group.groups.update(group.id, { cwd: repo });
+      expect((await group.groups.list())[0]!.cwd).toBe(repo);
+      await group.groups.postFromUser(group.id, { text: "first thing" });
+      await until(() => group.chats.list({}).length === 2 && group.idle());
+      const seatOf = async () => (await group.groups.list())[0]!.seats.alpha!;
+      const before = await seatOf();
+      expect(group.chats.get(before)?.cwd).toBe(repo);
+      // A folder that isn't there changes nothing.
+      await expect(group.groups.update(group.id, { cwd: join(repo, "missing") })).rejects.toThrow("There's no folder at");
+      expect((await group.groups.list())[0]!.cwd).toBe(repo);
+
+      await group.groups.update(group.id, { cwd: other });
+      expect(await group.texts()).toContainEqual(`system: 📁 the user set the group's working folder to ${other}: each bot's next turn here runs there.`);
+      // The note is for the record: it wakes nobody, and the seats stay where they are until a turn.
+      await settle(group);
+      expect(await seatOf()).toBe(before);
+      await group.groups.postFromUser(group.id, { text: "second thing" });
+      await until(async () => (await seatOf()) !== before && group.idle());
+      const after = await seatOf();
+      expect(group.chats.get(before)?.archivedAt).toBeTruthy();
+      expect(group.chats.get(after)?.cwd).toBe(other);
+      const first = group.chats.items(after, 10).find((item) => item.type === "user_message");
+      const text = first && first.type === "user_message" ? first.text : "";
+      expect(text).toContain(`your working folder for the group is now ${other} (it was ${repo})`);
+      expect(text).toContain("first thing");
+
+      // Without the group's folder, each seat goes back to its bot's own.
+      await group.groups.update(group.id, { cwd: null });
+      expect((await group.groups.list())[0]!.cwd).toBeNull();
+      await group.groups.postFromUser(group.id, { text: "third thing" });
+      await until(async () => (await seatOf()) !== after && group.idle());
+      expect(group.chats.get(await seatOf())?.cwd).toBe(join(home, "Bots", "alpha"));
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+      await rm(other, { recursive: true, force: true });
+    }
+  });
+
   it("lets the user claim, move along, unclaim, react to and search messages; a task's changes are noted in its thread", async () => {
     let wakes = 0;
     const group = await setup((turn, step) => {

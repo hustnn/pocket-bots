@@ -58,6 +58,8 @@ export interface FakeChat {
   lastError?: string | null;
   updatedAt?: string;
   archivedAt?: string | null;
+  /** The folder it works in; defaults to /tmp. */
+  cwd?: string;
   /** The chat's timeline items; defaults to a question and `reply`. */
   items?: { type: string; [key: string]: unknown }[];
   /** Still working when a wait gives up. */
@@ -85,7 +87,7 @@ export function fakeChats(chats: Record<string, FakeChat>) {
       id,
       provider: "claude",
       model: null,
-      cwd: "/tmp",
+      cwd: chat.cwd ?? "/tmp",
       title: chat.title ?? null,
       labels: chat.labels ?? {},
       status: chat.status,

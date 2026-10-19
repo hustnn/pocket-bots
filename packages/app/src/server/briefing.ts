@@ -97,8 +97,24 @@ export interface BriefingInput {
   cwd: string;
   meId: string;
   parents?: ReadonlyMap<number, GroupMessage>;
-  /** Why the conversation was renewed: a cold, large one (the default), or a session that couldn't be resumed (its compaction kept failing). */
-  reason?: "stale" | "reset";
+  /**
+   * Why the conversation was renewed: a cold, large one (the default), a session that couldn't be
+   * resumed (its compaction kept failing), or one that has to work in another folder now.
+   */
+  reason?: "stale" | "reset" | "moved";
+  /** "moved": the folder the new conversation works in. */
+  folder?: string;
+}
+
+function renewedBecause(input: BriefingInput): string {
+  switch (input.reason) {
+    case "reset":
+      return "This conversation for the group was renewed: the old one couldn't be compacted to fit the model any more, so it can't be resumed. Where you were:";
+    case "moved":
+      return `This conversation for the group was renewed: your working folder for the group is now ${input.folder ?? "another folder"} (it was ${input.cwd}), and a session can't change folders. Relative paths in the actions below are from the old folder. Where you were:`;
+    default:
+      return "This conversation for the group was renewed: the old one had been idle past its prompt cache with a large context, and starting fresh costs less than resuming it. Where you were:";
+  }
 }
 
 /** The briefing: recent messages, files in play and recent actions, within its token budget. */
@@ -144,9 +160,7 @@ export async function briefingPanel(input: BriefingInput): Promise<string> {
   }
   if (objectLines.length) sections.push("<objects-in-play>", ...objectLines, "</objects-in-play>", "");
   return [
-    input.reason === "reset"
-      ? "This conversation for the group was renewed: the old one couldn't be compacted to fit the model any more, so it can't be resumed. Where you were:"
-      : "This conversation for the group was renewed: the old one had been idle past its prompt cache with a large context, and starting fresh costs less than resuming it. Where you were:",
+    renewedBecause(input),
     "",
     ...sections,
     ...tailSection,

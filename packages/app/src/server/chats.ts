@@ -1,3 +1,6 @@
+import { stat } from "node:fs/promises";
+import { homedir } from "node:os";
+import { isAbsolute, join, resolve } from "node:path";
 import type { ProviderId } from "@pocket-bots/runtime";
 import type { WireAttachment } from "../shared/attachments";
 import { APPS_MCP_NAME } from "../shared/apps";
@@ -25,6 +28,8 @@ export interface StartChatInput {
   clientMessageId?: string;
   /** A group chat's seat: the chat gets the group's tools and the group chat section in its prompt. */
   group?: { id: string; name: string };
+  /** The folder the chat works in (see workFolder), instead of the bot's own. */
+  cwd?: string;
 }
 
 /** Where a bot's chats run: its own folder of yours, or its folder in the data directory. */
@@ -33,13 +38,29 @@ export function botWorkingFolder(bot: Bot): string {
 }
 
 /**
- * Folders a bot's chat uses outside its working folder: the skills linked in from the library,
- * and its memory when it works in a folder of yours. Without them, Claude Code asks before every
- * skill read and memory update.
+ * A folder the user picked for a chat or a group, as the chat stores it: ~/ expanded, resolved,
+ * and an existing folder on this computer.
  */
-function botDirectories(bot: Bot, library: Library): string[] {
+export async function workFolder(raw: string): Promise<string> {
+  const given = raw.trim();
+  const expanded = given === "~" ? homedir() : given.startsWith("~/") ? join(homedir(), given.slice(2)) : given;
+  if (!isAbsolute(expanded)) throw new RequestError("The folder must be an absolute path, like /Users/me/projects/site.");
+  const folder = resolve(expanded);
+  const found = await stat(folder).catch(() => null);
+  if (!found) throw new RequestError(`There's no folder at ${folder}.`);
+  if (!found.isDirectory()) throw new RequestError(`${folder} is a file, not a folder.`);
+  return folder;
+}
+
+/**
+ * Folders a bot's chat uses outside its working folder: the skills linked in from the library,
+ * and its memory when the chat works in a folder of yours. Without them, Claude Code asks before
+ * every skill read and memory update.
+ */
+function botDirectories(bot: Bot, library: Library, cwd: string): string[] {
   const skills = botSkills(bot, library).map((skill) => librarySkillPath(skill.id));
-  return [...new Set([...skills, ...(bot.cwd ? [botDataPath(bot.id)] : [])])];
+  const home = botDataPath(bot.id);
+  return [...new Set([...skills, ...(cwd !== home ? [home] : [])])];
 }
 
 /**
@@ -58,7 +79,7 @@ export async function startChat(host: PocketHost, bot: Bot, input: StartChatInpu
       model: bot.model,
       thinking: bot.thinkingOptionId,
       mode: bot.modeId,
-      cwd: botWorkingFolder(bot),
+      cwd: input.cwd ?? botWorkingFolder(bot),
       ...(input.title ? { title: input.title } : {}),
       labels: { [POCKET_LABEL]: "1", [BOT_LABEL]: bot.id, ...(input.group ? { [GROUP_LABEL]: input.group.id } : {}), ...input.labels },
     },
@@ -102,7 +123,7 @@ export function chatSpecs(host: PocketHost, relay: Relay, seatGroup: SeatGroupLo
     const trusted = [...QUIET_TOOLS, ...(bot.contactBots === "allow" ? ["ask_bot"] : [])].map((tool) => `${TOOLS_MCP_NAME}/${tool}`);
     const granted = bot.alwaysAllow.filter((entry) => /^[^/\s]+\/[^/\s]+$/.test(entry) && entry.split("/")[0]! in mcpServers);
     // A seat's standing prompt reaches its resumed session when it changes (see ChatService).
-    return { systemPrompt: system, mcpServers, trustedTools: [...trusted, ...granted], hostedMcpServers: tools ? [TOOLS_MCP_NAME] : [], extraDirectories: botDirectories(bot, library), ...(groupId ? { standingPrompt } : {}) };
+    return { systemPrompt: system, mcpServers, trustedTools: [...trusted, ...granted], hostedMcpServers: tools ? [TOOLS_MCP_NAME] : [], extraDirectories: botDirectories(bot, library, chat.cwd), ...(groupId ? { standingPrompt } : {}) };
   };
 }
 

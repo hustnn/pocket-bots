@@ -26,10 +26,11 @@ import {
 import { Icon } from "../../components/icons";
 import { Button, Field, IconButton, MenuButton, Modal, useFeedback } from "../../components/ui";
 import { errorText, rpc } from "../../lib/api";
-import { useChatCommands, useQueue } from "../../lib/data";
+import { useChatCommands, useQueue, useStatus } from "../../lib/data";
 import { getDraft, setDraft } from "../../lib/drafts";
 import { rememberSent } from "../../lib/sent";
 import { SEND_BEHAVIOR_KEY, useLocalState } from "../../lib/local";
+import { ChatFolder, NewChatFolder } from "../folders";
 
 function readAs(file: File, as: "dataUrl" | "text"): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -118,6 +119,8 @@ interface ComposerProps {
   /** The bot's words the message replies to (Reply), quoted in front of it. */
   reply?: string | null;
   onReplyChange?: (quote: string | null) => void;
+  /** The bot's own working folder (null: the managed one), which a new chat uses unless another is picked. */
+  botFolder?: string | null;
 }
 
 /** One composer per chat, so each keeps its own draft. */
@@ -132,7 +135,10 @@ export function Composer(props: ComposerProps) {
  * or waits in the queue, as Settings say; Cmd/Ctrl+Enter does the other.
  * Stop ends the running turn (and denies a pending request, if any).
  */
-function ChatComposer({ botId, chatId, agent, placeholder, onStarted, botName = "the bot", reply = null, onReplyChange, draft }: ComposerProps & { draft: string }) {
+function ChatComposer({ botId, chatId, agent, placeholder, onStarted, botName = "the bot", reply = null, onReplyChange, botFolder = null, draft }: ComposerProps & { draft: string }) {
+  // A new chat's folder, remembered per bot: the next new chat starts in the same project.
+  const [folder, setFolder] = useLocalState<string | null>(`pocket.chatFolder.${botId}`, null);
+  const dataPath = useStatus().data?.dataPath ?? null;
   const feedback = useFeedback();
   const [text, setText] = useState(() => getDraft(draft)?.text ?? "");
   const [attachments, setAttachments] = useState<ComposerAttachment[]>(() => getDraft(draft)?.attachments ?? []);
@@ -241,7 +247,7 @@ function ChatComposer({ botId, chatId, agent, placeholder, onStarted, botName = 
         const payload = { text: message, messageId, ...(wire.images.length ? { images: wire.images } : {}), ...(wire.attachments.length ? { attachments: wire.attachments } : {}) };
         if (chatId) await rpc(chatSendRpc, { chatId, ...payload, ...(quote ? { quote } : {}), activeTurnBehavior: activeTurnBehaviorFor(behavior) });
         else {
-          const { chatId: started } = await rpc(chatStartRpc, { botId, ...payload });
+          const { chatId: started } = await rpc(chatStartRpc, { botId, ...payload, ...(folder ? { cwd: folder } : {}) });
           onStarted?.(started);
         }
       }
@@ -478,6 +484,7 @@ function ChatComposer({ botId, chatId, agent, placeholder, onStarted, botName = 
               }}
             />
           ) : null}
+          {chatId === null ? <NewChatFolder value={folder} onChange={setFolder} botFolder={botFolder} /> : agent?.cwd ? <ChatFolder cwd={agent.cwd} managed={!!dataPath && agent.cwd.startsWith(dataPath)} /> : null}
           <span className="spacer" />
           <ContextMeter agent={agent} />
           {running && !hasContent ? (

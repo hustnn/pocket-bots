@@ -458,6 +458,7 @@ Current description: Safari 和 Chrome 都要能登录；不加新依赖
 ### 座位、换新和重启
 
 - 每个成员 bot 在每个群里有一个座位，是这个 bot 自己的一个普通会话，用它自己的模型、审批模式、技能和 MCP。群第一次叫醒它时才建。座位的 system prompt 里多一段讲怎么在群里协作。bot 之间私下说话用 `ask_bot`，不在群里开私聊。
+- **座位在哪个目录**：群设了工作目录（`groups.cwd`）就在那里，没设就在 bot 自己的工作目录。会话开始以后不能换目录，所以座位要去的目录（群的，或 bot 的）和它现在的不一样时（你改了群的目录，或改了 bot 的），它下次被叫醒、空闲时换新座位，和下面的换新一样带一份简报，开头说明目录从哪换到了哪（简报里操作的相对路径还是旧目录的）；忙着的座位先跑完这一轮。改群的目录时群里记一条 `group.folder` 系统消息，只留作记录，不进谁的待读、不叫醒谁（`skip`），所以不会为了换目录让每个 bot 白跑一轮。目录必须是本机上存在的文件夹，`~/` 会展开；不存在就拒绝，什么都不改。
 - **子 agent**：运行时能开子 agent 的座位，prompt 里在「拆任务」和「@」两段之间多一段「Working through sub-agents」：自己留在对话里想、回话、分派、核对，动手的活交给子 agent 并行做；先回话再分派；子 agent 什么都看不到，要交代完整；**只有你在群里说话**，告诉每个子 agent 不要用群聊工具（`group_send`、`group_send_draft`、`group_claim`、`group_task`、`group_react`、`group_reminder`），这一条要紧，因为 Claude 的子 agent 默认继承 MCP 工具；结果自己核对后再报；子 agent 都做完、结果都报了才停。能开子 agent 的运行时：Claude（`Agent`）、Codex（`spawn_agent`）、OpenCode（`task`）、Grok Build（`task`）；Pi 自己没有，不加这一段。由运行时接口的 `capabilities.subAgents` 决定。
 - **座位换新**：座位空闲超过 1 小时、上下文超过 128k token 时，下次被叫醒就换一个新座位，从一份约 8k token 以内的简报开始：
   - 它看过的最近 25 条消息（每条约 2k、整段约 4k token 上限）；

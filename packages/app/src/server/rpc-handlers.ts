@@ -1,3 +1,4 @@
+import { basename } from "node:path";
 import type { z } from "zod";
 import { applyChanges } from "../shared/changes";
 import { BOT_LABEL, EMPTY_LIBRARY, newRoutineId } from "../shared/bot";
@@ -8,7 +9,7 @@ import { chatTranscript } from "../shared/transcript";
 import { POCKET_VERSION } from "../shared/version";
 import { dataPath, ensureBotHome } from "./bot-home";
 import type { ChatCards } from "./cards";
-import { listAllChats, listChats, sendToChat, startChat } from "./chats";
+import { listAllChats, listChats, sendToChat, startChat, workFolder } from "./chats";
 import type { CommandAllowlist, FolderGrants } from "./commands";
 import { accounts, appTools, catalog, connect, disconnect, removeKey, renameAccount, setKey, status as appsStatus } from "./composio";
 import { RequestError } from "./errors";
@@ -67,15 +68,19 @@ export function rpcHandlers(services: Services): Map<string, RpcRegistration> {
   handle(rpc.statusRpc, () => ({ version: POCKET_VERSION, dataPath: dataPath(), scheduler: scheduler.running }));
   handle(rpc.providersRpc, ({ refresh }) => host.providers.snapshot(refresh ?? false));
   handle(rpc.workspacesRpc, async () => {
-    // Folders other bots already work in; pocket-bots's own bot folders aren't somewhere to point a bot at.
+    // Folders bots, groups and recent chats already work in; pocket-bots's own bot folders aren't
+    // somewhere to point a bot at.
     const own = dataPath();
     const seen = new Set<string>();
-    const workspaces = [];
-    for (const bot of await host.bots()) {
-      if (!bot.cwd || seen.has(bot.cwd) || bot.cwd.startsWith(own)) continue;
-      seen.add(bot.cwd);
-      workspaces.push({ id: bot.cwd, label: bot.name, directory: bot.cwd });
-    }
+    const workspaces: { id: string; label: string; directory: string }[] = [];
+    const add = (directory: string | null, label: string) => {
+      if (!directory || seen.has(directory) || directory.startsWith(own)) return;
+      seen.add(directory);
+      workspaces.push({ id: directory, label, directory });
+    };
+    for (const bot of await host.bots()) add(bot.cwd, bot.name);
+    for (const group of await groups.list()) add(group.cwd, group.name);
+    for (const chat of listAllChats(host).slice(0, 200)) add(chat.cwd, basename(chat.cwd));
     return { workspaces };
   });
 
@@ -85,10 +90,11 @@ export function rpcHandlers(services: Services): Map<string, RpcRegistration> {
   handle(rpc.chatsAllRpc, () => ({ chats: listAllChats(host) }));
   handle(rpc.chatGetRpc, ({ chatId }) => ({ agent: host.chats.get(chatId) }));
   handle(rpc.chatTimelineRpc, ({ chatId, direction, cursor, limit }) => host.chats.timeline(chatId, { direction, ...(cursor ? { cursor } : {}), ...(limit ? { limit } : {}) }));
-  handle(rpc.chatStartRpc, async ({ botId, text, images, attachments, messageId }) => {
+  handle(rpc.chatStartRpc, async ({ botId, text, images, attachments, messageId, cwd }) => {
     const bot = await host.bot(botId);
     if (!bot) throw new RequestError("That bot no longer exists.");
-    const chatId = await startChat(host, bot, { prompt: text, images, attachments, ...(messageId ? { clientMessageId: messageId } : {}) });
+    const folder = cwd?.trim() ? await workFolder(cwd) : null;
+    const chatId = await startChat(host, bot, { prompt: text, images, attachments, ...(messageId ? { clientMessageId: messageId } : {}), ...(folder ? { cwd: folder } : {}) });
     return { chatId };
   });
   handle(rpc.chatSendRpc, async ({ chatId, text, images, attachments, messageId, quote, activeTurnBehavior }) => {
@@ -179,9 +185,9 @@ export function rpcHandlers(services: Services): Map<string, RpcRegistration> {
   // ------------------------------------------------------------ group chats
 
   handle(rpc.groupsListRpc, async () => ({ groups: await groups.list() }));
-  handle(rpc.groupCreateRpc, async ({ name, memberIds, leaderId }) => ({ groupId: (await groups.create({ name: name ?? null, memberIds, leaderId: leaderId ?? null })).id }));
-  handle(rpc.groupUpdateRpc, async ({ groupId, name, memberIds, wakeMode, leaderId }) => {
-    await groups.update(groupId, { name: name ?? null, memberIds: memberIds ?? null, wakeMode: wakeMode ?? null, ...(leaderId !== undefined ? { leaderId } : {}) });
+  handle(rpc.groupCreateRpc, async ({ name, memberIds, leaderId, cwd }) => ({ groupId: (await groups.create({ name: name ?? null, memberIds, leaderId: leaderId ?? null, cwd: cwd ?? null })).id }));
+  handle(rpc.groupUpdateRpc, async ({ groupId, name, memberIds, wakeMode, leaderId, cwd }) => {
+    await groups.update(groupId, { name: name ?? null, memberIds: memberIds ?? null, wakeMode: wakeMode ?? null, ...(leaderId !== undefined ? { leaderId } : {}), ...(cwd !== undefined ? { cwd } : {}) });
     return { ok: true };
   });
   handle(rpc.groupTaskRpc, async ({ groupId, action, seq, number, status, assignee, title, description }) => {
