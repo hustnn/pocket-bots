@@ -249,7 +249,7 @@ ChatService 对每个聊天都做这些（常数在 `server/supervision.ts`）�
 | 身份 | 名字、角色、简介、头像、朗读用的声音 |
 | 灵魂 | 常驻指令（Standing instructions）、Playbooks（带触发词的流程指引） |
 | 模型 | agent（provider）、模型、思考强度、审批模式、能否联系其他 bot、工作目录（托管的或你的项目） |
-| 记忆 | 是否允许 bot 自己写记忆和记每日日志（`memoryAutoWrite`，默认关；bot 不能通过提议改它，导入时重置为关） |
+| 记忆 | 是否允许 bot 自己写记忆（`memoryAutoWrite`，默认关；bot 不能通过提议改它，导入时重置为关；每日日志不受它影响，始终记） |
 | 能力 | 用哪些技能、哪些 MCP 服务器、哪些连接的应用（及其工具和账号限制）、免审批的工具 |
 | 定时任务 | 计划或 webhook、要做的事、结果贴到哪个聊天 |
 | 界面 | 置顶、隐藏、归档 |
@@ -259,7 +259,7 @@ ChatService 对每个聊天都做这些（常数在 `server/supervision.ts`）�
 ```
 MEMORY.md                  长期记忆，每个新聊天都注入前 200 行（最多 24 KB）
 memory/<topic>.md          主题记忆，bot 需要时自己读
-memory/log/YYYY-MM-DD.md   每日日志，开关打开时每轮结束 pocket-bots 写一行
+memory/log/YYYY-MM-DD.md   每日日志，每轮结束 pocket-bots 写一行
 skills/<name>/             这个 bot 用的技能（链接到共用的技能库）
 uploads/                   聊天里上传的非文本文件
 ```
@@ -288,7 +288,7 @@ uploads/                   聊天里上传的非文本文件
 2. ChatService 按「忙时策略」发送：没在跑就开新一轮；在跑就插话（steer）、打断（interrupt），或者交给队列等这一轮结束（queue）。
 3. agent 干活：调工具、读写文件、跑命令。需要审批的弹卡片；调 pocket-bots 的工具走 relay。
 4. 每个事件写进时间线并推给界面；侧栏的状态点（在跑、等审批、出错、有新回复）由聊天状态和你的已读记录算出，已读记录存在 `bots.json` 里，换浏览器也一样。
-5. 一轮结束（`server/activity.ts`）：记忆文件有改动就记进改动记录（可以撤销）；`memoryAutoWrite` 打开时每日日志记一行（时间、哪个聊天、说了什么、用了哪些工具）；定时任务的运行记下结果，队列里的下一条消息发出。
+5. 一轮结束（`server/activity.ts`）：记忆文件有改动就记进改动记录（可以撤销）；每日日志记一行（时间、哪个聊天、说了什么、用了哪些工具）；定时任务的运行记下结果，队列里的下一条消息发出。
 
 **记忆写入开关的兜底：一轮结束时恢复，不是写入时拦住。** bot 写记忆用的是各个 agent CLI 自己的文件工具（Claude 的 Write/Edit、Codex 的 patch）或命令行，没有专门的「写记忆」工具，runtime 层也没有按路径拦截的统一办法，所以拦在写入那一刻对所有 provider 和 Bash 写入都做不到。做法是 `server/journal.ts` 本来就在轮次开始和结束时给 `MEMORY.md` 和 `memory/*.md` 拍快照比对：
 
@@ -296,7 +296,7 @@ uploads/                   聊天里上传的非文本文件
 - `readOnly` 时再把有差异的文件恢复成轮次开始时的内容（bot 新建的删掉，删掉的补回），每个恢复各记一条 `via: "restore"` 的记录（`before` 是 bot 的版本，所以能撤销恢复），随后用恢复后的文件重新拍快照，下一轮开始时不会把恢复当成磁盘上的改动；
 - `journal.write`（你在 Memory 页签的编辑和撤销）和 `begin()` 不检查开关；你在一轮进行中经应用做的编辑已经更新了快照，不会被恢复；
 - 同一个 bot 常有多个轮次并行（群聊座位、私聊、routine），而基线只有一份：`journal` 按 bot 记着进行中的轮次（聊天 id 的集合，不是计数器），`begin(botId, chatId, { readOnly })` 加入，`end()` 和 `leave()`（`turn.ended` 带 `missed` 时）移除，`agent.removed` 时 `forget()` 兜底。`readOnly` 的 bot 在别的轮次还在跑时开始新轮次，不把差异记成 `you/disk`，也不更新基线，先开始的那一轮结束时还能看到这些改动并恢复；没有其他进行中的轮次、或开关打开时，行为不变；
-- 每日日志的写入点也在 `turn.ended`，关闭时直接跳过；
+- 每日日志的写入点也在 `turn.ended`，但它是 pocket-bots 自己的记录，不看开关，也不在快照和恢复范围内；
 - 已知局限：恢复发生在轮次结束时，轮次进行中文件是 bot 改过的样子；没看到开始的轮次（后端重启期间结束的）没有快照可比；`memory/log/` 不在快照范围；并行的轮次里先结束的那个，会连同别的聊天已写下的改动一起恢复，记录里算在它名下；轮次进行中你在编辑器里直接改文件，会被当成 bot 的改动恢复掉，但 Changes 里有这条恢复记录，可以撤销。
 
 ### 5.4 bot 自己的工具

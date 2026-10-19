@@ -114,7 +114,7 @@ function DailyLog({ bot }: { bot: Bot }) {
   const days = log.data?.days ?? [];
   const now = new Date();
   return (
-    <Section title="Daily log" info={`One line per finished turn, written by pocket-bots. The newest lines of the last two days go into new chats as recent work.${bot.memoryAutoWrite ? "" : " No new lines are added while memory writing is off."}`}>
+    <Section title="Daily log" info="One line per finished turn, written by pocket-bots. The newest lines of the last two days go into new chats as recent work.">
       {days.length === 0 ? <div className="hint">Nothing logged yet.</div> : null}
       <div className="row wrap">
         {days.slice(0, 14).map((entry) => (
@@ -192,9 +192,9 @@ export function MemorySection({ bot }: { bot: Bot }) {
   const update = useUpdateBot();
   return (
     <>
-      <Section title="Memory writing" info="Off, the bot can only read its memory. You can still edit it here, and no daily log is kept.">
+      <Section title="Memory writing" info="Off, the bot can only read its memory; anything it changes there is put back when its turn ends. You can still edit it here, and the daily log is kept either way.">
         <div className="row">
-          <span style={{ flex: 1 }}>Let the bot write its own memory and keep a daily log</span>
+          <span style={{ flex: 1 }}>Let the bot write its own memory</span>
           <Toggle on={bot.memoryAutoWrite} label="Memory writing" onChange={(memoryAutoWrite) => void update(bot.id, { memoryAutoWrite })} />
         </div>
       </Section>

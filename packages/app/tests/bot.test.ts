@@ -95,7 +95,8 @@ describe("promptSections", () => {
     expect(off).toContain("read-only for you: don't edit MEMORY.md or the topic files");
     expect(off).toContain("tell the user so they can add it on the Memory page");
     expect(off).not.toContain("update that file");
-    expect(off).not.toContain("daily log");
+    // The daily log is the app's own, so both wordings mention it.
+    expect(off).toContain("The app keeps a daily log of your chats in memory/log/");
     expect(off).toContain("Current memory:\nlikes tea");
     const on = memoryText({ memoryAutoWrite: true });
     expect(on).toContain("update that file");

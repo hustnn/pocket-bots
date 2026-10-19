@@ -319,7 +319,7 @@ describe("memory journal, daily log and search_chats", () => {
     });
   });
 
-  it("with memory writing off, a finished turn keeps no daily log and loses the bot's memory edits; with it on, both stay", async () => {
+  it("with memory writing off, a finished turn loses the bot's memory edits but still gets its daily log line; with it on, the edits stay too", async () => {
     const { wireActivity } = await import("../src/server/activity");
     const { MemoryJournal } = await import("../src/server/journal");
     const { listLogDays, memoryFilePath } = await import("../src/server/memory");
@@ -344,14 +344,15 @@ describe("memory journal, daily log and search_chats", () => {
 
     await turn("# Memory\n- dentist on Friday\n");
     expect(await readFile(main, "utf8")).toBe("# Memory\n");
-    expect((await listLogDays("bot-o")).days).toEqual([]);
+    // The daily log is the app's own record of the turn, so the switch doesn't touch it.
+    expect((await listLogDays("bot-o")).days).toEqual([{ day: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), lines: 1 }]);
     expect((await journal.list("bot-o")).map((entry) => entry.via).sort()).toEqual(["chat", "restore"]);
 
     // The switch is read when the turn ends, so flipping it takes effect from the next finished turn.
     bot.memoryAutoWrite = true;
     await turn("# Memory\n- dentist on Friday\n");
     expect(await readFile(main, "utf8")).toBe("# Memory\n- dentist on Friday\n");
-    expect((await listLogDays("bot-o")).days).toEqual([{ day: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), lines: 1 }]);
+    expect((await listLogDays("bot-o")).days).toEqual([{ day: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), lines: 2 }]);
     expect((await journal.list("bot-o")).filter((entry) => entry.via === "restore")).toHaveLength(1);
   });
 

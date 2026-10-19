@@ -175,7 +175,7 @@ export const BotSchema = z.object({
   voice: BotVoiceSchema.default({ name: null, readReplies: false }),
   /** Whether the bot may ask other bots for help: after the user approves each request, freely, or not at all. */
   contactBots: z.enum(["ask", "allow", "off"]).default("ask"),
-  /** Whether the bot may write its own memory (MEMORY.md and topic files) and the app logs its turns daily. Off, memory is read-only for the bot. */
+  /** Whether the bot may write its own memory (MEMORY.md and topic files). Off, memory is read-only for the bot; the app's daily log is kept either way. */
   memoryAutoWrite: z.boolean().default(false),
   routines: z.array(RoutineSchema).default([]),
   playbooks: z.array(PlaybookSchema).default([]),
@@ -385,9 +385,11 @@ export function promptSections(bot: Bot, context: PromptContext, { volatile = tr
   if (context.group) sections.push({ title: "Group chat", text: context.group });
   if (context.memoryPath) {
     const body = !volatile ? "" : context.memory.trim() ? `\n\nCurrent memory:\n${context.memory.trim()}` : "\n\nYour memory is empty so far.";
+    // The daily log is the app's own record, kept whether or not the bot may write its memory.
+    const dailyLog = "The app keeps a daily log of your chats in memory/log/ beside it.";
     const rules = bot.memoryAutoWrite
-      ? `When you learn something durable about the user or your work (preferences, recurring tasks, key facts), update that file: keep it short, factual and organised, and never store secrets. The app keeps a daily log of your chats in memory/log/ beside it.`
-      : `It is read-only for you: don't edit MEMORY.md or the topic files in memory/ (edits to them are undone when your turn ends). When you learn something durable about the user or your work (preferences, recurring tasks, key facts), tell the user so they can add it on the Memory page, or ask them to turn on memory writing for you there. Never ask them to store secrets.`;
+      ? `When you learn something durable about the user or your work (preferences, recurring tasks, key facts), update that file: keep it short, factual and organised, and never store secrets. ${dailyLog}`
+      : `It is read-only for you: don't edit MEMORY.md or the topic files in memory/ (edits to them are undone when your turn ends). When you learn something durable about the user or your work (preferences, recurring tasks, key facts), tell the user so they can add it on the Memory page, or ask them to turn on memory writing for you there. Never ask them to store secrets. ${dailyLog}`;
     sections.push({ title: "Memory", text: `Your long-term memory lives in ${context.memoryPath}. ${rules}${body}` });
   }
   if (volatile && context.recentWork.length > 0) {

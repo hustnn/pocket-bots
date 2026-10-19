@@ -202,9 +202,9 @@ bot 的长期记忆是它工作目录里的 `MEMORY.md`。每个新聊天开始�
 | bot 读记忆（注入 `MEMORY.md`、Recent work、`search_chats`） | 照常 | 照常 |
 | 你在 Memory 页签查看、编辑、撤销 | 照常 | 照常 |
 | bot 改 `MEMORY.md` 和主题文件 | 不行：这一轮结束时恢复成原样 | 可以 |
-| 每一轮结束记每日日志 | 不记 | 记 |
+| 每一轮结束记每日日志（pocket-bots 自己记，不是 bot 写的） | 照常 | 照常 |
 
-关闭时，system prompt 的 Memory 段会告诉 bot 记忆是只读的：值得记的事告诉你，由你自己加到 Memory 页签，或者请你打开开关。已经记下的内容（`MEMORY.md`、已有的每日日志）不受影响，仍会进新聊天的 prompt。
+关闭时，system prompt 的 Memory 段会告诉 bot 记忆是只读的：值得记的事告诉你，由你自己加到 Memory 页签，或者请你打开开关。已经记下的内容（`MEMORY.md`）不受影响，仍会进新聊天的 prompt；每日日志也照常记，Recent work 照常更新。
 
 **兜底是「一轮结束时恢复」，不是「写的时候拦住」。** bot 是用各个 agent 自带的文件工具或命令行改文件的，pocket-bots 拦不住这一下。所以每一轮结束时，pocket-bots 把这一轮开始时的 `MEMORY.md` 和 `memory/<topic>.md` 同现在的比一遍：bot 改过的改回去，新建的删掉，删掉的补回来。**Changes** 里会各记一条：bot 做了什么，以及恢复了什么（来源标着 `memory writing is off`）。恢复这一条也能点撤销，把 bot 的版本放回来。
 
@@ -224,7 +224,7 @@ bot 的长期记忆是它工作目录里的 `MEMORY.md`。每个新聊天开始�
 bot 的记忆之后在 **Memory** 页签里能看到：
 
 - **Files**：`MEMORY.md` 和主题文件（`memory/<topic>.md`），可以直接编辑保存，也可以 **Add topic** 新建主题文件。主题文件不会自动进 prompt，bot 需要时自己读。
-- **Daily log**：开关打开时，pocket-bots 在每一轮结束时自动记一行（时间、哪个聊天、bot 说了什么、用了哪些工具）。最近两天的最新几行会作为「Recent work」进新聊天的 prompt，bot 也能用 `search_chats` 工具翻。开关关闭后不再记新的，已有的日志照旧可读可删，Recent work 会随时间变旧。
+- **Daily log**：pocket-bots 在每一轮结束时自动记一行（时间、哪个聊天、bot 说了什么、用了哪些工具）。这是 pocket-bots 自己的记录，不受 Memory writing 开关影响。最近两天的最新几行会作为「Recent work」进新聊天的 prompt，bot 也能用 `search_chats` 工具翻。
 - **Changes**：记忆文件的每次改动（bot 改的、你改的、关闭开关时被恢复的），点撤销按钮就能恢复成改之前的样子。
 
 > 记忆日志、撤销记录都是 pocket-bots 后端在每轮开始和结束时记的，所以后端要一直开着。后端停机期间结束的轮次，重启后会补上日志。

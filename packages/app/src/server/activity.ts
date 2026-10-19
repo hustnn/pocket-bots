@@ -11,8 +11,8 @@ import type { RoutineScheduler } from "./scheduler";
 
 // What happens around each turn of a bot's chat:
 // the journal notes memory changes (and puts them back when the bot may not write
-// its memory), the daily log gets a line saying what the bot did (only when it may),
-// and a routine's run is recorded.
+// its memory), the daily log gets a line saying what the bot did (always: it is the
+// app's own record, not the bot's writing), and a routine's run is recorded.
 
 export function wireActivity(input: { watcher: ChatService; host: PocketHost; journal: MemoryJournal; scheduler: RoutineScheduler }): void {
   const { watcher, host, journal, scheduler } = input;
@@ -35,16 +35,15 @@ export function wireActivity(input: { watcher: ChatService; host: PocketHost; jo
     const title = agent.title?.trim() || "Untitled chat";
     // The switch as it is now, not as it was when the turn began.
     const bot = await host.bot(botId);
-    const autoWrite = bot?.memoryAutoWrite ?? false;
     // A turn nobody saw start has nothing to compare memory with; the next turn's start catches it up.
     if (missed) await journal.leave(botId, agent.id);
-    else await journal.end(botId, { id: agent.id, title }, { readOnly: !!bot && !autoWrite });
+    else await journal.end(botId, { id: agent.id, title }, { readOnly: !!bot && !bot.memoryAutoWrite });
     const { reply, tools } = lastTurn(timeline);
     const routineId = agent.labels?.[ROUTINE_LABEL];
     if (routineId) await scheduler.finished(routineId, agent.id, outcome, reply);
     if (outcome.kind === "canceled") return;
     const line = logLine({ at: new Date(), chat: title, reply, tools, failure: outcome.kind === "failed" ? outcome.error.message : null });
-    if (line && autoWrite) await appendDailyLog(botId, line);
+    if (line) await appendDailyLog(botId, line);
   });
 
 }
