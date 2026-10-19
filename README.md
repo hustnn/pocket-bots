@@ -101,10 +101,55 @@ npm run test:live -- claude      # 合同测试，跑真的 CLI：claude / codex
 node packages/runtime/test/live-commands.ts codex   # 列出这个 CLI 的斜杠命令，再跑一次 /compact
 ```
 
-代码分两个包：
+`npm run dev` 的页面在 <http://127.0.0.1:5180>，`/api` 转发给 6880 端口的后端。给 coding agent 看的开发说明见 [AGENTS.md](AGENTS.md)。
 
-- `packages/runtime`：直连五个 CLI 的运行时层，不知道 bot 和群的存在。
-- `packages/app`：后端（`src/server`）、Web UI（`src/web`）和两边共用的代码（`src/shared`）。
+## 源码目录结构
+
+代码分两个包（npm workspaces）：`packages/runtime` 直连五个 CLI，不知道 bot 和群的存在；`packages/app` 是 pocket-bots 本身。
+
+```
+pocket-bots/
+├── package.json                 workspaces 根：build / start / dev / typecheck / test 脚本
+├── docs/                        功能、使用指南、设计、群聊规则
+├── packages/
+│   ├── runtime/                 运行时层（@pocket-bots/runtime）
+│   │   ├── src/
+│   │   │   ├── types.ts             统一接口：RuntimeAdapter、RuntimeSession、RuntimeEvent、TimelineItem
+│   │   │   ├── adapters/            claude、codex、opencode、pi、grok 五个适配器，fake（脚本化，测试用）
+│   │   │   ├── session-base.ts      适配器共用的会话状态、监听器、本地队列
+│   │   │   ├── tool-detail.ts       工具调用 → 时间线里的结构化详情（命令、diff、读文件…）
+│   │   │   ├── questions.ts         各 CLI 的提问工具 → 统一的 question 审批
+│   │   │   ├── env.ts               启动 CLI 前清理子进程环境
+│   │   │   └── jsonrpc.ts、mcp-client.ts、util.ts
+│   │   └── test/                单元测试；contract.ts 合同测试；live*.ts 跑真 CLI
+│   └── app/                     pocket-bots 应用（@pocket-bots/app）
+│       ├── src/
+│       │   ├── server/              后端（Node + Hono）
+│       │   │   ├── main.ts              启动与装配：建各组件、连事件、起 HTTP 和 relay
+│       │   │   ├── http.ts、rpc-handlers.ts、events.ts、hosts.ts    RPC 路由、SSE、Host 头检查
+│       │   │   ├── store.ts、db.ts      bots.json；SQLite 和版本化迁移
+│       │   │   ├── host.ts、providers.ts    给各功能用的门面；探测 CLI 装没装、登没登录
+│       │   │   ├── chat-service.ts、supervision.ts    每个聊天的 runtime 会话和看护
+│       │   │   ├── chats.ts、prompt.ts  由 bot 配置生成 SessionSpec 和 system prompt
+│       │   │   ├── groups.ts、group-store.ts、briefing.ts、reminders.ts    群聊
+│       │   │   ├── relay.ts、tools/     127.0.0.1 上的 MCP relay；bot 工具和群聊工具
+│       │   │   ├── scheduler.ts、queue.ts、answers.ts    定时任务和 webhook、排队消息、ask_bot
+│       │   │   ├── memory.ts、journal.ts、activity.ts    记忆、改动记录、每日日志
+│       │   │   ├── library.ts、mcp-probe.ts、composio.ts、search.ts    技能和 MCP 库、连接的应用、搜索
+│       │   │   └── config.ts、instance.ts、service.ts …    配置、单实例锁、launchd / systemd 服务
+│       │   ├── shared/              前后端共用：zod 模型（bot.ts、group-chat.ts）、RPC 定义（rpc.ts）、纯逻辑
+│       │   └── web/                 React 单页应用
+│       │       ├── app/                 页面：侧栏、聊天、群聊、bot 面板、库、设置
+│       │       ├── chat/                聊天流的纯逻辑：时间线 → 行、输入框、提问表单
+│       │       ├── components/          通用组件
+│       │       └── lib/                 RPC 客户端、React Query、SSE 订阅、路由、草稿
+│       ├── tests/               vitest：单元测试和端到端测试（用 fake runtime）
+│       └── scripts/dev.mjs      同时跑后端（tsx watch）和 Vite
+├── spikes/                      早期验证各 CLI 协议的脚本，不参与构建和测试
+└── third_party/                 改写来源的许可证
+```
+
+每个组件负责什么、怎么通信，见 [docs/design.md](docs/design.md#2-组件)。
 
 ## 致谢
 
