@@ -249,6 +249,7 @@ ChatService 对每个聊天都做这些（常数在 `server/supervision.ts`）�
 | 身份 | 名字、角色、简介、头像、朗读用的声音 |
 | 灵魂 | 常驻指令（Standing instructions）、Playbooks（带触发词的流程指引） |
 | 模型 | agent（provider）、模型、思考强度、审批模式、能否联系其他 bot、工作目录（托管的或你的项目） |
+| 记忆 | 是否允许 bot 自己写记忆和记每日日志（`memoryAutoWrite`，默认关；bot 不能通过提议改它，导入时重置为关） |
 | 能力 | 用哪些技能、哪些 MCP 服务器、哪些连接的应用（及其工具和账号限制）、免审批的工具 |
 | 定时任务 | 计划或 webhook、要做的事、结果贴到哪个聊天 |
 | 界面 | 置顶、隐藏、归档 |
@@ -258,7 +259,7 @@ ChatService 对每个聊天都做这些（常数在 `server/supervision.ts`）�
 ```
 MEMORY.md                  长期记忆，每个新聊天都注入前 200 行（最多 24 KB）
 memory/<topic>.md          主题记忆，bot 需要时自己读
-memory/log/YYYY-MM-DD.md   每日日志，每轮结束时 pocket-bots 写一行
+memory/log/YYYY-MM-DD.md   每日日志，开关打开时每轮结束 pocket-bots 写一行
 skills/<name>/             这个 bot 用的技能（链接到共用的技能库）
 uploads/                   聊天里上传的非文本文件
 ```
@@ -272,14 +273,14 @@ uploads/                   聊天里上传的非文本文件
 1. **Persona**：名字、角色、简介；
 2. **Standing instructions**：你写的常驻指令；
 3. **Group chat**：只有群聊座位才有，讲怎么在群里协作（§6.9）；
-4. **Memory**：`MEMORY.md` 的当前内容和记忆文件的约定；
+4. **Memory**：`MEMORY.md` 的当前内容和记忆文件的约定。`memoryAutoWrite` 关闭时说记忆只读、值得记的事告诉用户，打开时说自己更新；这句写在常驻部分，切换开关会改变常驻 prompt；
 5. **Recent work**：最近两天每个聊天里 bot 最后说的话（来自每日日志），让新聊天知道最近在忙什么；
 6. **Skills**：技能名和「什么时候用」，bot 需要时自己读 `SKILL.md`；
 7. **Playbooks**：只放触发词出现在第一条消息里的那几个；
 8. **Connected apps**：能用的应用、账号和工具范围；
 9. **Bot tools**：pocket-bots 自己的工具怎么用。
 
-记忆内容和最近的工作每天都在变，算「易变」部分；其余是「常驻 prompt」，群聊座位按它的哈希判断要不要补发（§6.6）。
+记忆内容和最近的工作每天都在变，算「易变」部分；其余是「常驻 prompt」，群聊座位按它的哈希判断要不要补发（§6.6）。只有群聊座位会补发：bot 自己的聊天不记常驻 prompt 的哈希，Claude Code 和 Codex 续接的老会话继续用开始时的写法，所以开关的兜底（下面）不依赖 prompt。
 
 ### 5.3 一轮对话
 
@@ -287,7 +288,16 @@ uploads/                   聊天里上传的非文本文件
 2. ChatService 按「忙时策略」发送：没在跑就开新一轮；在跑就插话（steer）、打断（interrupt），或者交给队列等这一轮结束（queue）。
 3. agent 干活：调工具、读写文件、跑命令。需要审批的弹卡片；调 pocket-bots 的工具走 relay。
 4. 每个事件写进时间线并推给界面；侧栏的状态点（在跑、等审批、出错、有新回复）由聊天状态和你的已读记录算出，已读记录存在 `bots.json` 里，换浏览器也一样。
-5. 一轮结束：每日日志记一行（时间、哪个聊天、说了什么、用了哪些工具），记忆文件有改动就记进改动记录（可以撤销），定时任务的运行记下结果，队列里的下一条消息发出。
+5. 一轮结束（`server/activity.ts`）：记忆文件有改动就记进改动记录（可以撤销）；`memoryAutoWrite` 打开时每日日志记一行（时间、哪个聊天、说了什么、用了哪些工具）；定时任务的运行记下结果，队列里的下一条消息发出。
+
+**记忆写入开关的兜底：一轮结束时恢复，不是写入时拦住。** bot 写记忆用的是各个 agent CLI 自己的文件工具（Claude 的 Write/Edit、Codex 的 patch）或命令行，没有专门的「写记忆」工具，runtime 层也没有按路径拦截的统一办法，所以拦在写入那一刻对所有 provider 和 Bash 写入都做不到。做法是 `server/journal.ts` 本来就在轮次开始和结束时给 `MEMORY.md` 和 `memory/*.md` 拍快照比对：
+
+- `turn.ended` 时 `activity.ts` 从 store 读这个 bot 当前的 `memoryAutoWrite`，`journal.end(botId, chat, { readOnly })` 照常把这一轮的改动记为 `actor: "bot"`；
+- `readOnly` 时再把有差异的文件恢复成轮次开始时的内容（bot 新建的删掉，删掉的补回），每个恢复各记一条 `via: "restore"` 的记录（`before` 是 bot 的版本，所以能撤销恢复），随后用恢复后的文件重新拍快照，下一轮开始时不会把恢复当成磁盘上的改动；
+- `journal.write`（你在 Memory 页签的编辑和撤销）和 `begin()` 不检查开关；你在一轮进行中经应用做的编辑已经更新了快照，不会被恢复；
+- 同一个 bot 常有多个轮次并行（群聊座位、私聊、routine），而基线只有一份：`journal` 按 bot 记着进行中的轮次（聊天 id 的集合，不是计数器），`begin(botId, chatId, { readOnly })` 加入，`end()` 和 `leave()`（`turn.ended` 带 `missed` 时）移除，`agent.removed` 时 `forget()` 兜底。`readOnly` 的 bot 在别的轮次还在跑时开始新轮次，不把差异记成 `you/disk`，也不更新基线，先开始的那一轮结束时还能看到这些改动并恢复；没有其他进行中的轮次、或开关打开时，行为不变；
+- 每日日志的写入点也在 `turn.ended`，关闭时直接跳过；
+- 已知局限：恢复发生在轮次结束时，轮次进行中文件是 bot 改过的样子；没看到开始的轮次（后端重启期间结束的）没有快照可比；`memory/log/` 不在快照范围；并行的轮次里先结束的那个，会连同别的聊天已写下的改动一起恢复，记录里算在它名下；轮次进行中你在编辑器里直接改文件，会被当成 bot 的改动恢复掉，但 Changes 里有这条恢复记录，可以撤销。
 
 ### 5.4 bot 自己的工具
 

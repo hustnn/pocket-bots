@@ -122,6 +122,24 @@ describe("a chat's session setup", () => {
     ]);
   });
 
+  it("changes the standing prompt, and the prompt of every chat, with the memory writing switch", async () => {
+    const seat = async (memoryAutoWrite: boolean) => {
+      const bot = makeBot({ memoryAutoWrite });
+      const host = fakeHost([bot]);
+      host.attach(fakeChats({ c1: { status: "idle", items: [{ type: "user_message", text: "hello" }] } }));
+      return chatSpecs(host, relay, async () => ({ name: "Launch" }))({ id: "c1", botId: bot.id, provider: "claude", model: null, thinking: null, mode: null, cwd: "/tmp", title: null, labels: { [GROUP_LABEL]: "group-x" } });
+    };
+    const off = await seat(false);
+    const on = await seat(true);
+    expect(off.standingPrompt).toContain("read-only for you");
+    expect(off.standingPrompt).not.toContain("update that file");
+    expect(on.standingPrompt).toContain("update that file");
+    expect(on.standingPrompt).not.toContain("read-only for you");
+    expect(off.standingPrompt).not.toBe(on.standingPrompt);
+    expect(off.systemPrompt).toContain("read-only for you");
+    expect((await specFor({ memoryAutoWrite: true })).systemPrompt).toContain("update that file");
+  });
+
   it("builds the prompt from the bot and gives the bot's memory folder when it works elsewhere", async () => {
     const spec = await specFor({ soul: "Be brief.", cwd: "/work/project" });
     expect(spec.systemPrompt).toContain("Be brief.");
