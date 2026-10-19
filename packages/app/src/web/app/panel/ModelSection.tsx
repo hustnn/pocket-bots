@@ -42,7 +42,7 @@ function WorkingFolder({ bot }: { bot: Bot }) {
                 <option value="">{bot.cwd ? "Another folder" : "Choose a folder"}</option>
                 {list.map((workspace) => (
                   <option key={workspace.id} value={workspace.directory}>
-                    {workspace.label} — {workspace.directory}
+                    {workspace.directory}
                   </option>
                 ))}
               </select>

@@ -1,4 +1,3 @@
-import { basename } from "node:path";
 import type { z } from "zod";
 import { applyChanges } from "../shared/changes";
 import { BOT_LABEL, EMPTY_LIBRARY, newRoutineId } from "../shared/bot";
@@ -72,15 +71,15 @@ export function rpcHandlers(services: Services): Map<string, RpcRegistration> {
     // somewhere to point a bot at.
     const own = dataPath();
     const seen = new Set<string>();
-    const workspaces: { id: string; label: string; directory: string }[] = [];
-    const add = (directory: string | null, label: string) => {
+    const workspaces: { id: string; directory: string }[] = [];
+    const add = (directory: string | null) => {
       if (!directory || seen.has(directory) || directory.startsWith(own)) return;
       seen.add(directory);
-      workspaces.push({ id: directory, label, directory });
+      workspaces.push({ id: directory, directory });
     };
-    for (const bot of await host.bots()) add(bot.cwd, bot.name);
-    for (const group of await groups.list()) add(group.cwd, group.name);
-    for (const chat of listAllChats(host).slice(0, 200)) add(chat.cwd, basename(chat.cwd));
+    for (const bot of await host.bots()) add(bot.cwd);
+    for (const group of await groups.list()) add(group.cwd);
+    for (const chat of listAllChats(host).slice(0, 200)) add(chat.cwd);
     return { workspaces };
   });
 

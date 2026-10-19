@@ -542,7 +542,7 @@ export const chatCardsRpc = defineRpc({
 export const workspacesRpc = defineRpc({
   name: "pocket.workspaces",
   input: z.object({}),
-  output: z.object({ workspaces: z.array(z.object({ id: z.string(), label: z.string(), directory: z.string() })) }),
+  output: z.object({ workspaces: z.array(z.object({ id: z.string(), directory: z.string() })) }),
 });
 
 /** A slash command the chat's provider offers (Claude Code's /compact, a custom command, a skill). */
