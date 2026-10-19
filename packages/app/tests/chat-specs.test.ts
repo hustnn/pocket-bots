@@ -1,9 +1,10 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ClaudeAdapter, CodexAdapter, GrokAdapter, OpenCodeAdapter, PiAdapter } from "@pocket-bots/runtime";
-import { chatSpecs } from "../src/server/chats";
+import { botDataPath } from "../src/server/bot-home";
+import { chatSpecs, workFolder } from "../src/server/chats";
 import type { Library } from "../src/shared/bot";
 import { GROUP_LABEL } from "../src/shared/group-chat";
 import { fakeChats, fakeHost, makeBot } from "./helpers";
@@ -12,11 +13,12 @@ const server = (id: string, name: string, patch: Record<string, unknown> = {}) =
 const tools = { type: "http" as const, url: "http://127.0.0.1:1/bots/b/a", headers: { authorization: "Bearer t" } };
 const relay = { mountTools: async () => tools, mountApps: async () => ({ type: "http" as const, url: "http://127.0.0.1:1/mcp/b", headers: {} }) } as never;
 
-async function specFor(patch: Parameters<typeof makeBot>[0], library: Library = { skills: [], mcpServers: [] }) {
+/** The setup of a chat with the bot; `cwd`: the folder the chat works in, by default the bot's. */
+async function specFor(patch: Parameters<typeof makeBot>[0], library: Library = { skills: [], mcpServers: [] }, cwd?: string) {
   const bot = makeBot(patch);
   const host = fakeHost([bot], library);
   host.attach(fakeChats({ c1: { status: "idle", items: [{ type: "user_message", text: "hello" }] } }));
-  return chatSpecs(host, relay, async () => null)({ id: "c1", botId: bot.id, provider: "claude", model: null, thinking: null, mode: null, cwd: "/tmp", title: null, labels: {} });
+  return chatSpecs(host, relay, async () => null)({ id: "c1", botId: bot.id, provider: "claude", model: null, thinking: null, mode: null, cwd: cwd ?? bot.cwd ?? botDataPath(bot.id), title: null, labels: {} });
 }
 
 // A chat's setup makes the bot's folders (its skills, say); keep them out of the real data folder.
@@ -125,5 +127,23 @@ describe("a chat's session setup", () => {
     expect(spec.systemPrompt).toContain("Be brief.");
     expect(spec.extraDirectories?.some((dir) => dir.endsWith("/bot-1"))).toBe(true);
     expect((await specFor({})).extraDirectories).toEqual([]);
+    // A chat started in a folder of its own: the bot's memory folder comes along, whatever the bot's folder is.
+    expect((await specFor({}, undefined, "/work/repo")).extraDirectories).toEqual([botDataPath("bot-1")]);
+  });
+});
+
+describe("a chat's or a group's folder", () => {
+  it("takes an existing folder, ~/ expanded and resolved, and says what's wrong with anything else", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "bots-work-folder-"));
+    try {
+      expect(await workFolder(`  ${dir}/sub/..  `)).toBe(dir);
+      expect(await workFolder("~")).toBe(homedir());
+      await expect(workFolder("projects/site")).rejects.toThrow("must be an absolute path");
+      await expect(workFolder(join(dir, "missing"))).rejects.toThrow(`There's no folder at ${join(dir, "missing")}.`);
+      await writeFile(join(dir, "notes.md"), "x");
+      await expect(workFolder(join(dir, "notes.md"))).rejects.toThrow("is a file, not a folder");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

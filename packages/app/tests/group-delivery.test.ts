@@ -55,7 +55,7 @@ async function setup(options: { random?: () => number } = {}) {
       tries[bot.id] = (tries[bot.id] ?? 0) + 1;
       if (failing.start) throw new Error(failing.start);
       const id = `seat-${bot.id}-${starts.length}`;
-      seats[id] = { status: "running", labels: input.labels ?? {} };
+      seats[id] = { status: "running", labels: input.labels ?? {}, ...(input.cwd ? { cwd: input.cwd } : {}) };
       starts.push({ botId: bot.id, prompt: input.prompt });
       return id;
     },

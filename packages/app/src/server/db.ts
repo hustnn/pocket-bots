@@ -413,6 +413,10 @@ const MIGRATIONS: Migration[] = [
   (db) => {
     db.exec("ALTER TABLE group_members ADD COLUMN seat_task INTEGER");
   },
+  // 18: the folder a group's seats work in, instead of each bot's own.
+  (db) => {
+    db.exec("ALTER TABLE groups ADD COLUMN cwd TEXT");
+  },
 ];
 
 /** How much of one message the search index takes: a long pasted attachment doesn't need all of it. */

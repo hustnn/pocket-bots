@@ -189,6 +189,8 @@ export const GroupSummarySchema = z.object({
   wakeMode: WakeModeSchema,
   /** The member that plans and hands out the work; the others take only what it (or the user) hands them. */
   leaderId: z.string().nullable().default(null),
+  /** The folder every member's session for the group works in; null: each works in its own. */
+  cwd: z.string().nullable().default(null),
   /** Members that only wake when addressed. */
   muted: z.array(z.string()),
   /** Something the user hasn't read: at the top level or in a thread they follow. */
@@ -324,6 +326,11 @@ export const SYSTEM_SUBTYPES = {
   "group.membership": "born-read",
   /** The user made a member the leader, or the group has none any more. */
   "group.leader": "born-read",
+  /**
+   * The user set the group's working folder, or took it away: for the record. It wakes nobody; each
+   * seat moves at its next turn, and its briefing says so.
+   */
+  "group.folder": "skip",
   "task.created_summary": "born-read",
   "task.assignment_receipt": "born-read",
   "task.converted_summary": "born-read",
