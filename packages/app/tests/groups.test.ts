@@ -38,7 +38,7 @@ async function setup(script: BotScript, bots = ["alpha", "beta"], options: impor
   relay.groups = groups;
   const fake = new FakeAdapter(((turn, step) => script(turn, step, botOf(turn))) as FakeScript);
   // Seats start without the 500 ms spacing, so the scripts' timings stay theirs.
-  const chats = new ChatService(db, new Map([["fake", fake]]), chatSpecs(host, relay, async (groupId) => groups.groupName(groupId)), async () => null, { startIntervalMs: 0 });
+  const chats = new ChatService(db, new Map([["fake", fake]]), chatSpecs(host, relay, (groupId, botId) => groups.seatGroup(groupId, botId)), async () => null, { startIntervalMs: 0 });
   host.attach(chats);
   chats.on("input.accepted", (event) => groups.onInputAccepted(event));
   chats.on("turn.ended", async ({ agent, outcome, supervision }) => groups.onTurnEnded(agent, { outcome: outcome.kind, error: outcome.kind === "failed" ? outcome.error.message : null, ...(supervision ? { supervision } : {}) }));
@@ -880,3 +880,178 @@ describe("a bot's replies in a group: files and questions", () => {
   });
 });
 
+
+describe("a group with a leader", () => {
+  it("wakes only the leader for open messages, and a member only for what the leader or the user hands it", async () => {
+    const woken: string[] = [];
+    const prompts = new Map<string, string>();
+    const group = await setup(
+      (turn, step, botId) => {
+        if (step === 0 && delivered(turn)) {
+          woken.push(botId);
+          prompts.set(botId, turn.spec.systemPrompt);
+        }
+        return null;
+      },
+      ["alpha", "beta", "gamma"],
+    );
+    stop = group.stop;
+    await group.groups.update(group.id, { leaderId: "alpha" });
+    // Telling every member about the new leader is the one message they all get.
+    expect((await group.texts()).at(-1)).toContain("👑 the user made @Alpha the group's leader");
+    await settle(group);
+    expect(woken.sort()).toEqual(["alpha", "beta", "gamma"]);
+    expect(prompts.get("alpha")).toContain("You lead this group:");
+    expect(prompts.get("alpha")).toMatch(/- Beta: .*runs on/);
+    expect(prompts.get("beta")).toContain("This group has a leader, Alpha.");
+    expect(prompts.get("beta")).not.toContain("claim the ones relevant to your skills");
+    expect((await group.groups.list())[0]!.leaderId).toBe("alpha");
+
+    woken.length = 0;
+    const ask = await group.groups.postFromUser(group.id, { text: "Add a dark mode." });
+    await settle(group);
+    expect(woken).toEqual(["alpha"]);
+
+    // A member can't claim work nobody handed it, or hand work to another member.
+    const alpha = (await group.host.bot("alpha"))!;
+    const beta = (await group.host.bot("beta"))!;
+    expect(await group.groups.claim(beta, group.id, ask)).toContain("Claim refused");
+    await expect(group.groups.task(beta, group.id, { action: "create", titles: ["find the theme files"], assignee: "Gamma" })).rejects.toThrow(/Alpha hands out the work/);
+    await group.groups.read(beta, group.id, { unread: true });
+    await group.groups.read(beta, group.id, { topLevel: true });
+    const sent = await group.groups.send(beta, group.id, { text: "@Gamma can you find the theme files?" });
+    expect(sent).toContain("takes work only from the leader, Alpha, or the user");
+    // It reaches the leader, not Gamma.
+    await settle(group);
+    expect(woken).toEqual(["alpha", "alpha"]);
+
+    woken.length = 0;
+    await group.groups.read(alpha, group.id, { unread: true });
+    await group.groups.read(alpha, group.id, { topLevel: true });
+    const handoff = await group.groups.send(alpha, group.id, { text: "@Beta implement dark mode in styles.css; report back with the files you changed." });
+    const seq = Number(/#(\d+)/.exec(handoff)![1]);
+    await settle(group);
+    expect(woken).toEqual(["beta"]);
+    await group.groups.read(beta, group.id, { unread: true });
+    expect(await group.groups.claim(beta, group.id, seq)).toContain("You've claimed task");
+
+    // Without a leader, every bot hears the group again.
+    await group.groups.update(group.id, { leaderId: null });
+    expect((await group.texts()).at(-1)).toContain("removed the group's leader");
+  });
+});
+
+describe("a led member's pieces of work", () => {
+  it("starts each new piece in a fresh session, and comes back to an old one with its thread as the context", async () => {
+    const wakes: { chat: string; text: string }[] = [];
+    const group = await setup(
+      (turn, step, botId) => {
+        if (step === 0 && delivered(turn) && botId === "beta") wakes.push({ chat: turn.spec.key, text: turn.text });
+        return null;
+      },
+      ["alpha", "beta"],
+    );
+    stop = group.stop;
+    await group.groups.update(group.id, { leaderId: "alpha" });
+    await settle(group);
+    const alpha = (await group.host.bot("alpha"))!;
+    const beta = (await group.host.bot("beta"))!;
+    /** The leader reads what's new, then speaks: at the top level, or in a piece's thread. */
+    const lead = async (text: string, thread?: number) => {
+      await group.groups.read(alpha, group.id, { unread: true });
+      await group.groups.read(alpha, group.id, thread ? { thread } : { topLevel: true });
+      const sent = await group.groups.send(alpha, group.id, { text, ...(thread ? { thread } : {}) });
+      expect(sent).toMatch(/^Sent as #\d+/);
+      await settle(group);
+      return Number(/#(\d+)/.exec(sent)![1]);
+    };
+    const last = () => wakes.at(-1)!;
+    const seatTask = () => group.store.member(group.id, "beta")!.seat_task;
+
+    // A new piece comes in full: no inbox to read, and the claim isn't held for the top level's other messages.
+    await group.groups.postFromUser(group.id, { text: "Ship the release notes." });
+    const a = await lead("@Beta draft the release notes from CHANGELOG.md");
+    const first = last();
+    expect(first.text).toContain("[For you, in full (already read):]");
+    expect(first.text).toContain("@Beta draft the release notes from CHANGELOG.md");
+    expect(first.text).not.toContain("Group inbox notice");
+    expect(seatTask()).toBe(a);
+    expect(await group.groups.claim(beta, group.id, a)).toContain("answer in its thread (thread: " + a + ") @mentioning Alpha");
+    expect(await group.groups.send(beta, group.id, { thread: a, text: "@Alpha drafted in NOTES.md" })).toMatch(/^Sent as/);
+    await settle(group);
+
+    // A follow-up in its thread, in the same session: just the new message; it has the piece from the top.
+    await lead("@Beta add the date to the title", a);
+    expect(last().chat).toBe(first.chat);
+    expect(last().text).toContain("add the date to the title");
+    expect(last().text).not.toContain("[Thread context");
+    // Its piece is handled and told: a restart doesn't wake it to catch up on the group.
+    await group.groups.read(beta, group.id, { thread: a });
+    expect(await group.groups.send(beta, group.id, { thread: a, text: "@Alpha dated" })).toMatch(/^Sent as/);
+    await settle(group);
+    const before = wakes.length;
+    group.groups.resume();
+    await settle(group);
+    expect(wakes.length).toBe(before);
+    expect(group.store.unreadPlaces(group.id, "beta").filter((place) => place.conv === 0)).toEqual([]);
+
+    // The next piece: a fresh session.
+    const b = await lead("@Beta now update the README's install section");
+    expect(last().chat).not.toBe(first.chat);
+    expect(last().text).toContain("update the README's install section");
+    expect(seatTask()).toBe(b);
+
+    // Back to the first piece in its thread: another fresh session, with the thread as its context.
+    await lead("@Beta the notes miss the migration step", a);
+    const back = last();
+    expect(back.chat).not.toBe(first.chat);
+    expect(back.text).toContain(`[Thread context: you were @mentioned in thread #${a}`);
+    expect(back.text).toContain("draft the release notes from CHANGELOG.md");
+    expect(back.text).toContain("drafted in NOTES.md");
+    expect(back.text).toContain("the notes miss the migration step");
+    expect(seatTask()).toBe(a);
+
+    // More on the same piece: the same session, the message in full.
+    await group.groups.read(beta, group.id, { thread: a });
+    expect(await group.groups.send(beta, group.id, { thread: a, text: "@Alpha added it" })).toMatch(/^Sent as/);
+    await settle(group);
+    await lead("@Beta and link the migration guide", a);
+    expect(last().chat).toBe(back.chat);
+    expect(last().text).toContain("[For you, in full (already read):]");
+    expect(last().text).toContain("and link the migration guide");
+    expect(last().text).not.toContain("[Thread context");
+  });
+
+  it("keeps a new piece out of a busy session on another one, and starts it fresh once that turn ends", async () => {
+    const seen: { chat: string; text: string }[] = [];
+    const group = await setup(
+      (turn, step, botId) => {
+        if (botId !== "beta" || !delivered(turn)) return null;
+        if (step === 0) seen.push({ chat: turn.spec.key, text: turn.text });
+        // The first piece takes a while.
+        return step === 0 && turn.text.includes("first piece") ? { wait: 400 } : null;
+      },
+      ["alpha", "beta"],
+    );
+    stop = group.stop;
+    await group.groups.update(group.id, { leaderId: "alpha" });
+    await settle(group);
+    const alpha = (await group.host.bot("alpha"))!;
+    const send = async (text: string) => {
+      await group.groups.read(alpha, group.id, { unread: true });
+      await group.groups.read(alpha, group.id, { topLevel: true });
+      return group.groups.send(alpha, group.id, { text });
+    };
+    await send("@Beta the first piece");
+    await until(() => seen.some((wake) => wake.text.includes("first piece")));
+    await send("@Beta the second piece");
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    // Still busy on the first: the second hasn't reached it.
+    expect(seen.some((wake) => wake.text.includes("second piece"))).toBe(false);
+    await settle(group);
+    const firstChat = seen.find((wake) => wake.text.includes("first piece"))!.chat;
+    const second = seen.find((wake) => wake.text.includes("second piece"))!;
+    expect(second.chat).not.toBe(firstChat);
+    expect(second.text).not.toContain("first piece");
+  });
+});

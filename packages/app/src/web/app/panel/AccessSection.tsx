@@ -4,7 +4,7 @@ import { accountLabel, APPS_MCP_NAME, withAppRule, type AppAccount } from "../..
 import { botMcpServers, EMPTY_LIBRARY, toolGrants, type AppRule, type Bot } from "../../../shared/bot";
 import { TOOLS_MCP_NAME } from "../../../shared/bot-tools";
 import { mcpTarget, setBotUses } from "../../../shared/library";
-import { appsAccountsRpc, appsCatalogRpc, appsStatusRpc, appsToolsRpc, commandListRpc, commandRemoveRpc } from "../../../shared/rpc";
+import { appsAccountsRpc, appsCatalogRpc, appsStatusRpc, appsToolsRpc, commandListRpc, commandRemoveRpc, folderAllowRpc, folderListRpc, folderRemoveRpc } from "../../../shared/rpc";
 import { Button, CommitInput, Field, IconButton, Modal, Segmented, Toggle, useAction } from "../../components/ui";
 import { errorText, rpc } from "../../lib/api";
 import { useStoreDoc } from "../../lib/data";
@@ -312,11 +312,58 @@ function Commands({ bot }: { bot: Bot }) {
   );
 }
 
+/** Folders the bot works in without asking; added from an approval card ("Allow in folder") or here. */
+function Folders({ bot }: { bot: Bot }) {
+  const client = useQueryClient();
+  const folders = useQuery({ queryKey: ["folders", bot.id], queryFn: () => rpc(folderListRpc, { botId: bot.id }) });
+  const { run } = useAction();
+  const [adding, setAdding] = useState("");
+  const refresh = () => client.invalidateQueries({ queryKey: ["folders", bot.id] });
+  const add = () =>
+    void run("add", async () => {
+      await rpc(folderAllowRpc, { botId: bot.id, folder: adding.trim() });
+      setAdding("");
+      await refresh();
+    });
+  return (
+    <Section
+      title="Trusted folders"
+      info={`In these folders the bot runs commands and reads, edits, writes and searches files without asking. A command that names a path outside the folder still asks. It's a convenience, not a sandbox: a command can still reach outside in ways its words don't show. Add one here or with "Allow in folder" on an approval.`}
+    >
+      {folders.data?.folders.length === 0 ? <div className="hint">None yet.</div> : null}
+      {(folders.data?.folders ?? []).map((rule) => (
+        <div key={rule.id} className="row">
+          <div className="mono small truncate" style={{ flex: 1, minWidth: 0 }} title={rule.folder}>
+            {rule.folder}
+          </div>
+          <IconButton
+            icon="trash"
+            title="Remove"
+            onClick={() =>
+              void run("remove", async () => {
+                await rpc(folderRemoveRpc, { botId: bot.id, id: rule.id });
+                await refresh();
+              })
+            }
+          />
+        </div>
+      ))}
+      <div className="row">
+        <input className="input mono small" style={{ flex: 1 }} value={adding} placeholder="/path/to/your/project" onChange={(event) => setAdding(event.target.value)} onKeyDown={(event) => (event.key === "Enter" && adding.trim() ? add() : undefined)} />
+        <Button small icon="folder" disabled={!adding.trim()} onClick={add}>
+          Trust
+        </Button>
+      </div>
+    </Section>
+  );
+}
+
 export function AccessSection({ bot }: { bot: Bot }) {
   return (
     <>
       <McpServers bot={bot} />
       <Apps bot={bot} />
+      <Folders bot={bot} />
       <Commands bot={bot} />
     </>
   );

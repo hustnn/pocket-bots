@@ -670,6 +670,19 @@ function Activity({ members, seats, chats }: { members: readonly Bot[]; seats: R
 
 function Empty({ group, members }: { group: GroupSummary; members: readonly Bot[] }) {
   const [first, second] = members;
+  const leader = members.find((bot) => bot.id === group.leaderId);
+  if (leader) {
+    const others = members.filter((bot) => bot.id !== leader.id).map((bot) => bot.name);
+    return (
+      <div className="splash group-empty">
+        <AvatarStack avatars={members.map((bot) => bot.avatar)} size={44} max={6} />
+        <h1>{group.name}</h1>
+        <p className="muted" style={{ maxWidth: 560, margin: 0 }}>
+          {leader.name} leads this group. Tell {leader.name} what you want: it plans the work and hands each piece to {others.join(", ") || "the other bots"} with a brief. They work only on what {leader.name} or you hand them, and report back to {leader.name}.
+        </p>
+      </div>
+    );
+  }
   return (
     <div className="splash group-empty">
       <AvatarStack avatars={members.map((bot) => bot.avatar)} size={44} max={6} />
@@ -883,7 +896,7 @@ export function GroupView({ groupId, at, atThread }: { groupId: string; at?: num
         <AvatarStack avatars={members.map((bot) => bot.avatar)} size={26} />
         <div className="title" style={{ cursor: "pointer" }} onClick={() => void rename()} title="Rename">
           {group.name}
-          <span className="subtitle"> · {members.map((bot) => bot.name).join(", ") || "no bots"}</span>
+          <span className="subtitle"> · {members.map((bot) => (bot.id === group.leaderId ? `${bot.name} (leader)` : bot.name)).join(", ") || "no bots"}</span>
         </div>
         <IconButton icon="search" title={`Search this group (${MOD}F)`} onClick={() => setSearching((open) => (open ? 0 : 1))} />
         <IconButton

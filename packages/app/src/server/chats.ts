@@ -3,7 +3,7 @@ import type { WireAttachment } from "../shared/attachments";
 import { APPS_MCP_NAME } from "../shared/apps";
 import { BOT_LABEL, botMcpServers, botSkills, mcpServersRecord, POCKET_LABEL, type Bot, type Library } from "../shared/bot";
 import { QUIET_TOOLS, TOOLS_MCP_NAME } from "../shared/bot-tools";
-import { GROUP_LABEL } from "../shared/group-chat";
+import { GROUP_LABEL, type GroupLead } from "../shared/group-chat";
 import { replyText } from "../shared/reply";
 import { expandLearn } from "../shared/skills";
 import { newUuid } from "../shared/uuid";
@@ -73,13 +73,16 @@ export async function startChat(host: PocketHost, bot: Bot, input: StartChatInpu
  */
 const STANDING_UPDATE = /^<pocket-bots-standing-prompt-update>[\s\S]*?<\/pocket-bots-standing-prompt-update>\s*/;
 
-export function chatSpecs(host: PocketHost, relay: Relay, groupName: (groupId: string) => Promise<string | null>): SpecBuilder {
+/** What a seat's prompt says about its group: its name and, when the group has a leader, the seat's part in it. */
+export type SeatGroupLookup = (groupId: string, botId: string) => Promise<{ name: string; lead?: GroupLead } | null>;
+
+export function chatSpecs(host: PocketHost, relay: Relay, seatGroup: SeatGroupLookup): SpecBuilder {
   return async (chat: ChatRecord) => {
     const bot = chat.botId ? await host.bot(chat.botId) : null;
     if (!bot) return { systemPrompt: "", mcpServers: {}, trustedTools: [] };
     const library = await host.library();
     const groupId = chat.labels[GROUP_LABEL] ?? null;
-    const group = groupId ? await groupName(groupId) : null;
+    const group = groupId ? await seatGroup(groupId, bot.id) : null;
     const first = host.chats.items(chat.id, 400).find((item) => item.type === "user_message");
     // The sub-agent section goes to a seat whose runtime can start sub-agents; a runtime's own
     // question tool is named so the bot knows its questions show in the group.
@@ -88,7 +91,7 @@ export function chatSpecs(host: PocketHost, relay: Relay, groupName: (groupId: s
     const questionTool = capabilities?.questionTool;
     // The playbooks follow the chat's first message as typed, without a standing-prompt update in front of it.
     const message = first?.type === "user_message" ? first.text.replace(STANDING_UPDATE, "") : (chat.title ?? "");
-    const { systemPrompt: system, standingPrompt } = await systemPrompt({ bot, message, ...(group ? { group: { name: group, subAgents, ...(questionTool ? { questionTool } : {}) } } : {}) }, library);
+    const { systemPrompt: system, standingPrompt } = await systemPrompt({ bot, message, ...(group ? { group: { name: group.name, subAgents, ...(questionTool ? { questionTool } : {}), ...(group.lead ? { lead: group.lead } : {}) } } : {}) }, library);
     const mcpServers: Record<string, import("@pocket-bots/runtime").McpServerConfig> = { ...mcpServersRecord(botMcpServers(bot, library)) };
     const tools = await relay.mountTools(bot.id, chat.id, groupId);
     if (tools) mcpServers[TOOLS_MCP_NAME] = tools;

@@ -3,7 +3,7 @@ import { BOT_LABEL } from "../shared/bot";
 import { ROUTINE_LABEL } from "../shared/chat";
 import { shellCommand } from "../shared/commands";
 import type { ApprovalPolicy, ChatService } from "./chat-service";
-import type { CommandAllowlist } from "./commands";
+import { requestPaths, type CommandAllowlist, type FolderGrants } from "./commands";
 import type { MemoryJournal } from "./journal";
 import { appendDailyLog } from "./memory";
 import type { RoutineScheduler } from "./scheduler";
@@ -36,12 +36,18 @@ export function wireActivity(input: { watcher: ChatService; journal: MemoryJourn
 
 }
 
-/** A bot's saved commands (exact command, exact folder) are approved without asking. */
-export function savedCommands(commands: CommandAllowlist): ApprovalPolicy {
+/**
+ * What a bot was allowed to do without asking: its saved commands (exact command, exact folder),
+ * and a command or file operation that stays inside a folder the user trusts it with.
+ */
+export function savedApprovals(commands: CommandAllowlist, folders: FolderGrants): ApprovalPolicy {
   return async (agent, request) => {
     const botId = agent.labels?.[BOT_LABEL];
+    if (!botId) return null;
     const shell = shellCommand(request, agent.cwd);
-    if (!botId || !shell || !(await commands.matches(botId, shell.command, shell.cwd))) return null;
-    return { behavior: "allow" };
+    if (shell && (await commands.matches(botId, shell.command, shell.cwd))) return { behavior: "allow" };
+    const paths = requestPaths(request, agent.cwd);
+    if (paths && (await folders.covers(botId, paths))) return { behavior: "allow" };
+    return null;
   };
 }

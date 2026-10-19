@@ -6,6 +6,7 @@ import {
   GROUP_USER_ID,
   TASK_TRANSITIONS,
   deliveryReason,
+  fromLead,
   isSkipSubtype,
   unreadEligible,
   type GroupAttachment,
@@ -47,6 +48,8 @@ export interface GroupRow {
   id: string;
   name: string;
   wake_mode: WakeMode;
+  /** The member that hands out the work; the others take only what it or the user aims at them. */
+  leader_id: string | null;
   last_seq: number;
   created_at: string;
   updated_at: string;
@@ -59,6 +62,8 @@ export interface MemberRow {
   active: number;
   joined_seq: number;
   muted_from_seq: number | null;
+  /** In a group with a leader, the piece of work the member's seat session is for: its top-level message. */
+  seat_task: number | null;
 }
 
 interface MessageRow {
@@ -234,17 +239,24 @@ export class GroupStore {
     return this.db.get<GroupRow>("SELECT * FROM groups WHERE id = ?", groupId) ?? null;
   }
 
-  createGroup(input: { id: string; name: string; memberIds: string[] }): void {
+  createGroup(input: { id: string; name: string; memberIds: string[]; leaderId?: string | null }): void {
     const at = now();
     this.db.tx(() => {
-      this.db.run("INSERT INTO groups (id, name, wake_mode, created_at, updated_at) VALUES (?, ?, 'everyone', ?, ?)", input.id, input.name, at, at);
+      this.db.run("INSERT INTO groups (id, name, wake_mode, leader_id, created_at, updated_at) VALUES (?, ?, 'everyone', ?, ?, ?)", input.id, input.name, input.leaderId ?? null, at, at);
       for (const botId of input.memberIds) this.db.run("INSERT INTO group_members (group_id, bot_id) VALUES (?, ?)", input.id, botId);
     });
   }
 
-  updateGroup(groupId: string, patch: { name?: string; wakeMode?: WakeMode }): void {
+  updateGroup(groupId: string, patch: { name?: string; wakeMode?: WakeMode; leaderId?: string | null }): void {
     if (patch.name !== undefined) this.db.run("UPDATE groups SET name = ?, updated_at = ? WHERE id = ?", patch.name, now(), groupId);
     if (patch.wakeMode !== undefined) this.db.run("UPDATE groups SET wake_mode = ? WHERE id = ?", patch.wakeMode, groupId);
+    if (patch.leaderId !== undefined) this.db.run("UPDATE groups SET leader_id = ? WHERE id = ?", patch.leaderId, groupId);
+  }
+
+  /** The group's leader while it's a member, or null. */
+  leader(groupId: string): string | null {
+    const leaderId = this.group(groupId)?.leader_id ?? null;
+    return leaderId && this.member(groupId, leaderId)?.active ? leaderId : null;
   }
 
   deleteGroup(groupId: string): void {
@@ -284,8 +296,13 @@ export class GroupStore {
     this.db.run("UPDATE group_members SET active = 0 WHERE group_id = ? AND bot_id = ?", groupId, botId);
   }
 
+  /** A new seat (or none) is for no piece of work yet. */
   setSeat(groupId: string, botId: string, chatId: string | null): void {
-    this.db.run("UPDATE group_members SET seat_chat_id = ? WHERE group_id = ? AND bot_id = ?", chatId, groupId, botId);
+    this.db.run("UPDATE group_members SET seat_chat_id = ?, seat_task = CASE WHEN seat_chat_id IS ? THEN seat_task END WHERE group_id = ? AND bot_id = ?", chatId, chatId, groupId, botId);
+  }
+
+  setSeatTask(groupId: string, botId: string, task: number | null): void {
+    this.db.run("UPDATE group_members SET seat_task = ? WHERE group_id = ? AND bot_id = ?", task, groupId, botId);
   }
 
   /** Mute: from the next message on, ordinary top-level messages don't reach the bot. */
@@ -351,6 +368,9 @@ export class GroupStore {
    * @mentioned. A thread message reaches its followers and, for the same send, its sender, the
    * top message's author and whoever it @mentions; one who stopped following gets no record
    * unless @mentioned (which makes it follow again). Then the follows.
+   * In a group with a leader, the other members are reached only by what the leader or the user
+   * aims at them (fromLead): anything else reaches them as it would a muted bot (no record at the
+   * top level) and wakes none of them in a thread; one member's @mention of another reaches nobody.
    */
   private deliver(row: MessageRow, message: GroupMessage): string[] {
     const groupId = row.group_id;
@@ -361,7 +381,11 @@ export class GroupStore {
     const valid = (id: string) => id === GROUP_USER_ID || memberIds.has(id);
     const conv = message.thread ?? 0;
     const senderId = row.sender_id ?? row.sender_kind;
-    const mentioned = new Set(message.mentions.filter((id) => memberIds.has(id)));
+    const leaderId = group.leader_id && memberIds.has(group.leader_id) ? group.leader_id : null;
+    const lead = !leaderId || fromLead(leaderId, { kind: row.sender_kind, senderId, causalActor: row.causal_actor_id });
+    /** A member the leader leads, which this message may only reach as work. */
+    const led = (id: string) => leaderId !== null && id !== leaderId && id !== GROUP_USER_ID && id !== senderId;
+    const mentioned = new Set(message.mentions.filter((id) => memberIds.has(id) && (lead || !led(id))));
     const receivers = new Map<string, { suppressed: boolean }>();
     const add = (id: string, suppressed = false) => {
       if (!valid(id)) return;
@@ -382,7 +406,7 @@ export class GroupStore {
       const author = parent ? senderOf(parent) : null;
       if (author && (row.sender_kind === "system" || author !== senderId) && !unfollowed.has(author)) add(author);
       for (const id of mentioned) add(id);
-      if (message.everyone) for (const member of members) add(member.bot_id);
+      if (message.everyone) for (const member of members) if (lead || !led(member.bot_id)) add(member.bot_id);
       for (const id of unfollowed) add(id, true);
     }
 
@@ -396,11 +420,14 @@ export class GroupStore {
       if (suppressed && !personal) continue;
       const mutedFrom = muted.get(id);
       if (conv === 0 && !personal && mutedFrom !== null && mutedFrom !== undefined && row.seq >= mutedFrom) continue;
+      // Work from the leader or the user aimed at a led member reaches it; nothing else wakes it.
+      const asWork = !led(id) || (lead && (personal || repliedBot === id || message.everyone));
+      if (conv === 0 && !asWork) continue;
       // A personal @mention is unread even for the one who caused it (the mention is checked first,
       // and live delivery uses the same rule): "📌 @Ada started task #3" reaches Ada.
       const eligible = unreadEligible(subject, id, personal);
       const reason =
-        id === GROUP_USER_ID
+        id === GROUP_USER_ID || !asWork
           ? null
           : deliveryReason({ mode: group.wake_mode, receiverId: id, conv, message: { senderId, kind: row.sender_kind, everyone: message.everyone, mentions: message.mentions }, personal, repliedTo: repliedBot === id, eligible });
       this.db.run(
@@ -422,7 +449,7 @@ export class GroupStore {
       if (row.sender_kind !== "system") this.follow(groupId, conv, senderId, "replied", true);
       const author = parent ? senderOf(parent) : null;
       if (author && valid(author)) this.follow(groupId, conv, author, "authored", false);
-      for (const id of message.everyone ? memberIds : mentioned) this.follow(groupId, conv, id, "mentioned", true);
+      for (const id of message.everyone ? [...memberIds].filter((id) => lead || !led(id)) : mentioned) this.follow(groupId, conv, id, "mentioned", true);
     }
     return woken;
   }
@@ -636,8 +663,11 @@ export class GroupStore {
     const prior = this.cursor(groupId, botId, conv);
     const top = Math.max(ledger.boundary ?? 0, ...ledger.exact);
     if (top <= prior) return;
-    const rows = this.db.all<{ seq: number }>(
-      `SELECT seq FROM group_messages WHERE group_id = ? AND ${IN_CONV(conv)} AND seq > ? AND seq <= ? AND NOT (sender_kind = 'bot' AND sender_id = ?) ORDER BY seq`,
+    // `counted`: it's unread for the bot. One it never received (muted, or not aimed at a member
+    // the leader leads) isn't, so the position passes it without the model having seen it.
+    const rows = this.db.all<{ seq: number; counted: number }>(
+      `SELECT m.seq, EXISTS (SELECT 1 FROM group_inbox i WHERE i.group_id = m.group_id AND i.seq = m.seq AND i.receiver_id = ? AND i.unread_eligible = 1) AS counted FROM group_messages m WHERE m.group_id = ? AND ${IN_CONV(conv)} AND m.seq > ? AND m.seq <= ? AND NOT (m.sender_kind = 'bot' AND m.sender_id = ?) ORDER BY m.seq`,
+      botId,
       groupId,
       ...convArgs(conv),
       prior,
@@ -646,7 +676,7 @@ export class GroupStore {
     );
     let upTo = prior;
     for (const row of rows) {
-      if (!isSeen(ledger, Number(row.seq))) break;
+      if (!isSeen(ledger, Number(row.seq)) && row.counted) break;
       upTo = Number(row.seq);
     }
     if (upTo > prior) this.markRead(groupId, botId, conv, upTo);

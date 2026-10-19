@@ -8,7 +8,8 @@ import { foldText } from "./activity";
 // group only through group tools. docs/group-chats.md walks through it with an example.
 // - Every message gets a delivery record for each receiver it reaches (group-store.ts): unread or not
 //   by one rule (unreadEligible), and in the bot's inbox when it should hear about it
-//   (deliveryReason). A muted bot has no record for ordinary top-level messages.
+//   (deliveryReason). A muted bot has no record for ordinary top-level messages, and in a group
+//   with a leader the other bots get only what the leader or the user aims at them (fromLead).
 // - A bot is woken with a content-free notice and reads the messages itself; reading moves its
 //   read position and records what its model has seen.
 // - Before a bot posts or claims, what its model has seen is checked against what came in. If
@@ -186,6 +187,8 @@ export const GroupSummarySchema = z.object({
   /** The user's read position at the top level. */
   readSeq: z.number(),
   wakeMode: WakeModeSchema,
+  /** The member that plans and hands out the work; the others take only what it (or the user) hands them. */
+  leaderId: z.string().nullable().default(null),
   /** Members that only wake when addressed. */
   muted: z.array(z.string()),
   /** Something the user hasn't read: at the top level or in a thread they follow. */
@@ -319,6 +322,8 @@ export function parseMentions(text: string, members: readonly Member[], outsider
  */
 export const SYSTEM_SUBTYPES = {
   "group.membership": "born-read",
+  /** The user made a member the leader, or the group has none any more. */
+  "group.leader": "born-read",
   "task.created_summary": "born-read",
   "task.assignment_receipt": "born-read",
   "task.converted_summary": "born-read",
@@ -341,7 +346,7 @@ export type SystemSubtype = keyof typeof SYSTEM_SUBTYPES;
  * Notes that don't hold the post of the one who caused them: everything they say was in that one's own request or
  * its answer. A task's lifecycle note isn't one: it carries the task's title.
  */
-export const FRESHNESS_EXEMPT_SUBTYPES: readonly SystemSubtype[] = ["group.membership", "task.created_summary", "task.assignment_receipt", "task.converted_summary"];
+export const FRESHNESS_EXEMPT_SUBTYPES: readonly SystemSubtype[] = ["group.membership", "group.leader", "task.created_summary", "task.assignment_receipt", "task.converted_summary"];
 
 export const isSkipSubtype = (subtype: string | null): boolean => !!subtype && (SYSTEM_SUBTYPES as Record<string, string>)[subtype] === "skip";
 
@@ -398,12 +403,52 @@ export function deliveryReason(input: DeliveryInput): WakeReason | null {
   return open ? "open" : null;
 }
 
+/**
+ * In a group with a leader, whether a message comes from the ones who hand out the work: the
+ * user, the leader, or a note one of them (or pocket-bots itself) caused.
+ */
+export function fromLead(leaderId: string, message: { kind: GroupSender["kind"]; senderId: string; causalActor: string | null }): boolean {
+  if (message.kind === "user") return true;
+  if (message.kind === "bot") return message.senderId === leaderId;
+  return message.causalActor === null || message.causalActor === leaderId || message.causalActor === GROUP_USER_ID;
+}
+
+/**
+ * In a group with a leader, the piece of work a message in a member's inbox belongs to: for a
+ * message in a thread, that thread; for a top-level message from the leader or the user that
+ * @mentions the member, the message itself (a new piece). Null for what's part of no piece (a note,
+ * @everyone, a reply at the top level): it goes to whichever piece is current.
+ */
+export function workOf(leaderId: string, botId: string, message: Pick<GroupMessage, "seq" | "thread" | "from" | "mentions">): number | null {
+  if (message.thread) return message.thread;
+  if (message.from.kind === "system" || !message.mentions.includes(botId)) return null;
+  return message.from.kind === "user" || message.from.botId === leaderId ? message.seq : null;
+}
+
+/**
+ * What a led member's wake is about: one piece of work at a time (workOf), each in a session of
+ * its own. News for the piece its seat's session is on (`current`) comes first, else the oldest
+ * piece in its inbox; messages of no piece go along. What's for another piece waits for its turn.
+ * Only pieces with something no notice told yet count, so a piece whose messages were told and
+ * not read doesn't hold up the others. `switching`: the seat's session is on another piece, so
+ * this one starts a fresh session.
+ */
+export function pieceFor<T extends { message: Pick<GroupMessage, "seq" | "thread" | "from" | "mentions">; noticed?: boolean }>(leaderId: string, botId: string, pending: readonly T[], current: number | null): { work: number | null; now: T[]; switching: boolean } {
+  const works = pending.map((entry) => workOf(leaderId, botId, entry.message));
+  const news = works.filter((work, index): work is number => work !== null && !pending[index]!.noticed);
+  const open = news.length ? news : works.filter((work): work is number => work !== null);
+  const work = current !== null && open.includes(current) ? current : (open[0] ?? null);
+  return { work, now: pending.filter((_, index) => works[index] === null || works[index] === work), switching: work !== null && current !== null && current !== work };
+}
+
 // ---------------------------------------------------------------- what a bot reads
 
 export interface RosterEntry {
   id: string;
   name: string;
   title: string;
+  /** The group's leader. */
+  leader?: boolean;
 }
 
 function senderLabel(from: GroupSender, meId: string): string {
@@ -472,8 +517,10 @@ function amendedText(task: Pick<GroupTask, "number" | "revision" | "title" | "de
 
 function rosterLine(me: Member, roster: readonly RosterEntry[]): string {
   const entries = roster.map((member) => {
-    const about = member.title.trim() ? ` (${foldText(member.title, 60)})` : "";
-    return member.id === me.id ? `${member.name} (you)` : `${member.name}${about}`;
+    const lead = member.leader ? "leader" : "";
+    if (member.id === me.id) return `${member.name} (${lead ? "you, the leader" : "you"})`;
+    const about = [lead, member.title.trim() ? foldText(member.title, 60) : ""].filter(Boolean).join(": ");
+    return `${member.name}${about ? ` (${about})` : ""}`;
   });
   return `${entries.join(", ")}, and the user`;
 }
@@ -563,6 +610,11 @@ export interface WakeInput {
   catchUp?: { messages: readonly GroupMessage[]; places: readonly UnreadPlace[]; uncovered: readonly UnreadPlace[]; parents?: ReadonlyMap<number, GroupMessage> };
   /** Its reminders that fired (server/reminders.ts reminderFiredText): for it alone. */
   reminders?: readonly string[];
+  /**
+   * In a group with a leader, the messages of the piece of work a member is woken for, in full:
+   * it needn't read its inbox for them, and they count as read once its seat takes them in.
+   */
+  handed?: { messages: readonly GroupMessage[]; parents?: ReadonlyMap<number, GroupMessage> };
 }
 
 /**
@@ -593,6 +645,10 @@ export function wakeText(input: WakeInput): string {
     );
   }
   for (const reminder of input.reminders ?? []) lines.push(reminder, "");
+  if (input.handed?.messages.length) {
+    lines.push("[For you, in full (already read):]", "");
+    for (const message of input.handed.messages) lines.push(messageText(message, me, input.handed.parents), "");
+  }
   const count = input.pending.length;
   const unreadLines = (places: readonly UnreadPlace[]) => places.map((place) => `- ${place.conv ? `thread #${place.conv}` : "top level"}: ${place.count} unread`);
   if (input.catchUp?.messages.length) {
@@ -744,17 +800,26 @@ const askBotRecovery = (name: string, askBot: boolean) =>
 
 /**
  * What group_send adds when some @mentions reached nobody ("Undelivered mentions — partial
- * result"): a bot of the user's that isn't in the group (not_in_conversation), or a name that's no
- * bot's (unknown_or_not_visible). The message itself was sent.
+ * result"): a bot of the user's that isn't in the group (not_in_conversation), a name that's no
+ * bot's (unknown_or_not_visible), or, in a group with a leader, a member that takes work only from
+ * the leader (`led`, with the leader's name). The message itself was sent.
  */
-export function undeliveredMentionsText(input: { outside: readonly { name: string; handle: string }[]; unknown: readonly string[]; askBot: boolean }): string {
-  if (input.outside.length === 0 && input.unknown.length === 0) return "";
+export function undeliveredMentionsText(input: { outside: readonly { name: string; handle: string }[]; unknown: readonly string[]; askBot: boolean; led?: { leader: string; members: readonly { name: string; handle: string }[] } }): string {
+  const led = input.led?.members ?? [];
+  if (input.outside.length === 0 && input.unknown.length === 0 && led.length === 0) return "";
   const lines = [
     "Undelivered mentions — partial result",
     "The message was sent: don't send it again, or it posts twice. Each row is the literal @token from your message; to write a name without mentioning it, put it in `code`.",
   ];
   for (const bot of input.outside) {
     lines.push(`- ${bot.handle} — not in this group`, "  consequence: this @mention didn't notify anyone.", `  recovery: ${askBotRecovery(bot.name, input.askBot)}`);
+  }
+  for (const bot of led) {
+    lines.push(
+      `- ${bot.handle} — takes work only from the leader, ${input.led!.leader}, or the user`,
+      "  consequence: this @mention didn't notify anyone.",
+      `  recovery: if ${bot.name} should do something, tell @${input.led!.leader} what and why; the leader hands out the work.`,
+    );
   }
   for (const word of input.unknown) {
     lines.push(
@@ -955,8 +1020,11 @@ export function inboxText(places: readonly UnreadPlace[], meId: string, options:
  * Rules particular to these groups are marked "pocket-bots:". `subAgents`: the bot's runtime can
  * start sub-agents, which adds the sub-agent section (SUBAGENT_DELEGATION_SECTION).
  * `questionTool`: the runtime's own tool for asking the user, whose questions the group shows.
+ * `lead`: the group has a leader, and this seat is it (with the members it hands work to) or one
+ * of the members it leads; see leadSection.
  */
-export function groupPrompt(groupName: string, options: { subAgents?: boolean; questionTool?: string } = {}): string {
+export function groupPrompt(groupName: string, options: { subAgents?: boolean; questionTool?: string; lead?: GroupLead } = {}): string {
+  const role = options.lead?.role ?? null;
   return [
     `This chat is your seat in the group chat "${groupName}" in Pocket Bots, shared by the user and other bots. Nobody else reads this chat: the user and the other bots see only what you send with group_send. Approvals, sign-ins and anything private for the user stay here, outside the group.`,
     "",
@@ -964,6 +1032,7 @@ export function groupPrompt(groupName: string, options: { subAgents?: boolean; q
     "- Always communicate through the group tools. group_send is your only voice in the group: text you write here otherwise reaches nobody.",
     "- Prefer one group tool call at a time: read its result before choosing the next action.",
     "",
+    ...(options.lead ? [leadSection(options.lead), ""] : []),
     "When you're woken:",
     "1. If this turn brings a concrete message for you, first decide whether it needs a visible acknowledgment, a blocker question, or an ownership signal. If it does, send it early, before deep context gathering.",
     "2. Handle what this turn brings. If there is no pending work, stop.",
@@ -1004,18 +1073,24 @@ export function groupPrompt(groupName: string, options: { subAgents?: boolean; q
     "- Claim rule: if fulfilling a message requires you to take action beyond just replying (running tools, making changes, investigating), claim it with group_claim before starting. If you're only answering a question or having a conversation, no claim is needed.",
     "- Only top-level messages can become tasks; messages inside threads are discussion: reply there, but keep claims and conversions to top-level messages.",
     "- If a claim fails, don't start conflicting work or take over its scope without a redirect. A failed claim is a concurrency lock, not a ruling on who owns the work: if the work is yours to own, correct the routing in the original thread.",
-    "- When your work is done, set the task to in_review with group_task so a human can validate it, then to done after approval.",
+    ...(role === "member" ? [] : ["- When your work is done, set the task to in_review with group_task so a human can validate it, then to done after approval."]),
     "- pocket-bots: a task keeps its message's number (task #12 is message #12, and its thread is thread #12). Creating tasks with an assignee tells that bot, even when it's muted; assigning an existing task tells nobody, so @mention the bot too.",
     "- Amendments are auditable: group_task amend changes a task card's current title or description (a reviewer adding acceptance criteria, say); any member may, and names written on the card grant nothing. The message keeps its words; group_task show reads the current card, and history lists every change to it in order.",
     "",
-    "Splitting tasks for parallel execution:",
-    "When you need to break down a large task into subtasks (group_task create), structure them so bots can work in parallel:",
-    '- Group by phase if tasks have dependencies. Label them clearly (e.g. "Phase 1: …", "Phase 2: …") so bots know what can run concurrently and what must wait.',
-    "- Prefer independent subtasks that don't block each other. Each subtask should be completable without waiting for another.",
-    "- Avoid sequential chains where each task depends on the previous one: they force bots to work one at a time.",
-    "When you get a notice about new tasks, check the tasks (group_task list) and claim the ones relevant to your skills.",
-    "",
-    ...(options.subAgents ? [SUBAGENT_DELEGATION_SECTION, ""] : []),
+    // A led member doesn't split or pick up work; the leader hands it out.
+    ...(role === "member"
+      ? []
+      : [
+          "Splitting tasks for parallel execution:",
+          "When you need to break down a large task into subtasks (group_task create), structure them so bots can work in parallel:",
+          '- Group by phase if tasks have dependencies. Label them clearly (e.g. "Phase 1: …", "Phase 2: …") so bots know what can run concurrently and what must wait.',
+          "- Prefer independent subtasks that don't block each other. Each subtask should be completable without waiting for another.",
+          "- Avoid sequential chains where each task depends on the previous one: they force bots to work one at a time.",
+          ...(role === "leader" ? [] : ["When you get a notice about new tasks, check the tasks (group_task list) and claim the ones relevant to your skills."]),
+          "",
+        ]),
+    // A leader hands hands-on work to its members, which run on models picked for it, not to sub-agents.
+    ...(options.subAgents && role !== "leader" ? [SUBAGENT_DELEGATION_SECTION, ""] : []),
     "@Mentions:",
     "- @mention a member by its name (@Ada). Mention others, not yourself: assign reviews and follow-ups to teammates.",
     "- @mentions only reach the group's members.",
@@ -1023,8 +1098,9 @@ export function groupPrompt(groupName: string, options: { subAgents?: boolean; q
     "",
     "Communication style:",
     "Keep the user informed. They can't see your reasoning, so:",
-    "- When you take on a task, acknowledge it and briefly outline your plan before starting.",
-    '- For multi-step work, send short progress updates (e.g. "Working on step 2/3…"), in the task\'s thread.',
+    ...(role === "member"
+      ? ["- Your leader reads your report, so skip acknowledgments and progress updates (see the leader rules above)."]
+      : ["- When you take on a task, acknowledge it and briefly outline your plan before starting.", '- For multi-step work, send short progress updates (e.g. "Working on step 2/3…"), in the task\'s thread.']),
     "- When done, summarize the result.",
     "- Keep updates concise: one or two sentences. Don't flood the chat.",
     "- Default every message to the shortest useful form. Include only what the recipient needs to act or decide.",
@@ -1056,6 +1132,46 @@ export function groupPrompt(groupName: string, options: { subAgents?: boolean; q
     ...(options.questionTool
       ? [`- When only the user can decide something (a choice between options, a fact you can't find), ask with your ${options.questionTool} tool. The question shows in the group as yours, and the user's answer comes back to you as the tool's result; it reaches no other bot. For teammates and updates, use group_send.`]
       : []),
+  ].join("\n");
+}
+
+/**
+ * A seat's part in a group with a leader: the leader, with the members it hands work to (what each
+ * does and the model it runs on), or one of the members, with its leader's name.
+ */
+export type GroupLead = { role: "leader"; members: readonly { name: string; about: string }[] } | { role: "member"; leader: string };
+
+/**
+ * The prompt section for a group with a leader. The leader plans, hands out each piece with a
+ * complete brief and reviews what comes back; a member works only on what it's handed and
+ * reports once to the leader. The rules are pocket-bots's own delivery (fromLead), so the section
+ * says what reaches whom.
+ */
+export function leadSection(lead: GroupLead): string {
+  if (lead.role === "leader") {
+    return [
+      "You lead this group:",
+      "- You plan, and the other bots do the work you hand them. They wake only for messages from you or the user that @mention them, reply to them or assign them a task, and they report back to you. Nobody else plans or hands out work: the group moves when you do.",
+      "- For each request, work out the steps, then hand each piece to the member best suited for it. Spend your own effort on planning, reviewing results and deciding what's next. Hand hands-on work (writing code, searching and reading files, running commands) to the members rather than doing it yourself or with sub-agents, unless it's one quick check.",
+      "- A new piece of work is a new top-level group_send that @mentions one member and carries the complete brief: the goal, the files or area, the constraints, what done looks like, and what to report back. The member starts every new piece in a fresh session that remembers nothing of earlier pieces and sees nothing of the group but what you send it, so the brief must stand on its own. The member claims your message, which makes it a task you can follow with group_task list.",
+      "- The member answers in your message's thread. To iterate on that piece (a fix, a change, a question, more of the same), reply in the same thread and @mention the member: the thread is the piece's context, and the member carries on from it. Keep each piece in its own thread: don't start a new top-level message for a follow-up, and don't put a new piece in an old thread.",
+      "- Pieces that don't depend on each other can go to different members at once; keep dependent steps in order. A member works on one piece at a time; another piece for it waits until it's done with the current one.",
+      "- When a member reports back, check the result before you build on it or pass it on. If it isn't right yet, say what to change in its thread. When it is, set its task to done with group_task, then hand out the next piece as a new message, or tell the user the outcome.",
+      "- When a member is stuck or asks you something in a thread, answer there promptly with direction: you're the one who unblocks them. If only the user can decide, ask the user.",
+      "- The members you hand work to:",
+      ...(lead.members.length ? lead.members.map((member) => `  - ${member.name}${member.about ? `: ${member.about}` : ""}`) : ["  - (none yet)"]),
+    ].join("\n");
+  }
+  const leader = lead.leader;
+  return [
+    `This group has a leader, ${leader}. These rules come before the general ones below:`,
+    `- Work only on what ${leader} or the user hands you. Ordinary messages in the group don't reach you. Don't pick up other work, claim tasks that weren't handed to you, or start discussions.`,
+    `- A piece of work is a top-level message that @mentions you, with its thread. A new piece starts you in a fresh session that remembers nothing of earlier pieces: the message is the whole brief, and it's shown to you in full. Claim it with group_claim, then do it fully, within its brief.`,
+    `- Answer in that message's thread (group_send with thread: its number), @mentioning ${leader}: the outcome first, then what you changed (files), how you checked it, and anything left open. Keep it short: ${leader} decides what's next.`,
+    `- ${leader} follows up in the same thread when it wants changes. That thread is your context for the piece: everything said there about it is what you build on. If you were brought back to an older piece, its thread is shown to you; read the rest with group_read (thread: its number) if you need it.`,
+    `- Don't change the task's status: ${leader} decides when it's done. Skip acknowledgments and progress updates: each one wakes ${leader} for nothing. To show you've started, react with group_react, which wakes nobody.`,
+    `- When the brief is unclear or something blocks you, ask @${leader} one concise question in the thread that says what you need instead of guessing, then stop until the answer comes.`,
+    `- Don't hand work to the other members: your @mentions of them don't reach them. If another member should do something, tell ${leader}.`,
   ].join("\n");
 }
 

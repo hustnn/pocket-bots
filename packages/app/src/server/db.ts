@@ -405,6 +405,14 @@ const MIGRATIONS: Migration[] = [
   (db) => {
     db.exec("UPDATE groups SET wake_mode = 'everyone' WHERE wake_mode = 'raft'");
   },
+  // 16: a group's leader, the member that plans and hands out the work.
+  (db) => {
+    db.exec("ALTER TABLE groups ADD COLUMN leader_id TEXT");
+  },
+  // 17: the piece of work a led member's seat session is for (its top-level message).
+  (db) => {
+    db.exec("ALTER TABLE group_members ADD COLUMN seat_task INTEGER");
+  },
 ];
 
 /** How much of one message the search index takes: a long pasted attachment doesn't need all of it. */

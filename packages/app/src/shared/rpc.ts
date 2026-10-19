@@ -373,6 +373,27 @@ export const commandRemoveRpc = defineRpc({
   output: z.object({ ok: z.boolean() }),
 });
 
+const FolderRuleSchema = z.object({ id: z.string(), folder: z.string() });
+
+/** Folders a bot works in without asking: commands run there, and reading, editing, writing and searching files in them. */
+export const folderListRpc = defineRpc({
+  name: "bots.folders.list",
+  input: z.object({ botId: BotId }),
+  output: z.object({ folders: z.array(FolderRuleSchema) }),
+});
+
+export const folderAllowRpc = defineRpc({
+  name: "bots.folders.allow",
+  input: z.object({ botId: BotId, folder: z.string().min(1).max(4_096) }),
+  output: z.object({ folder: FolderRuleSchema }),
+});
+
+export const folderRemoveRpc = defineRpc({
+  name: "bots.folders.remove",
+  input: z.object({ botId: BotId, id: z.string() }),
+  output: z.object({ ok: z.boolean() }),
+});
+
 // ================================================================ pocket-bots
 // The bots document, chats and the runtimes' providers, served by pocket-bots's server.
 
@@ -609,11 +630,12 @@ export const groupsListRpc = defineRpc({
 /** A new group with two to six bots; with no name it's named after them. */
 export const groupCreateRpc = defineRpc({
   name: "pocket.groups.create",
-  input: z.object({ name: z.string().max(GROUP_NAME_MAX).nullable().optional(), memberIds: MemberIds }),
+  /** `leaderId`: one of the bots, which plans and hands out the work; the others take only what it hands them. */
+  input: z.object({ name: z.string().max(GROUP_NAME_MAX).nullable().optional(), memberIds: MemberIds, leaderId: z.string().min(1).nullable().optional() }),
   output: z.object({ groupId: z.string() }),
 });
 
-/** Renames a group, changes its members, or how its messages wake the bots. */
+/** Renames a group, changes its members or its leader, or how its messages wake the bots. */
 export const groupUpdateRpc = defineRpc({
   name: "pocket.groups.update",
   input: z.object({
@@ -621,6 +643,8 @@ export const groupUpdateRpc = defineRpc({
     name: z.string().max(GROUP_NAME_MAX).nullable().optional(),
     memberIds: MemberIds.nullable().optional(),
     wakeMode: WakeModeSchema.nullable().optional(),
+    /** A member to lead the group, or null for no leader; left out, the leader stays. */
+    leaderId: z.string().min(1).nullable().optional(),
   }),
   output: z.object({ ok: z.boolean() }),
 });

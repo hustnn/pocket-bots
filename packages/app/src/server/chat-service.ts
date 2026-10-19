@@ -556,6 +556,23 @@ export class ChatService {
     return true;
   }
 
+  /**
+   * Answers the approvals still waiting that the policy allows now (the user just trusted a folder
+   * or saved a command), as it would have had the rule been there when they were asked.
+   */
+  async reapprove(): Promise<number> {
+    let answered = 0;
+    for (const [chatId, waiting] of this.approvals) {
+      const agent = this.get(chatId);
+      if (!agent) continue;
+      for (const [requestId, { request }] of [...waiting]) {
+        const automatic = await this.policy(agent, request).catch(() => null);
+        if (automatic && (await this.respond(chatId, requestId, automatic))) answered++;
+      }
+    }
+    return answered;
+  }
+
   async archive(chatId: string): Promise<void> {
     await this.closeSession(chatId);
     this.db.run("UPDATE chats SET archived_at = ?, updated_at = ? WHERE id = ?", now(), now(), chatId);

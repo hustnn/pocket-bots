@@ -5,6 +5,7 @@ import { basename, isAbsolute, join, resolve } from "node:path";
 import { answersInOrder, questionsOf } from "@pocket-bots/runtime/questions";
 import { mimeTypeFor, newAttachmentId, preflightFile, type ComposerAttachment, type WireAttachment } from "../shared/attachments";
 import type { Bot } from "../shared/bot";
+import { foldText } from "../shared/activity";
 import type { ApprovalDecision, ApprovalRequest, ChatSnapshot } from "../shared/chat-types";
 import {
   BOT_FILES_MAX,
@@ -36,7 +37,10 @@ import {
   threadMismatchText,
   undeliveredMentionsText,
   wakeText,
+  fromLead,
+  pieceFor,
   type GroupAttachment,
+  type GroupLead,
   type GroupMessage,
   type GroupQuestion,
   type GroupSender,
@@ -125,6 +129,8 @@ export const groupFilesPath = (groupId: string) => join(groupsPath(), groupId, "
 const GROUP_ID = /^group-[a-z0-9]+$/;
 /** Replies before the @mention that a thread-join context shows (6). */
 const THREAD_JOIN_RECENT = 6;
+/** Messages of its piece of work a led member's wake shows in full (8); more stay in its inbox to read. */
+const HANDED_MAX = 8;
 /** Messages a renewed seat's briefing shows. */
 const BRIEFING_MESSAGES = 25;
 const USER_ID = GROUP_USER_ID;
@@ -242,7 +248,8 @@ function amendment(title: string | undefined, description: string | null | undef
 
 export class GroupChats {
   /** Notices in flight: the messages a notice carries (a thread-join context, a catch-up batch), credited as seen once its seat accepts it. */
-  private readonly deliveries = new Map<string, { groupId: string; botId: string; joins: { thread: number; parent: number; upTo: number }[]; seen: Pick<GroupMessage, "seq" | "thread">[] }>();
+  /** What a notice showed, recorded as seen once its seat takes it in; `piece`: the led member's piece of work, whose thread it was shown from its top. */
+  private readonly deliveries = new Map<string, { groupId: string; botId: string; joins: { thread: number; parent: number; upTo: number }[]; seen: Pick<GroupMessage, "seq" | "thread">[]; piece?: number }>();
   private readonly chains = new Map<string, Promise<unknown>>();
   private readonly failures = new Map<string, { error: string; at: number }>();
   /** Per seat (group:bot), in memory: delivery backoffs, spawn-fail backoffs, fences, busy notices waiting. */
@@ -291,6 +298,27 @@ export class GroupChats {
     return this.store.group(groupId)?.name ?? null;
   }
 
+  /**
+   * What a seat's prompt says about its group: the name, and with a leader, the seat's part: the
+   * leader, with what each member it hands work to does and runs on, or a member, with its leader.
+   */
+  async seatGroup(groupId: string, botId: string | null): Promise<{ name: string; lead?: GroupLead } | null> {
+    const group = this.store.group(groupId);
+    if (!group) return null;
+    const leaderId = this.store.leader(groupId);
+    if (!leaderId || !botId) return { name: group.name };
+    const bots = await this.liveBots();
+    if (botId !== leaderId) return { name: group.name, lead: { role: "member", leader: bots.get(leaderId)?.name ?? "the leader" } };
+    const members = this.store.members(groupId).flatMap((member) => {
+      const bot = member.bot_id === leaderId ? null : bots.get(member.bot_id);
+      if (!bot) return [];
+      const runtime = this.host.runtimes.get(bot.provider as never)?.label ?? bot.provider;
+      const about = [bot.title.trim(), bot.description.trim() ? foldText(bot.description, 200) : "", `runs on ${runtime}${bot.model ? ` with ${bot.model}` : ""}`].filter(Boolean).join(" · ");
+      return [{ name: bot.name, about }];
+    });
+    return { name: group.name, lead: { role: "leader", members } };
+  }
+
   private summary(group: GroupRow): GroupSummary {
     const members = this.store.members(group.id);
     const last = this.store.latest(group.id, 1).at(-1);
@@ -303,6 +331,7 @@ export class GroupChats {
       lastSeq: group.last_seq,
       readSeq: this.store.cursor(group.id, USER_ID, 0),
       wakeMode: group.wake_mode,
+      leaderId: this.store.leader(group.id),
       muted: members.filter((member) => member.muted_from_seq !== null).map((member) => member.bot_id),
       unread: unread.length > 0,
       unreadThreads: unread.filter((place) => place.conv).map((place) => place.conv),
@@ -311,23 +340,28 @@ export class GroupChats {
     };
   }
 
-  async create(input: { name?: string | null; memberIds: string[] }): Promise<{ id: string }> {
+  /** A new group; with `leaderId`, that member plans and hands out the work. */
+  async create(input: { name?: string | null; memberIds: string[]; leaderId?: string | null }): Promise<{ id: string }> {
     const memberIds = [...new Set(input.memberIds)];
     const problem = membersProblem(memberIds);
     if (problem) throw new RequestError(problem);
     const bots = await this.liveBots();
     const missing = memberIds.find((id) => !bots.has(id));
     if (missing) throw new RequestError(`There's no bot with the id ${missing}.`);
+    if (input.leaderId && !memberIds.includes(input.leaderId)) throw new RequestError("The leader must be one of the group's bots.");
     const id = newGroupChatId();
-    this.store.createGroup({ id, name: input.name?.trim() || defaultGroupName(memberIds.map((botId) => bots.get(botId)!.name)), memberIds });
+    this.store.createGroup({ id, name: input.name?.trim() || defaultGroupName(memberIds.map((botId) => bots.get(botId)!.name)), memberIds, leaderId: input.leaderId ?? null });
     this.changed(id);
     return { id };
   }
 
-  async update(groupId: string, input: { name?: string | null; memberIds?: string[] | null; wakeMode?: WakeMode | null }): Promise<void> {
+  /** `leaderId`: a member to lead the group, null for no leader; left out, the leader stays. */
+  async update(groupId: string, input: { name?: string | null; memberIds?: string[] | null; wakeMode?: WakeMode | null; leaderId?: string | null }): Promise<void> {
     this.require(groupId);
     if (input.name !== undefined && input.name !== null && input.name.trim()) this.store.updateGroup(groupId, { name: input.name.trim() });
     if (input.wakeMode) this.store.updateGroup(groupId, { wakeMode: input.wakeMode });
+    const before = this.store.leader(groupId);
+    if (input.leaderId && !(input.memberIds ?? this.store.members(groupId).map((member) => member.bot_id)).includes(input.leaderId)) throw new RequestError("The leader must be one of the group's bots.");
     if (input.memberIds) {
       const next = [...new Set(input.memberIds)];
       const problem = membersProblem(next);
@@ -347,7 +381,23 @@ export class GroupChats {
         this.note(groupId, `${bots.get(botId)?.name ?? "A bot"} left the group.`, "group.membership", USER_ID);
       }
     }
+    if (input.leaderId !== undefined) this.store.updateGroup(groupId, { leaderId: input.leaderId });
+    const after = this.store.leader(groupId);
+    if (after !== before) await this.leaderNote(groupId, after);
     this.changed(groupId);
+  }
+
+  /**
+   * Tells every member the group's leader changed: the seats already open keep the prompt they
+   * started with until they reopen, so the note says the new rule itself.
+   */
+  private async leaderNote(groupId: string, leaderId: string | null): Promise<void> {
+    const name = leaderId ? ((await this.allBots()).get(leaderId)?.name ?? "A bot") : null;
+    const text = name
+      ? `👑 the user made @${name} the group's leader: from now on the other bots work only on what ${name} or the user hands them (an @mention, a reply or an assigned task), and report back to ${name}.`
+      : "the user removed the group's leader: every bot hears the group's messages again and decides for itself whether to take part.";
+    const { woken } = this.store.append(groupId, { kind: "system" } as GroupSender, { text, everyone: true, mentions: leaderId ? [leaderId] : [], subtype: "group.leader", causalActor: USER_ID });
+    this.wake(groupId, woken);
   }
 
   async remove(groupId: string): Promise<void> {
@@ -711,12 +761,19 @@ export class GroupChats {
    */
   async claim(bot: Bot, groupId: string, seq: number): Promise<string> {
     this.requireMember(groupId, bot.id);
-    this.taskable(groupId, seq);
+    const message = this.taskable(groupId, seq);
+    const refused = await this.notHandedTo(bot, groupId, message);
+    if (refused) return refused;
     const held = this.preflight(bot, groupId, 0, "claim");
     if (held) return held;
     const result = this.store.claimTask(groupId, { seq }, { kind: "bot", id: bot.id, name: bot.name });
     if (!result.ok) return `Claim refused for task #${seq}: ${result.reason}. This is a lock on that work, not a ruling on who should do it: don't start the same work. If you think it's misrouted, say so in the task's thread (thread #${seq}).`;
     this.changed(groupId);
+    const leaderId = this.store.leader(groupId);
+    if (leaderId && leaderId !== bot.id) {
+      const leader = (await this.allBots()).get(leaderId)?.name ?? "the leader";
+      return `You've claimed task #${seq}; it's ${result.task.status}. When it's done, answer in its thread (thread: ${seq}) @mentioning ${leader}; ${leader} sets its status.`;
+    }
     return `You've claimed task #${seq}; it's ${result.task.status}. Read its thread first if it has one. When the work is done, set it to in_review with group_task (action update) so the user can check it, and say what you did.`;
   }
 
@@ -796,6 +853,7 @@ export class GroupChats {
         // Task assign: ownership moves, the status stays (claim is what starts the work).
         const target = number();
         const assignee = await this.assignee(groupId, input.assignee ?? null, bot);
+        await this.assignable(bot, groupId, assignee);
         const result = this.store.assignTask(groupId, target, assignee, me, input.expectedRevision ?? null);
         if (!result.ok) {
           return result.reason === "task state changed concurrently"
@@ -858,6 +916,7 @@ export class GroupChats {
     const me: TaskAssignee = { kind: "bot", id: bot.id, name: bot.name };
     const self = !!who && ["me", bot.id.toLowerCase(), bot.name.toLowerCase()].includes(who.trim().replace(/^@/, "").toLowerCase());
     const assignee: TaskAssignee | null = self ? me : await this.assignee(groupId, who);
+    await this.assignable(bot, groupId, assignee);
     const members = await this.liveMembers(groupId);
     const outsiders = await this.outsiders(groupId);
     const tasks: GroupTask[] = [];
@@ -876,6 +935,36 @@ export class GroupChats {
     }
     this.changed(groupId);
     return tasks.map((task) => `Created task #${task.number}, ${task.status}, ${task.assignee ? (task.assignee.id === bot.id ? "yours" : `assigned to ${task.assignee.name}`) : "unassigned"}.`).join("\n");
+  }
+
+  /**
+   * In a group with a leader, why a member may not claim a message: it takes only what the leader
+   * or the user handed it (a message of theirs that @mentions it, or a task assigned to it). Null
+   * when it may.
+   */
+  private async notHandedTo(bot: Bot, groupId: string, message: GroupMessage): Promise<string | null> {
+    const leaderId = this.store.leader(groupId);
+    if (!leaderId || leaderId === bot.id) return null;
+    const task = this.store.task(groupId, { seq: message.seq });
+    if (task?.assignee?.id === bot.id) return null;
+    const senderId = message.from.kind === "bot" ? message.from.botId : message.from.kind;
+    if (!task?.assignee && message.mentions.includes(bot.id) && fromLead(leaderId, { kind: message.from.kind, senderId, causalActor: null })) return null;
+    const leader = (await this.allBots()).get(leaderId)?.name ?? "the leader";
+    return `Claim refused for #${message.seq}: in this group ${leader} hands out the work, and you take only what ${leader} or the user hands you (a message of theirs that @mentions you, or a task assigned to you). Don't start this work. If you think it should be yours, ask @${leader}.`;
+  }
+
+  /** The group has a leader, and it isn't this bot. */
+  private ledBy(groupId: string, botId: string): boolean {
+    const leaderId = this.store.leader(groupId);
+    return leaderId !== null && leaderId !== botId;
+  }
+
+  /** In a group with a leader, a member can't hand work to another member: only the leader hands it out. */
+  private async assignable(bot: Bot, groupId: string, assignee: TaskAssignee | null): Promise<void> {
+    const leaderId = this.store.leader(groupId);
+    if (!leaderId || leaderId === bot.id || assignee?.kind !== "bot" || assignee.id === bot.id) return;
+    const leader = (await this.allBots()).get(leaderId)?.name ?? "the leader";
+    throw new RequestError(`In this group ${leader} hands out the work: you can't assign tasks to other members. Tell @${leader} what ${assignee.name} should do and why.`);
   }
 
   /** Who a task goes to by name: a member bot ("me" is the asking bot), the user, or nobody. */
@@ -1057,11 +1146,13 @@ export class GroupChats {
   async membersText(bot: Bot, groupId: string): Promise<string> {
     this.requireMember(groupId, bot.id);
     const bots = await this.allBots();
+    const leaderId = this.store.leader(groupId);
     const lines = this.store.members(groupId).map((member) => {
       const entry = bots.get(member.bot_id);
       const chat = member.seat_chat_id ? this.host.chats.get(member.seat_chat_id) : null;
       const tasks = this.store.tasks(groupId, { statuses: OPEN_TASKS, assigneeId: member.bot_id });
       const parts = [`${entry?.name ?? member.bot_id}${member.bot_id === bot.id ? " (you)" : ""}`];
+      if (member.bot_id === leaderId) parts.push("leader: plans and hands out the work");
       if (entry?.title.trim()) parts.push(entry.title.trim());
       parts.push(chat && isBusy(chat.status) ? "working" : "idle");
       if (member.muted_from_seq !== null) parts.push("muted");
@@ -1103,7 +1194,8 @@ export class GroupChats {
       if ((ledger.boundary ?? 0) >= max) forward = max;
     } else if ((ledger.boundary ?? 0) > 0) {
       forward = ledger.boundary;
-    } else {
+    } else if (conv !== 0 || !this.ledBy(groupId, me)) {
+      // A member the leader leads isn't part of the top level's conversation: only what's handed to it reaches it there.
       const recent = this.store.convPage(groupId, conv, { limit: HELD_SHOWN }).messages;
       if (recent.length) {
         const unseen = recent.filter((message) => !seen(message));
@@ -1155,6 +1247,13 @@ export class GroupChats {
     for (const group of this.store.groups()) {
       for (const member of this.store.members(group.id)) {
         const seat = member.seat_chat_id ? this.host.chats.get(member.seat_chat_id) : null;
+        // A member the leader leads gets only its pieces of work, not a catch-up of the group: what
+        // it was told and didn't take in is told again, one piece at a time.
+        if (this.ledBy(group.id, member.bot_id)) {
+          this.store.retellUntaken(group.id, member.bot_id);
+          if (this.store.pending(group.id, member.bot_id).length || this.store.pendingReminderWakes(group.id, member.bot_id).length) void this.serial(group.id, () => this.pump(group.id, member.bot_id));
+          continue;
+        }
         const catchUp = !!seat && !seat.archivedAt && this.store.unreadPlaces(group.id, member.bot_id).length > 0;
         if (catchUp) void this.serial(group.id, () => this.catchUp(group.id, member.bot_id));
         // A reminder's wake that hadn't reached the seat is still owed; pump skips what the catch-up told.
@@ -1231,6 +1330,8 @@ export class GroupChats {
     }
     // A catch-up batch's messages, each seen one by one.
     this.store.recordSeenMessages(delivery.groupId, delivery.botId, delivery.seen);
+    // The session has its piece from the top: a follow-up in its thread needn't bring the thread again.
+    if (delivery.piece) this.store.recordSeen(delivery.groupId, delivery.botId, delivery.piece, { boundary: delivery.piece });
   }
 
   /** A seat's turn is over (its end handled): anything still in its inbox may need a notice now. */
@@ -1691,9 +1792,18 @@ export class GroupChats {
       return `Already sent as #${message.seq}.`;
     }
     this.wake(groupId, woken);
-    const undelivered = undeliveredMentionsText({ outside: mentions.outside, unknown: mentions.unknown, askBot: bot.contactBots !== "off" });
+    const undelivered = undeliveredMentionsText({ outside: mentions.outside, unknown: mentions.unknown, askBot: bot.contactBots !== "off", ...(await this.ledMentions(bot, groupId, mentions)) });
     const attached = attachments.length ? ` with ${attachments.map((file) => file.name).join(", ")} attached` : "";
     return `Sent as #${message.seq}${conv ? ` in thread #${conv}` : ""}${attached}.${undelivered ? `\n\n${undelivered}` : ""}`;
+  }
+
+  /** In a group with a leader, the members another member's @mentions didn't reach: only the leader hands them work. */
+  private async ledMentions(bot: Bot, groupId: string, mentions: Mentions): Promise<{ led?: { leader: string; members: { name: string; handle: string }[] } }> {
+    const leaderId = this.store.leader(groupId);
+    if (!leaderId || leaderId === bot.id) return {};
+    const bots = await this.allBots();
+    const members = mentions.botIds.filter((id) => id !== leaderId && id !== bot.id).map((id) => ({ name: bots.get(id)?.name ?? id, handle: mentions.handles[id] ?? `@${bots.get(id)?.name ?? id}` }));
+    return members.length ? { led: { leader: bots.get(leaderId)?.name ?? "the leader", members } } : {};
   }
 
   /** What a message's @mentions add to it in the store: the members, @everyone, and each token as written. */
@@ -1764,13 +1874,19 @@ export class GroupChats {
     if (!group || !member?.active) return;
     const bot = await this.host.bot(botId);
     if (!bot || bot.archived) return;
-    const pending = this.store.pending(groupId, botId);
+    const all = this.store.pending(groupId, botId);
     // Its fired reminders whose wake hasn't reached it: they go in the same notice.
     const reminders = this.store.pendingReminderWakes(groupId, botId);
-    if (pending.length === 0 && reminders.length === 0) return;
+    if (all.length === 0 && reminders.length === 0) return;
     let seat = member.seat_chat_id ? this.host.chats.get(member.seat_chat_id) : null;
     if (seat?.archivedAt) seat = null;
     const busy = !!seat && isBusy(seat.status);
+    // A member the leader leads is told about one piece of work at a time (pieceFor).
+    const leaderId = this.store.leader(groupId);
+    const piece = leaderId && leaderId !== botId ? pieceFor(leaderId, botId, all, seat ? member.seat_task : null) : null;
+    const pending = piece ? piece.now : all;
+    // Its session is for another piece: the new one waits for the turn to end, then starts a session of its own.
+    if (busy && piece?.switching) return;
     const fresh = pending.some((entry) => !entry.noticed);
     if (seat && !fresh && reminders.length === 0) return;
     const key = this.key(groupId, botId);
@@ -1799,6 +1915,14 @@ export class GroupChats {
       return;
     }
     this.clearNotice(key);
+    if (seat && piece?.switching) {
+      // Another piece of work: a fresh session, without a briefing. A piece it comes back to brings
+      // its thread along (threadJoins), since a new seat has been shown nothing.
+      await this.host.chats.archive(seat.id).catch(() => undefined);
+      this.store.setSeat(groupId, botId, null);
+      this.clearBackoff(key);
+      seat = null;
+    }
     let briefing = "";
     // A session whose compaction failed SESSION_NEEDS_RESET_THRESHOLD times in a row can't be
     // resumed: the seat starts over now, with a briefing, as a stale one does.
@@ -1821,8 +1945,11 @@ export class GroupChats {
       // A new seat is a new model context: it has seen nothing yet, the briefing included.
       this.store.resetSeen(groupId, botId);
     }
-    const joins = this.threadJoins(groupId, botId, pending);
+    const joins = this.threadJoins(groupId, botId, pending, !!piece);
     const shown = new Set(joins.flatMap((join) => [...join.recent.map((message) => message.seq), join.trigger.seq]));
+    // A led member gets its piece's messages in full, so it needn't read its inbox for them.
+    const handed = piece ? pending.filter((entry) => !shown.has(entry.message.seq)).slice(-HANDED_MAX).map((entry) => entry.message) : [];
+    for (const message of handed) shown.add(message.seq);
 
     const text = wakeText({
       groupName: group.name,
@@ -1833,13 +1960,23 @@ export class GroupChats {
       joins,
       briefing,
       reminders: reminders.map((reminder) => reminderFiredText(reminder, reminder.catchup)),
-      owed: seat ? [] : this.store.tasks(groupId, { statuses: OPEN_TASKS, assigneeId: botId }),
+      ...(handed.length ? { handed: { messages: handed, parents: this.parents(groupId, handed) } } : {}),
+      // A led member's session is for one piece: its other tasks come back with their threads.
+      owed: seat || piece ? [] : this.store.tasks(groupId, { statuses: OPEN_TASKS, assigneeId: botId }),
     });
-    const files = await this.deliveryFiles(joins.flatMap((join) => [join.parent, ...join.recent, join.trigger]), botId);
+    const files = await this.deliveryFiles([...joins.flatMap((join) => [join.parent, ...join.recent, join.trigger]), ...handed], botId);
     const clientMessageId = randomUUID();
     const told = pending.map((entry) => entry.message.seq);
     this.store.tieToNotice(groupId, botId, told, clientMessageId);
-    if (joins.length) this.deliveries.set(clientMessageId, { groupId, botId, joins: joins.map((join) => ({ thread: join.thread, parent: join.parent.seq, upTo: Math.max(join.trigger.seq, ...join.recent.map((message) => message.seq)) })), seen: [] });
+    if (joins.length || handed.length) {
+      this.deliveries.set(clientMessageId, {
+        groupId,
+        botId,
+        joins: joins.map((join) => ({ thread: join.thread, parent: join.parent.seq, upTo: Math.max(join.trigger.seq, ...join.recent.map((message) => message.seq)) })),
+        seen: handed.map((message) => ({ seq: message.seq, thread: message.thread })),
+        ...(piece?.work !== null && piece?.work !== undefined ? { piece: piece.work } : {}),
+      });
+    }
     try {
       if (!seat) {
         const chatId = await this.startSeat(bot, {
@@ -1871,6 +2008,7 @@ export class GroupChats {
       }
       this.store.markNoticed(groupId, botId, told);
       this.store.markRemindersWoken(reminders.map((reminder) => reminder.id));
+      if (piece && piece.work !== null) this.store.setSeatTask(groupId, botId, piece.work);
     } catch (error) {
       this.deliveries.delete(clientMessageId);
       const detail = error instanceof Error ? error.message : String(error);
@@ -1939,12 +2077,13 @@ export class GroupChats {
    * there since its seat started: their top message, the six replies
    * before and the mention.
    */
-  private threadJoins(groupId: string, botId: string, pending: readonly PendingMessage[]): ThreadJoin[] {
+  private threadJoins(groupId: string, botId: string, pending: readonly PendingMessage[], replies = false): ThreadJoin[] {
     const triggers = new Map<number, GroupMessage>();
     for (const entry of pending) {
       const thread = entry.message.thread;
-      // Decided by where it was shown up to, which a compaction keeps.
-      if (thread && (entry.reason === "mention" || entry.reason === "handoff") && this.store.visibleBoundary(groupId, botId, thread) === null) triggers.set(thread, entry.message);
+      // Decided by where it was shown up to, which a compaction keeps. `replies`: a reply to it brings the thread too (a led member's follow-up).
+      const pulled = entry.reason === "mention" || entry.reason === "handoff" || (replies && entry.reason === "reply");
+      if (thread && pulled && this.store.visibleBoundary(groupId, botId, thread) === null) triggers.set(thread, entry.message);
     }
     return [...triggers].flatMap(([thread, trigger]) => {
       const parent = this.store.messageAt(groupId, thread);
@@ -2108,9 +2247,10 @@ export class GroupChats {
 
   private async roster(groupId: string): Promise<RosterEntry[]> {
     const bots = await this.liveBots();
+    const leaderId = this.store.leader(groupId);
     return this.store.members(groupId).flatMap((member) => {
       const bot = bots.get(member.bot_id);
-      return bot ? [{ id: bot.id, name: bot.name, title: bot.title }] : [];
+      return bot ? [{ id: bot.id, name: bot.name, title: bot.title, ...(bot.id === leaderId ? { leader: true } : {}) }] : [];
     });
   }
 

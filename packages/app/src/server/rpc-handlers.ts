@@ -9,7 +9,7 @@ import { POCKET_VERSION } from "../shared/version";
 import { dataPath, ensureBotHome } from "./bot-home";
 import type { ChatCards } from "./cards";
 import { listAllChats, listChats, sendToChat, startChat } from "./chats";
-import type { CommandAllowlist } from "./commands";
+import type { CommandAllowlist, FolderGrants } from "./commands";
 import { accounts, appTools, catalog, connect, disconnect, removeKey, renameAccount, setKey, status as appsStatus } from "./composio";
 import { RequestError } from "./errors";
 import { groupFilesPath, type GroupChats } from "./groups";
@@ -37,6 +37,7 @@ export interface Services {
   scheduler: RoutineScheduler;
   journal: MemoryJournal;
   commands: CommandAllowlist;
+  folders: FolderGrants;
   cards: ChatCards;
   queue: MessageQueue;
   groups: GroupChats;
@@ -51,7 +52,7 @@ export interface RpcRegistration {
 
 /** Every RPC the web UI can call, by name. */
 export function rpcHandlers(services: Services): Map<string, RpcRegistration> {
-  const { store, host, scheduler, journal, commands, cards, queue, groups } = services;
+  const { store, host, scheduler, journal, commands, folders, cards, queue, groups } = services;
   const registry = new Map<string, RpcRegistration>();
   const handle = <C extends RpcContract>(contract: C, handler: Handler<C>) => {
     registry.set(contract.name, { contract, handler: handler as (input: unknown) => unknown });
@@ -178,9 +179,9 @@ export function rpcHandlers(services: Services): Map<string, RpcRegistration> {
   // ------------------------------------------------------------ group chats
 
   handle(rpc.groupsListRpc, async () => ({ groups: await groups.list() }));
-  handle(rpc.groupCreateRpc, async ({ name, memberIds }) => ({ groupId: (await groups.create({ name: name ?? null, memberIds })).id }));
-  handle(rpc.groupUpdateRpc, async ({ groupId, name, memberIds, wakeMode }) => {
-    await groups.update(groupId, { name: name ?? null, memberIds: memberIds ?? null, wakeMode: wakeMode ?? null });
+  handle(rpc.groupCreateRpc, async ({ name, memberIds, leaderId }) => ({ groupId: (await groups.create({ name: name ?? null, memberIds, leaderId: leaderId ?? null })).id }));
+  handle(rpc.groupUpdateRpc, async ({ groupId, name, memberIds, wakeMode, leaderId }) => {
+    await groups.update(groupId, { name: name ?? null, memberIds: memberIds ?? null, wakeMode: wakeMode ?? null, ...(leaderId !== undefined ? { leaderId } : {}) });
     return { ok: true };
   });
   handle(rpc.groupTaskRpc, async ({ groupId, action, seq, number, status, assignee, title, description }) => {
@@ -261,14 +262,26 @@ export function rpcHandlers(services: Services): Map<string, RpcRegistration> {
     return accepted;
   });
 
-  // ------------------------------------------------------------ routines and allowed commands
+  // ------------------------------------------------------------ routines, allowed commands and trusted folders
 
   handle(rpc.routineStatusRpc, () => scheduler.status());
   handle(rpc.routineRunNowRpc, ({ botId, routineId }) => scheduler.runNow(botId, routineId));
   handle(rpc.routineWebhookRpc, ({ routineId, rotate }) => scheduler.webhookUrl(routineId, rotate));
   handle(rpc.commandListRpc, async ({ botId }) => ({ rules: await commands.list(botId) }));
-  handle(rpc.commandAllowRpc, async ({ botId, command, cwd }) => ({ rule: await commands.add(botId, command, cwd) }));
+  // A new rule also answers the approvals already waiting that it covers.
+  handle(rpc.commandAllowRpc, async ({ botId, command, cwd }) => {
+    const rule = await commands.add(botId, command, cwd);
+    await host.chats.reapprove();
+    return { rule };
+  });
   handle(rpc.commandRemoveRpc, async ({ botId, id }) => ({ ok: await commands.remove(botId, id) }));
+  handle(rpc.folderListRpc, async ({ botId }) => ({ folders: await folders.list(botId) }));
+  handle(rpc.folderAllowRpc, async ({ botId, folder }) => {
+    const rule = await folders.add(botId, folder);
+    await host.chats.reapprove();
+    return { folder: rule };
+  });
+  handle(rpc.folderRemoveRpc, async ({ botId, id }) => ({ ok: await folders.remove(botId, id) }));
 
   return registry;
 }
