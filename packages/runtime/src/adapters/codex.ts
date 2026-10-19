@@ -24,6 +24,7 @@ import type {
   SessionSpec,
   SlashCommand,
   TimelineItem,
+  ToolCallDetail,
   ToolCallStatus,
   UserInput,
 } from "../types.ts";
@@ -129,6 +130,8 @@ class CodexSession extends SessionBase implements RuntimeSession {
   private readonly dynamic = new Map<string, DynamicTool>();
   private readonly pendingInputs = new Map<string, { clientMessageId: string; text: string; as: "turn" | "steer" }>();
   private readonly texts = new Map<string, string>();
+  /** Each file change's paths and first change, by item id: its approval names them. */
+  private readonly fileChanges = new Map<string, { paths: string[]; detail: ToolCallDetail }>();
   private interruptRequested = false;
   private closing = false;
   /** Enabled skills by name, from the last skills/list. */
@@ -416,11 +419,13 @@ class CodexSession extends SessionBase implements RuntimeSession {
       case "fileChange": {
         const changes: any[] = item.changes ?? [];
         const first = changes[0];
-        const detail = first
+        const detail: ToolCallDetail = first
           ? first.kind?.type === "add"
             ? { type: "write" as const, filePath: String(first.path) }
             : { type: "edit" as const, filePath: String(first.path), ...(first.diff ? { unifiedDiff: String(first.diff) } : {}) }
           : { type: "unknown" as const, input: null, output: null };
+        if (done) this.fileChanges.delete(id);
+        else if (changes.length) this.fileChanges.set(id, { paths: changes.map((change) => String(change.path)), detail });
         this.item(`tool:${id}`, { type: "tool_call", callId: id, name: changes.length > 1 ? `apply_patch (${changes.length} files)` : "apply_patch", status: status(item.status), error: null, detail });
         return;
       }
@@ -484,7 +489,16 @@ class CodexSession extends SessionBase implements RuntimeSession {
   }
 
   private async approveFileChange(params: any): Promise<unknown> {
-    const decision = await this.ask({ id: String(params.itemId ?? randomUUID()), provider: "codex", name: "apply_patch", kind: "tool", ...(params.reason ? { description: String(params.reason) } : {}) });
+    // The change was reported before its approval: the request names the files it changes.
+    const change = this.fileChanges.get(String(params.itemId ?? ""));
+    const decision = await this.ask({
+      id: String(params.itemId ?? randomUUID()),
+      provider: "codex",
+      name: "apply_patch",
+      kind: "tool",
+      ...(params.reason ? { description: String(params.reason) } : {}),
+      ...(change ? { input: { paths: change.paths }, detail: change.detail } : {}),
+    });
     return { decision: decision.behavior === "allow" ? (decision.remember ? "acceptForSession" : "accept") : "decline" };
   }
 

@@ -131,6 +131,29 @@ describe("ChatService", () => {
       { chatId: id, requestId: "req-2", decision: { behavior: "deny", message: "The turn ended." }, reason: "ended" },
     ]);
   });
+
+  it("answers the approvals waiting that a new rule now allows, and leaves the rest", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bots-chats-"));
+    const db = new Db(join(dir, "bots.sqlite"));
+    const fake = new FakeAdapter((_turn, step) => (step === 0 ? { wait: 50 } : null));
+    // The policy allows "ls" once the rule is there.
+    let rule = false;
+    const policy = async (_chat: unknown, request: { input?: Record<string, unknown> }) => (rule && request.input?.command === "ls" ? { behavior: "allow" as const } : null);
+    const chats = new ChatService(db, new Map([["fake", fake]]), async () => ({ systemPrompt: "", mcpServers: {}, trustedTools: [] }), policy);
+    chats.start();
+    cleanup = () => chats.stop();
+    const id = await chats.create({ botId: null, provider: "fake", cwd: tmpdir() }, { text: "x" });
+    const asked = new Promise<void>((resolve) => chats.on("permission.requested", ({ request }) => void (request.id === "b" && resolve())));
+    const signal = new AbortController().signal;
+    const first = fake.sessions[0]!.spec.approvals({ id: "a", provider: "fake", name: "Bash", kind: "tool", input: { command: "ls" } }, signal);
+    fake.sessions[0]!.spec.approvals({ id: "b", provider: "fake", name: "Bash", kind: "tool", input: { command: "rm x" } }, signal);
+    await asked;
+    expect(await chats.reapprove()).toBe(0);
+    rule = true;
+    expect(await chats.reapprove()).toBe(1);
+    expect(await first).toEqual({ behavior: "allow" });
+    expect(chats.get(id)?.pendingPermissions.map((request) => request.id)).toEqual(["b"]);
+  });
 });
 
 describe("a resumed session's standing prompt", () => {

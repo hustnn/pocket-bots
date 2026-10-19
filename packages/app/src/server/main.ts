@@ -2,13 +2,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ClaudeAdapter, CodexAdapter, FakeAdapter, GrokAdapter, OpenCodeAdapter, PiAdapter, type ProviderId, type RuntimeAdapter } from "@pocket-bots/runtime";
 import { GROUP_LABEL } from "../shared/group-chat";
-import { savedCommands, wireActivity } from "./activity";
+import { savedApprovals, wireActivity } from "./activity";
 import { AskedAnswers } from "./answers";
 import { dataPath, ensureBotsHome } from "./bot-home";
 import { ChatCards } from "./cards";
 import { ChatService } from "./chat-service";
 import { chatSpecs, startChat } from "./chats";
-import { CommandAllowlist } from "./commands";
+import { CommandAllowlist, FolderGrants } from "./commands";
 import { loadConfig } from "./config";
 import { Db } from "./db";
 import { EventHub } from "./events";
@@ -46,6 +46,7 @@ async function main(): Promise<void> {
   const host = new PocketHost(store, runtimes());
   const hub = new EventHub();
   const commands = new CommandAllowlist();
+  const folders = new FolderGrants();
 
   const queue = new MessageQueue(host, (agentId) => hub.publish({ type: "queue", agentId }));
   const answers = new AskedAnswers(host, queue);
@@ -55,7 +56,7 @@ async function main(): Promise<void> {
   const groups = new GroupChats(host, new GroupStore(db), (bot, input) => startChat(host, bot, input), (groupId) => hub.publish({ type: "group", groupId }));
   relay.groups = groups;
 
-  const chats = new ChatService(db, host.runtimes, chatSpecs(host, relay, async (groupId) => groups.groupName(groupId)), savedCommands(commands));
+  const chats = new ChatService(db, host.runtimes, chatSpecs(host, relay, (groupId, botId) => groups.seatGroup(groupId, botId)), savedApprovals(commands, folders));
   host.chats = chats;
   // What a seat's model has seen moves once its runtime takes the message in, and starts over with a new model context.
   chats.on("input.accepted", (event) => groups.onInputAccepted(event));
@@ -98,7 +99,7 @@ async function main(): Promise<void> {
   scheduler.start();
   groups.resume();
 
-  const registry = rpcHandlers({ store, host, relay, scheduler, journal, commands, cards, queue, groups });
+  const registry = rpcHandlers({ store, host, relay, scheduler, journal, commands, folders, cards, queue, groups });
   const webRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "dist", "web");
   const app = createApp({ registry, hub, host, webRoot, hostnames: config.hostnames });
   const server = await startHttp(app, config.webHost, config.webPort);

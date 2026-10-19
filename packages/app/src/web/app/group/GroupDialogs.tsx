@@ -31,20 +31,48 @@ function BotPicker({ bots, selected, onChange }: { bots: readonly Bot[]; selecte
   );
 }
 
+/** Which bot leads the group, if one does: it plans and hands out the work, and the others take only what it hands them. */
+function LeaderPicker({ bots, selected, leaderId, onChange }: { bots: readonly Bot[]; selected: readonly string[]; leaderId: string | null; onChange: (id: string | null) => void }) {
+  const leader = bots.find((bot) => bot.id === leaderId);
+  return (
+    <Field
+      label="Leader"
+      hint={
+        leader
+          ? `${leader.name} plans every request and hands each piece to the others with a brief. They work only on what ${leader.name} or you hand them, and report back to ${leader.name}.`
+          : "No leader: every bot reads the conversation and decides for itself whether to take part."
+      }
+    >
+      <select className="select" value={leaderId ?? ""} onChange={(event) => onChange(event.target.value || null)}>
+        <option value="">No leader</option>
+        {bots
+          .filter((bot) => selected.includes(bot.id))
+          .map((bot) => (
+            <option key={bot.id} value={bot.id}>
+              {bot.name}
+            </option>
+          ))}
+      </select>
+    </Field>
+  );
+}
+
 /** New group chat: pick two to six bots; the group is named after them until renamed. */
 export function NewGroupDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (groupId: string) => void }) {
   const doc = useStoreDoc();
   const feedback = useFeedback();
   const bots = (doc.data?.values.bots ?? []).filter((bot) => !bot.archived);
   const [selected, setSelected] = useState<string[]>([]);
+  const [leaderId, setLeaderId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const problem = membersProblem(selected);
   const generated = defaultGroupName(selected.map((id) => bots.find((bot) => bot.id === id)?.name ?? ""));
+  const leader = leaderId && selected.includes(leaderId) ? leaderId : null;
   const create = async () => {
     setBusy(true);
     try {
-      const { groupId } = await rpc(groupCreateRpc, { name: name.trim() || null, memberIds: selected });
+      const { groupId } = await rpc(groupCreateRpc, { name: name.trim() || null, memberIds: selected, leaderId: leader });
       onCreated(groupId);
     } catch (error) {
       feedback.error(errorText(error));
@@ -68,9 +96,10 @@ export function NewGroupDialog({ onClose, onCreated }: { onClose: () => void; on
     >
       <div className="stack">
         {bots.length < GROUP_MIN_BOTS ? <div className="notice warning">A group chat needs at least two bots. Make another bot first.</div> : null}
-        <Field label="Bots" hint="They share one conversation with you. Write normally and they decide who answers; @mention one to give it the request.">
+        <Field label="Bots" hint={leader ? "They share one conversation with you, led by the bot you pick below." : "They share one conversation with you. Write normally and they decide who answers; @mention one to give it the request."}>
           <BotPicker bots={bots} selected={selected} onChange={setSelected} />
         </Field>
+        {selected.length ? <LeaderPicker bots={bots} selected={selected} leaderId={leader} onChange={setLeaderId} /> : null}
         <Field label="Name" hint="You can rename it any time.">
           <input className="input" value={name} placeholder={selected.length ? generated : "Named after its bots"} onChange={(event) => setName(event.target.value)} />
         </Field>
@@ -88,13 +117,15 @@ export function MembersDialog({ group, onClose }: { group: GroupSummary; onClose
   const bots = all.filter((bot) => !bot.archived || group.memberIds.includes(bot.id));
   const [selected, setSelected] = useState<string[]>(group.memberIds.filter((id) => all.some((bot) => bot.id === id)));
   const [wakeMode, setWakeMode] = useState<WakeMode>(group.wakeMode);
+  const [leaderId, setLeaderId] = useState<string | null>(group.leaderId);
   const [muted, setMuted] = useState<string[]>(group.muted);
   const [busy, setBusy] = useState(false);
   const problem = membersProblem(selected);
+  const leader = leaderId && selected.includes(leaderId) ? leaderId : null;
   const save = async () => {
     setBusy(true);
     try {
-      await rpc(groupUpdateRpc, { groupId: group.id, memberIds: selected, wakeMode });
+      await rpc(groupUpdateRpc, { groupId: group.id, memberIds: selected, wakeMode, ...(leader !== group.leaderId ? { leaderId: leader } : {}) });
       for (const botId of selected) {
         const want = muted.includes(botId);
         if (want !== group.muted.includes(botId)) await rpc(groupMuteRpc, { groupId: group.id, botId, muted: want });
@@ -121,7 +152,19 @@ export function MembersDialog({ group, onClose }: { group: GroupSummary; onClose
       }
     >
       <BotPicker bots={bots} selected={selected} onChange={setSelected} />
-      <Field label="Who a message wakes" hint={wakeMode === "everyone" ? "Every message wakes every bot that isn't muted; each decides whether it has something to add." : "Bots wake only for messages aimed at them; your message to nobody in particular wakes them all."}>
+      <LeaderPicker bots={bots} selected={selected} leaderId={leader} onChange={setLeaderId} />
+      <Field
+        label={leader ? "Who a message wakes the leader for" : "Who a message wakes"}
+        hint={
+          wakeMode === "everyone"
+            ? leader
+              ? "Every message wakes the leader; the other bots wake only for what the leader or you hand them."
+              : "Every message wakes every bot that isn't muted; each decides whether it has something to add."
+            : leader
+              ? "The leader wakes only for messages aimed at it and your messages to nobody in particular; the other bots wake only for what the leader or you hand them."
+              : "Bots wake only for messages aimed at them; your message to nobody in particular wakes them all."
+        }
+      >
         <select className="select" value={wakeMode} onChange={(event) => setWakeMode(event.target.value as WakeMode)}>
           <option value="everyone">Everyone</option>
           <option value="addressed">Only who it's for</option>

@@ -12,12 +12,14 @@ import {
   mentionDeliveryText,
   messageText,
   parseMentions,
+  pieceFor,
   questionText,
   taskHistoryText,
   threadMismatchText,
   undeliveredMentionsText,
   unreadEligible,
   wakeText,
+  workOf,
   type DeliveryInput,
   type GroupMessage,
 } from "../src/shared/group-chat";
@@ -306,6 +308,52 @@ describe("task cards and mention delivery", () => {
   it("files a failed turn under its category: rate or quota limited, or the runtime rejected it", () => {
     expect(["Rate limit reached for requests", "429 Too Many Requests", "You've hit your usage limit", "quota exceeded"].map(deliveryFailureOf)).toEqual(["quota", "quota", "quota", "quota"]);
     expect(deliveryFailureOf("spawn grok ENOENT")).toBe("runtime_error");
+  });
+});
+
+describe("a group with a leader", () => {
+  const lead = { kind: "bot" as const, botId: "lead", name: "Lead" };
+  const entry = (seq: number, patch: Partial<GroupMessage> = {}) => ({ message: message(seq, patch), noticed: false });
+
+  it("knows the piece of work a message belongs to: its thread, or a new top-level @mention from the leader or the user", () => {
+    expect(workOf("lead", "w", message(3, { from: lead, mentions: ["w"] }))).toBe(3);
+    expect(workOf("lead", "w", message(4, { mentions: ["w"] }))).toBe(4);
+    expect(workOf("lead", "w", message(5, { from: lead, thread: 3, mentions: ["w"] }))).toBe(3);
+    expect(workOf("lead", "w", message(6, { from: lead, everyone: true }))).toBeNull();
+    expect(workOf("lead", "w", message(7, { from: { kind: "system" }, mentions: ["w"] }))).toBeNull();
+    expect(workOf("lead", "w", message(8, { from: { kind: "bot", botId: "r", name: "R" }, mentions: ["w"] }))).toBeNull();
+  });
+
+  it("tells a member about one piece at a time: news for its current piece first, else the oldest, notes going along", () => {
+    const inbox = [entry(3, { from: lead, mentions: ["w"] }), entry(5, { from: lead, everyone: true }), entry(6, { from: lead, thread: 2, mentions: ["w"] })];
+    // Its session is on piece #2: the follow-up there comes first, and #3 waits.
+    expect(pieceFor("lead", "w", inbox, 2)).toEqual({ work: 2, now: [inbox[1], inbox[2]], switching: false });
+    // On another piece: the oldest goes first, in a fresh session.
+    expect(pieceFor("lead", "w", inbox, 9)).toEqual({ work: 3, now: [inbox[0], inbox[1]], switching: true });
+    // A new seat, or one that's on no piece yet, takes it up without switching; notes alone are for no piece.
+    expect(pieceFor("lead", "w", inbox, null)).toMatchObject({ work: 3, switching: false });
+    expect(pieceFor("lead", "w", [inbox[1]!], 2)).toEqual({ work: null, now: [inbox[1]], switching: false });
+    // Its current piece has only what it was already told: news for another piece goes first.
+    const told = [{ ...inbox[2]!, noticed: true }, inbox[0]!];
+    expect(pieceFor("lead", "w", told, 2)).toEqual({ work: 3, now: [inbox[0]], switching: true });
+  });
+
+  it("shows a led member its piece in full, and gives the leader and the members their sections", () => {
+    const text = wakeText({ groupName: "Launch", me: { id: "w", name: "Writer" }, roster: [{ id: "lead", name: "Lead", title: "", leader: true }, { id: "w", name: "Writer", title: "" }], pending: [], handed: { messages: [message(3, { from: lead, text: "@Writer draft the notes", mentions: ["w"] })] } });
+    expect(text).toContain("Members: Lead (leader), Writer (you), and the user.");
+    expect(text).toContain("[For you, in full (already read):]\n\n#3 · Lead (bot) · 2026-10-16 10:02Z · @mentions you\n@Writer draft the notes");
+    expect(text).not.toContain("Group inbox notice");
+    const leader = groupPrompt("Launch", { subAgents: true, lead: { role: "leader", members: [{ name: "Writer", about: "Writes · runs on Claude Code with claude-sonnet-5-5" }] } });
+    expect(leader).toContain("You lead this group:");
+    expect(leader).toContain("  - Writer: Writes · runs on Claude Code with claude-sonnet-5-5");
+    expect(leader).toContain("reply in the same thread and @mention the member: the thread is the piece's context");
+    expect(leader).not.toContain("Working through sub-agents:");
+    const member = groupPrompt("Launch", { lead: { role: "member", leader: "Lead" } });
+    expect(member).toContain("A new piece starts you in a fresh session that remembers nothing of earlier pieces");
+    expect(member).toContain("Don't change the task's status: Lead decides when it's done.");
+    expect(member).not.toContain("set the task to in_review");
+    expect(member).not.toContain("Splitting tasks for parallel execution:");
+    expect(member).not.toContain("send short progress updates");
   });
 });
 

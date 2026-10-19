@@ -1,20 +1,20 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import type { ChatSnapshot } from "../../../shared/chat-types";
 import type { AppSignIn } from "../../../shared/apps";
 import type { Bot } from "../../../shared/bot";
 import { botToolName } from "../../../shared/bot-tools";
 import { changeTexts, changeWarnings, describeChange } from "../../../shared/changes";
-import { shellCommand } from "../../../shared/commands";
+import { folderChoices, shellCommand } from "../../../shared/commands";
 import type { Proposal } from "../../../shared/proposals";
 import { describeSchedule, upcomingRuns } from "../../../shared/routines";
-import { appsAccountsRpc, appsCatalogRpc, chatRespondRpc, chatSendRpc, commandAllowRpc, proposalAcceptRpc, proposalDismissRpc, proposalGetRpc, type RoutineRunCard as RunCard } from "../../../shared/rpc";
+import { appsAccountsRpc, appsCatalogRpc, chatRespondRpc, chatSendRpc, commandAllowRpc, folderAllowRpc, proposalAcceptRpc, proposalDismissRpc, proposalGetRpc, type RoutineRunCard as RunCard } from "../../../shared/rpc";
 import { scanSkillText, skillBody } from "../../../shared/skills";
 import { relativeTime } from "../../../shared/time";
 import { humanizeToolName, type ToolCallDetail } from "../../../shared/tools";
 import { Icon } from "../../components/icons";
 import { Markdown } from "../../components/Markdown";
-import { Button, useFeedback } from "../../components/ui";
+import { Button, Menu, useFeedback } from "../../components/ui";
 import { errorText, rpc } from "../../lib/api";
 import { keys, useCommit, useStoreDoc } from "../../lib/data";
 import { navigate } from "../../lib/router";
@@ -57,6 +57,9 @@ export function PermissionCard({ chatId, permission, botId, cwd }: { chatId: str
   useEffect(() => setBusy(null), [permission.id]);
   const isPlan = permission.kind === "plan";
   const shell = cwd && permission.kind === "tool" ? shellCommand(permission, cwd) : null;
+  const folders = cwd ? folderChoices(permission, cwd) : [];
+  const folderButton = useRef<HTMLSpanElement>(null);
+  const [folderMenu, setFolderMenu] = useState<DOMRect | null>(null);
 
   const respond = async (key: string, response: Response) => {
     setBusy(key);
@@ -92,6 +95,19 @@ export function PermissionCard({ chatId, permission, botId, cwd }: { chatId: str
     await respond("always", { behavior: "allow" });
   };
 
+  // Trusting a folder answers this request and every other one waiting that stays inside it.
+  const trust = async (folder: string) => {
+    setBusy("folder");
+    try {
+      await rpc(folderAllowRpc, { botId, folder });
+    } catch (error) {
+      setBusy(null);
+      feedback.error(`Couldn't trust the folder: ${errorText(error)}`);
+      return;
+    }
+    await respond("folder", { behavior: "allow" });
+  };
+
   return (
     <Card
       icon={isPlan ? "list" : "shield"}
@@ -116,6 +132,28 @@ export function PermissionCard({ chatId, permission, botId, cwd }: { chatId: str
             <Button small icon="checks" busy={busy === "always"} disabled={busy !== null} onClick={() => void always()} title="Run this exact command in this folder without asking again">
               Always allow
             </Button>
+          ) : null}
+          {folders.length ? (
+            <span ref={folderButton}>
+              <Button
+                small
+                icon="folder"
+                busy={busy === "folder"}
+                disabled={busy !== null}
+                onClick={() => setFolderMenu(folderButton.current?.getBoundingClientRect() ?? null)}
+                title="Allow this, and from now on run commands and read, edit and write files in a folder without asking"
+              >
+                Allow in folder…
+              </Button>
+            </span>
+          ) : null}
+          {folderMenu ? (
+            <Menu
+              anchor={folderMenu}
+              align="start"
+              entries={folders.map((folder) => ({ label: folder, icon: "folder" as const, onSelect: () => void trust(folder) }))}
+              onClose={() => setFolderMenu(null)}
+            />
           ) : null}
         </>
       }

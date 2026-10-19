@@ -63,7 +63,7 @@ describe("a chat's session setup", () => {
       const host = fakeHost([bot]);
       (host as unknown as { runtimes: Map<string, unknown> }).runtimes = new Map([[provider, { capabilities: { subAgents } }]]);
       host.attach(fakeChats({ c1: { status: "idle", items: [{ type: "user_message", text: "hello" }] } }));
-      return (await chatSpecs(host, relay, async () => "Launch")({ id: "c1", botId: bot.id, provider, model: null, thinking: null, mode: null, cwd: "/tmp", title: null, labels: { [GROUP_LABEL]: "group-x" } })).systemPrompt;
+      return (await chatSpecs(host, relay, async () => ({ name: "Launch" }))({ id: "c1", botId: bot.id, provider, model: null, thinking: null, mode: null, cwd: "/tmp", title: null, labels: { [GROUP_LABEL]: "group-x" } })).systemPrompt;
     };
     expect(await seat("claude", true)).toContain("Working through sub-agents:");
     const pi = await seat("pi", false);
@@ -76,7 +76,7 @@ describe("a chat's session setup", () => {
       const host = fakeHost([bot]);
       (host as unknown as { runtimes: Map<string, unknown> }).runtimes = new Map([[provider, { capabilities: { subAgents: false, ...(questionTool ? { questionTool } : {}) } }]]);
       host.attach(fakeChats({ c1: { status: "idle", items: [{ type: "user_message", text: "hello" }] } }));
-      return (await chatSpecs(host, relay, async () => "Launch")({ id: "c1", botId: bot.id, provider, model: null, thinking: null, mode: null, cwd: "/tmp", title: null, labels: { [GROUP_LABEL]: "group-x" } })).systemPrompt;
+      return (await chatSpecs(host, relay, async () => ({ name: "Launch" }))({ id: "c1", botId: bot.id, provider, model: null, thinking: null, mode: null, cwd: "/tmp", title: null, labels: { [GROUP_LABEL]: "group-x" } })).systemPrompt;
     };
     expect(await questions("grok", "ask_user_question")).toContain("ask with your ask_user_question tool. The question shows in the group as yours");
     expect(await questions("pi")).not.toContain("The question shows in the group as yours");
@@ -100,7 +100,7 @@ describe("a chat's session setup", () => {
     const bot = makeBot({ provider: "claude", soul: "Be brief." });
     const host = fakeHost([bot]);
     host.attach(fakeChats({ c1: { status: "idle", items: [{ type: "user_message", text: "hello" }] } }));
-    const spec = await chatSpecs(host, relay, async () => "Launch")({ id: "c1", botId: bot.id, provider: "claude", model: null, thinking: null, mode: null, cwd: "/tmp", title: null, labels: { [GROUP_LABEL]: "group-x" } });
+    const spec = await chatSpecs(host, relay, async () => ({ name: "Launch" }))({ id: "c1", botId: bot.id, provider: "claude", model: null, thinking: null, mode: null, cwd: "/tmp", title: null, labels: { [GROUP_LABEL]: "group-x" } });
     expect(spec.systemPrompt).toContain("Your memory is empty so far.");
     expect(spec.standingPrompt).toContain("Be brief.");
     expect(spec.standingPrompt).toContain('your seat in the group chat "Launch"');
