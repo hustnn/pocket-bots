@@ -23,9 +23,7 @@ export function FolderInput({ value, onChange, placeholder = "/Users/me/projects
       <input className="input mono" list={list} value={value} placeholder={placeholder} autoFocus={autoFocus} spellCheck={false} onChange={(event) => onChange(event.target.value)} />
       <datalist id={list}>
         {(workspaces.data ?? []).map((workspace) => (
-          <option key={workspace.id} value={workspace.directory}>
-            {workspace.label}
-          </option>
+          <option key={workspace.id} value={workspace.directory} />
         ))}
       </datalist>
     </>
@@ -84,7 +82,7 @@ export function NewChatFolder({ value, onChange, botFolder }: { value: string | 
     ...(workspaces.data ?? [])
       .filter((workspace) => workspace.directory !== botFolder)
       .slice(0, 12)
-      .map((workspace) => ({ label: workspace.directory, icon: workspace.directory === value ? ("check" as const) : ("folder" as const), trailing: workspace.label, onSelect: () => onChange(workspace.directory) })),
+      .map((workspace) => ({ label: workspace.directory, icon: workspace.directory === value ? ("check" as const) : ("folder" as const), onSelect: () => onChange(workspace.directory) })),
     "divider",
     { label: "Other folder…", icon: "edit", onSelect: () => setTyping(true) },
   ];
