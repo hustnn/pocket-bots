@@ -1,0 +1,25 @@
+{
+  "name": "pocket-bots",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "npm run build -w @pocket-bots/app",
+    "start": "npm start -w @pocket-bots/app",
+    "dev": "npm run dev -w @pocket-bots/app",
+    "typecheck": "tsc -p packages/runtime/tsconfig.json && npm run typecheck -w @pocket-bots/app",
+    "test": "vitest run --root packages/runtime && npm test -w @pocket-bots/app",
+    "test:live": "node packages/runtime/test/live.ts",
+    "service": "npm run service -w @pocket-bots/app --"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.4"
+  }
+}
