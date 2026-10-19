@@ -178,7 +178,8 @@ export class MemoryJournal {
           await writeFile(path, after, "utf8");
         }
       } catch {
-        // Not put back: the snapshot below shows it as it is, and the next turn's start notes it.
+        // Not put back (the disk refused). The bot's version stays and becomes the baseline below;
+        // its edit is already journaled as the bot's, so it can still be undone from there.
         continue;
       }
       restored = true;
