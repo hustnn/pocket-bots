@@ -178,7 +178,6 @@ const REACTIONS = [
 const TASK_STATUSES: { status: TaskStatus; label: string; badge: string }[] = [
   { status: "todo", label: "To do", badge: "" },
   { status: "in_progress", label: "In progress", badge: "accent" },
-  { status: "in_review", label: "In review", badge: "warning" },
   { status: "done", label: "Done", badge: "success" },
   { status: "closed", label: "Closed", badge: "" },
 ];
@@ -552,7 +551,7 @@ function ThreadPanel({ groupId, thread, bots, members, live, seats, focus, onFoc
   );
 }
 
-const BOARD_ORDER: TaskStatus[] = ["in_progress", "in_review", "todo", "done", "closed"];
+const BOARD_ORDER: TaskStatus[] = ["in_progress", "todo", "done", "closed"];
 
 /** When a reminder fires, in the viewer's time and from now. */
 function reminderWhen(at: string): string {

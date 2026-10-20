@@ -135,10 +135,10 @@ const HANDED_MAX = 8;
 const BRIEFING_MESSAGES = 25;
 const USER_ID = GROUP_USER_ID;
 /** Tasks still being worked on. */
-const OPEN_TASKS: TaskStatus[] = ["todo", "in_progress", "in_review"];
+const OPEN_TASKS: TaskStatus[] = ["todo", "in_progress"];
 /** Task lifecycle notes: an emoji and a label per status. */
-const STATUS_EMOJI: Record<TaskStatus, string> = { todo: "📝", in_progress: "🔄", in_review: "👀", done: "✅", closed: "🚫" };
-const STATUS_LABEL: Record<TaskStatus, string> = { todo: "Todo", in_progress: "In Progress", in_review: "In Review", done: "Done", closed: "Closed" };
+const STATUS_EMOJI: Record<TaskStatus, string> = { todo: "📝", in_progress: "🔄", done: "✅", closed: "🚫" };
+const STATUS_LABEL: Record<TaskStatus, string> = { todo: "Todo", in_progress: "In Progress", done: "Done", closed: "Closed" };
 /** The same failure of the same bot is noted once in this long. */
 const FAILURE_NOTE_MS = 10 * 60_000;
 /** A reminder that fires this late was missed (pocket-bots was stopped): its wake says catch-up. */
@@ -791,7 +791,7 @@ export class GroupChats {
       const leader = (await this.allBots()).get(leaderId)?.name ?? "the leader";
       return `You've claimed task #${seq}; it's ${result.task.status}. When it's done, answer in its thread (thread: ${seq}) @mentioning ${leader}; ${leader} sets its status.`;
     }
-    return `You've claimed task #${seq}; it's ${result.task.status}. Read its thread first if it has one. When the work is done, set it to in_review with group_task (action update) so the user can check it, and say what you did.`;
+    return `You've claimed task #${seq}; it's ${result.task.status}. Read its thread first if it has one. When the work is done, set it to done with group_task (action update) and say in the group what you did.`;
   }
 
   /**
@@ -850,7 +850,7 @@ export class GroupChats {
         return `#${input.task} is now task #${task.number}, todo and unassigned.`;
       }
       case "update": {
-        if (!input.status) throw new RequestError("Which status? One of todo, in_progress, in_review, done, closed.");
+        if (!input.status) throw new RequestError("Which status? One of todo, in_progress, done, closed.");
         const target = number();
         const held = this.preflight(bot, groupId, 0, "task");
         if (held) return held;
@@ -858,7 +858,7 @@ export class GroupChats {
         if (!result.ok) return `Not changed: ${result.reason}.`;
         this.lifecycleNote(groupId, result.task, this.statusNote(bot.name, groupId, result.task), bot.id);
         this.changed(groupId);
-        return `Task #${target} is now ${result.task.status}.${result.task.status === "in_review" ? " Say in the group what you did, so the user can check it." : ""}`;
+        return `Task #${target} is now ${result.task.status}.${result.task.status === "done" ? " Say in the group what you did." : ""}`;
       }
       case "unclaim": {
         const result = this.store.unclaimTask(groupId, number(), me);

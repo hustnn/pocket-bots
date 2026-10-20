@@ -541,3 +541,27 @@ describe("reminders", () => {
     expect(store.reminderEvents(reminder.id)).toEqual([]);
   });
 });
+
+describe("task statuses", () => {
+  it("moves in_progress straight to done, and migration 19 turns in_review tasks into done with their history intact", () => {
+    const { message } = store.append(G, user, { text: "Fix the login page." });
+    expect(store.claimTask(G, { seq: message.seq }, ada).ok).toBe(true);
+    expect(store.setTaskStatus(G, message.seq, "done", ada)).toMatchObject({ ok: true, from: "in_progress" });
+    expect(store.task(G, { number: message.seq })!.status).toBe("done");
+    expect(store.setTaskStatus(G, message.seq, "in_progress", ada)).toMatchObject({ ok: true });
+    expect(store.setTaskStatus(G, message.seq, "todo", ada)).toMatchObject({ ok: false });
+
+    // A database from before the migration: a task waiting in review, with the event that put it there.
+    const { message: second } = store.append(G, user, { text: "Write the notes." });
+    store.claimTask(G, { seq: second.seq }, cody);
+    db.run("UPDATE group_tasks SET status = 'in_review', completed_at = NULL, updated_at = '2026-10-01T00:00:00.000Z' WHERE number = ?", second.seq);
+    db.run("INSERT INTO group_task_events (group_id, number, event, actor_kind, actor_id, actor_name, payload, created_at) VALUES (?, ?, 'status_changed', 'bot', 'cody', 'Cody', ?, '2026-10-01T00:00:00.000Z')", G, second.seq, JSON.stringify({ from: "in_progress", to: "in_review", forced: false }));
+    db.run("UPDATE schema_version SET version = 18");
+    db.close();
+    db = new Db(join(dir, "bots.sqlite"));
+    store = new GroupStore(db);
+    expect(store.task(G, { number: second.seq })).toMatchObject({ status: "done", assignee: { id: "cody" } });
+    expect(db.get<{ completed_at: string }>("SELECT completed_at FROM group_tasks WHERE number = ?", second.seq)!.completed_at).toBe("2026-10-01T00:00:00.000Z");
+    expect(store.taskEvents(G, second.seq).at(-1)).toMatchObject({ event: "status_changed", payload: { from: "in_progress", to: "in_review" } });
+  });
+});

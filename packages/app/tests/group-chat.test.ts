@@ -349,10 +349,9 @@ describe("a group with a leader", () => {
     expect(leader).toContain("  - Writer: Writes · runs on Claude Code with claude-sonnet-5-5");
     expect(leader).toContain("reply in the same thread and @mention the member: the thread is the piece's context");
     expect(leader).not.toContain("Sub-agents:");
-    // The leader hands pieces out by @mention and sets them done: no claiming, splitting or in_review.
+    // The leader hands pieces out by @mention and sets them done: no claiming or splitting.
     expect(leader).not.toContain("Claim before acting");
     expect(leader).not.toContain("group_task create");
-    expect(leader).not.toContain("in_review");
     // The leader checks the result without repeating the checks the member reports it ran.
     expect(leader).toContain("check the result before you build on it or pass it on; checks the member reports it already ran don't need repeating.");
     const member = groupPrompt("Launch", { lead: { role: "member", leader: "Lead" } });
@@ -374,6 +373,8 @@ describe("the seat prompt", () => {
     const plain = groupPrompt("Launch");
     const delegating = groupPrompt("Launch", { subAgents: true });
     expect(plain).not.toContain("Sub-agents:");
+    expect(plain).toContain("set its task to done with group_task and say in the group what you did.");
+    expect(plain).not.toContain("in_review");
     const at = delegating.indexOf("Sub-agents:");
     expect(at).toBeGreaterThan(delegating.indexOf("Reminders and @mentions:"));
     expect(at).toBeLessThan(delegating.indexOf("Writing in the group:"));

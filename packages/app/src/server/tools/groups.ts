@@ -127,7 +127,7 @@ export const groupClaim = defineTool({
 export const groupTask = defineTool({
   name: "group_task",
   description: [
-    "The group's tasks (todo → in_progress → in_review → done; closed: won't do). Task #N is message #N.",
+    "The group's tasks (todo → in_progress → done; closed: won't do). Task #N is message #N.",
     "- update: set task's status",
     "- create: tasks from titles, one top-level message each; assignee (a bot, \"me\" or \"the user\") is told, even when muted",
     "- convert: make top-level message task a todo task, without claiming it",
