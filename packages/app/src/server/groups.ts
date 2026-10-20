@@ -971,7 +971,7 @@ export class GroupChats {
   }
 
   /** The group has a leader, and it isn't this bot. */
-  private ledBy(groupId: string, botId: string): boolean {
+  ledBy(groupId: string, botId: string): boolean {
     const leaderId = this.store.leader(groupId);
     return leaderId !== null && leaderId !== botId;
   }
@@ -1809,7 +1809,7 @@ export class GroupChats {
       return `Already sent as #${message.seq}.`;
     }
     this.wake(groupId, woken);
-    const undelivered = undeliveredMentionsText({ outside: mentions.outside, unknown: mentions.unknown, askBot: bot.contactBots !== "off", ...(await this.ledMentions(bot, groupId, mentions)) });
+    const undelivered = undeliveredMentionsText({ outside: mentions.outside, unknown: mentions.unknown, askBot: bot.contactBots !== "off" && !this.ledBy(groupId, bot.id), ...(await this.ledMentions(bot, groupId, mentions)) });
     const attached = attachments.length ? ` with ${attachments.map((file) => file.name).join(", ")} attached` : "";
     return `Sent as #${message.seq}${conv ? ` in thread #${conv}` : ""}${attached}.${undelivered ? `\n\n${undelivered}` : ""}`;
   }

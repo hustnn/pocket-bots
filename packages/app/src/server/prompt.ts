@@ -69,7 +69,8 @@ export async function promptContext(bot: Bot, local: boolean, library: Library, 
     playbooks,
     group,
     skills: skills.map((skill) => ({ name: skill.id, description: skill.description, path: paths.get(skill.id)! })),
-    botTools: true,
+    // A led member's seat is listed only the tools for its piece (tools/mcp.ts ledMember).
+    botTools: start.group?.lead?.role === "member" ? "led" : true,
     apps: await botApps(bot),
   };
 }

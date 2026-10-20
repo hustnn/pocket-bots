@@ -74,6 +74,12 @@ describe("the bots MCP server", () => {
       const list = (await (await post({ jsonrpc: "2.0", id: 2, method: "tools/list" })).json()) as { result: { tools: { name: string; inputSchema: { type: string } }[] } };
       expect(list.result.tools.map((tool) => tool.name)).toContain("list_bots");
       expect(list.result.tools[0]!.inputSchema.type).toBe("object");
+      // Every chat carries the listing on every request: propose_changes names only its change types,
+      // and integers go without zod's safe-integer bounds.
+      const proposeChanges = list.result.tools.find((tool) => tool.name === "propose_changes")!;
+      expect(JSON.stringify(proposeChanges).length).toBeLessThan(1_500);
+      expect(JSON.stringify(proposeChanges)).toContain('"delete_preset"');
+      expect(JSON.stringify(list.result.tools)).not.toContain(String(Number.MAX_SAFE_INTEGER));
 
       const call = (await (await post({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "list_bots", arguments: {} } })).json()) as { result: { content: { text: string }[] } };
       expect(call.result.content[0]!.text).toBe("- Inbox (id: bot-b): Email triage");
@@ -95,6 +101,21 @@ describe("the bots MCP server", () => {
     } finally {
       relay.stop();
     }
+  });
+
+  it("puts the change format in get_setup, and answers changes that don't fit it with their format", async () => {
+    const { getSetup, proposeChanges } = await import("../src/server/tools/setup");
+    const { getProposal } = await import("../src/server/proposals");
+    const host = fakeHost([makeBot({ id: "bot-a", name: "Scout" })]);
+    const caller = { bot: makeBot({ id: "bot-a" }), agentId: newUuid(), host, relay: null as never };
+    const setup = await getSetup.run({}, caller);
+    expect(setup).toContain("Bots (1):");
+    expect(setup).toContain("Change format for propose_changes");
+    expect(await getSetup.run({ bot: "Scout" }, caller)).not.toContain("Change format");
+    await expect(proposeChanges.run({ summary: "Rename", changes: [{ type: "update_bot", bot: "Scout", name: 7 }] }, caller)).rejects.toThrow(/changes\[0\]\.name: [\s\S]*\nupdate_bot:\n- bot: string/);
+    const reply = await proposeChanges.run({ summary: "Rename Scout", changes: [{ type: "update_bot", bot: "Scout", name: "Ranger" }] }, caller);
+    const id = proposalIdOf({ name: "bots.propose_changes", status: "completed", detail: { output: reply } })!;
+    expect(await getProposal(id)).toMatchObject({ kind: "changes", data: { summary: "Rename Scout", changes: [{ type: "update_bot", bot: "Scout", name: "Ranger" }] } });
   });
 
   it("proposes a skill that the user saves or dismisses once", async () => {

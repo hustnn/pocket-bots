@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { applyChanges, botDetails, ChangesSchema, providerInfo, readyProvider, resolveChanges, setupOverview, type AppAccountInfo, type ApplyContext } from "../../shared/changes";
+import { applyChanges, botDetails, changeFormat, checkChanges, ListedChangesSchema, providerInfo, readyProvider, resolveChanges, setupOverview, type AppAccountInfo, type ApplyContext } from "../../shared/changes";
 import { proposalReply } from "../../shared/proposals";
 import { accounts, status } from "../composio";
 import type { PocketHost } from "../host";
@@ -7,7 +7,9 @@ import { createProposal } from "../proposals";
 import { defineTool } from "./mcp";
 
 // The whole setup, for bots that set things up for the user: get_setup reads it,
-// propose_changes puts a batch of changes on a card the user applies.
+// propose_changes puts a batch of changes on a card the user applies. propose_changes' listing
+// names only the change types; get_setup's overview spells out their fields (changeFormat), so
+// chats that never change the setup don't carry them on every request.
 
 /** What the host knows that the saved settings don't: providers and connected app accounts. */
 async function hostContext(host: PocketHost): Promise<ApplyContext> {
@@ -30,25 +32,28 @@ async function readValues(host: PocketHost) {
 export const getSetup = defineTool({
   name: "get_setup",
   description:
-    "Read the bot setup on this computer: the bots, the library of skills and MCP servers, connected apps, what new bots start with, presets, and the providers with their models and approval modes. Name a bot to get everything about it, including its instructions, playbooks and routines. Read it before propose_changes.",
+    "Read the bot setup on this computer: the bots, the library of skills and MCP servers, connected apps, what new bots start with, presets, the providers with their models and approval modes, and the format of each change propose_changes takes. Name a bot to get everything about it, including its instructions, playbooks and routines. Read it (without bot) before propose_changes.",
   input: z.object({ bot: z.string().max(100).optional().describe("A bot's name or id, for its full details.") }),
   async run({ bot }, { host }) {
     const values = await readValues(host);
     if (bot) return botDetails(values, bot);
     const context = await hostContext(host);
-    return setupOverview(values, context.providers ?? null, context.accounts ?? null);
+    return `${setupOverview(values, context.providers ?? null, context.accounts ?? null)}\n\n${changeFormat()}`;
   },
 });
 
 export const proposeChanges = defineTool({
   name: "propose_changes",
   description:
-    "Propose changes to the bot setup: create, edit or delete bots (name, instructions, model, approval mode, avatar, skills, MCP servers, connected apps, tool grants, playbooks, routines), library skills and MCP servers, what new bots start with, and presets. Put every change for one request in one call, in order; later changes can refer to bots created earlier by name. The user reviews them together on a card in this chat and applies or dismisses them. Read get_setup first for the current setup and valid ids.",
+    "Propose changes to the bot setup: create, edit or delete bots (name, instructions, model, approval mode, avatar, skills, MCP servers, connected apps, tool grants, playbooks, routines), library skills and MCP servers, what new bots start with, and presets. Put every change for one request in one call, in order; later changes can refer to bots created earlier by name. The user reviews them together on a card in this chat and applies or dismisses them. Read get_setup first for the current setup, valid ids and each change's fields.",
   input: z.object({
     summary: z.string().min(1).max(300).describe("One line saying what the changes do, shown on the card."),
-    changes: ChangesSchema,
+    changes: ListedChangesSchema,
   }),
-  async run({ summary, changes }, { bot, agentId, host }) {
+  async run({ summary, changes: listed }, { bot, agentId, host }) {
+    const checked = checkChanges(listed);
+    if ("problem" in checked) throw new Error(checked.problem);
+    const { changes } = checked;
     const values = await readValues(host);
     const context = await hostContext(host);
     const resolved = resolveChanges(changes, context);

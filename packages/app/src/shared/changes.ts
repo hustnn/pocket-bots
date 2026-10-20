@@ -179,6 +179,19 @@ export const ChangeSchema = z.discriminatedUnion("type", [
 export type Change = z.infer<typeof ChangeSchema>;
 export const ChangesSchema = z.array(ChangeSchema).min(1).max(50);
 
+export const CHANGE_TYPES = ChangeSchema.options.map((option) => option.shape.type.value) as [Change["type"], ...Change["type"][]];
+
+/**
+ * propose_changes' changes as its tool listing shows them: each change's type only. The full
+ * schema is about 15K characters, which every chat would carry on every request, so its fields are
+ * spelled out by get_setup (changeFormat) instead, and the tool checks them against ChangesSchema.
+ */
+export const ListedChangesSchema = z
+  .array(z.object({ type: z.enum(CHANGE_TYPES) }).loose())
+  .min(1)
+  .max(50)
+  .describe("The changes, in order: each an object with type and that type's fields, as get_setup's change format lists them.");
+
 type AppInputValue = z.infer<typeof AppInput>;
 type BotFieldValues = { [Key in keyof typeof BotFields]?: z.infer<(typeof BotFields)[Key]> };
 
@@ -757,4 +770,80 @@ export function botDetails(values: BotSettingsValues, ref: string): string {
     }).join(", ")),
     block("Working folder", bot.cwd ?? "its own folder in the Bots project"),
   ].join("\n\n");
+}
+
+// ---------------------------------------------------------------- change format
+
+type JsonSchema = { [key: string]: unknown };
+
+/** Shapes the format spells out once, by name, instead of wherever a change uses them. */
+const NAMED_SHAPES: readonly [string, z.ZodType][] = [
+  ["Avatar", AvatarInput],
+  ["App", AppInput],
+  ["Playbook", PlaybookInput],
+  ["Schedule", ScheduleInput],
+];
+
+function jsonSchema(schema: z.ZodType): JsonSchema {
+  const { $schema: _schema, ...rest } = z.toJSONSchema(schema) as JsonSchema;
+  return rest;
+}
+
+const shapeKey = (schema: JsonSchema) => JSON.stringify(schema);
+
+function typeText(schema: JsonSchema, names: ReadonlyMap<string, string>): string {
+  const name = names.get(shapeKey(schema));
+  if (name) return name;
+  if (Array.isArray(schema.anyOf)) return (schema.anyOf as JsonSchema[]).map((option) => typeText(option, names)).join(" | ");
+  if (schema.const !== undefined) return JSON.stringify(schema.const);
+  if (Array.isArray(schema.enum)) return schema.enum.map((value) => JSON.stringify(value)).join(" | ");
+  switch (schema.type) {
+    case "array": {
+      const item = typeText(schema.items as JsonSchema, names);
+      return item.includes(" ") ? `(${item})[]` : `${item}[]`;
+    }
+    case "object":
+      return schema.properties ? `{ ${fieldTexts(schema, names).join("; ")} }` : `{ [name]: ${typeText(schema.additionalProperties as JsonSchema, names)} }`;
+    case "integer":
+    case "number":
+      return typeof schema.minimum === "number" && typeof schema.maximum === "number" ? `${schema.type} ${schema.minimum}-${schema.maximum}` : String(schema.type);
+    default:
+      return String(schema.type ?? "any");
+  }
+}
+
+/** An object's fields as `name?: type (description)`; "?" marks an optional one. */
+function fieldTexts(schema: JsonSchema, names: ReadonlyMap<string, string>, skip?: string): string[] {
+  const required = new Set((schema.required as string[] | undefined) ?? []);
+  return Object.entries(schema.properties as Record<string, JsonSchema>)
+    .filter(([key]) => key !== skip)
+    .map(([key, field]) => `${key}${required.has(key) ? "" : "?"}: ${typeText(field, names)}${field.description ? ` (${field.description})` : ""}`);
+}
+
+/**
+ * The fields of each change propose_changes takes, generated from ChangeSchema so it can't drift:
+ * get_setup's overview ends with it, and a change that doesn't fit gets its type's part again.
+ * With `types`, only those changes and the shapes they use.
+ */
+export function changeFormat(types?: readonly string[]): string {
+  const names = new Map(NAMED_SHAPES.map(([name, schema]) => [shapeKey(jsonSchema(schema)), name]));
+  const changes = ChangeSchema.options
+    .filter((option) => !types || types.includes(option.shape.type.value))
+    .map((option) => [`${option.shape.type.value}:`, ...fieldTexts(jsonSchema(option), names, "type").map((field) => `- ${field}`)].join("\n"));
+  const used = changes.join("\n");
+  const shapes = NAMED_SHAPES.filter(([name]) => new RegExp(`\\b${name}\\b`).test(used)).map(([name, schema]) => `${name}: { ${fieldTexts(jsonSchema(schema), names).join("; ")} }`);
+  return [
+    'Change format for propose_changes: each change is an object with "type" and that type\'s fields ("?" marks an optional field; null resets a field that allows it).',
+    "",
+    changes.join("\n\n"),
+    ...(shapes.length ? ["", ...shapes] : []),
+  ].join("\n");
+}
+
+/** propose_changes' changes checked against ChangeSchema: the parsed changes, or why they don't fit, with the format of the types they used. */
+export function checkChanges(changes: readonly { type: string }[]): { changes: Change[] } | { problem: string } {
+  const parsed = ChangesSchema.safeParse(changes);
+  if (parsed.success) return { changes: parsed.data };
+  const issues = parsed.error.issues.map((issue) => `- changes${issue.path.map((key) => (typeof key === "number" ? `[${key}]` : `.${String(key)}`)).join("")}: ${issue.message}`);
+  return { problem: ["These changes don't fit the change format:", ...issues, "", changeFormat([...new Set(changes.map((change) => change.type))])].join("\n") };
 }

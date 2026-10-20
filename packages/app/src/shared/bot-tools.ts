@@ -24,8 +24,12 @@ export function botToolName(name: string): BotToolName | null {
   return tool && (BOT_TOOL_NAMES as readonly string[]).includes(tool) ? (tool as BotToolName) : null;
 }
 
-/** The prompt section for pocket-bots' own tools, given to chats that get them (bots on this host). */
-export function botToolsPrompt(canAsk: boolean): string {
+/**
+ * The prompt section for pocket-bots' own tools, given to chats that get them (bots on this host).
+ * `led`: a seat of a group with a leader, which is listed only the tools for its piece.
+ */
+export function botToolsPrompt(canAsk: boolean, led = false): string {
+  if (led) return 'Your own tools come from the MCP server "bots": the group tools above, and search_chats to look through your past chats and daily log.';
   const others = canAsk
     ? "list_bots to see the other bots and ask_bot to ask one for help. When ask_bot says the answer will come to the chat on its own, tell the user it's on its way and end your turn rather than checking again"
     : "list_bots to see the other bots";

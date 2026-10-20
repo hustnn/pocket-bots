@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { BotSettingsValues } from "../src/shared/bot";
-import { applyChanges, botDetails, changeTexts, changeWarnings, ChangesSchema, describeChange, providerInfo, readyProvider, resolveChanges, setupOverview, type ApplyContext, type Change, type ProviderInfo } from "../src/shared/changes";
+import { applyChanges, botDetails, CHANGE_TYPES, changeFormat, changeTexts, changeWarnings, ChangesSchema, checkChanges, describeChange, ListedChangesSchema, providerInfo, readyProvider, resolveChanges, setupOverview, type ApplyContext, type Change, type ProviderInfo } from "../src/shared/changes";
+import { z } from "zod";
 import { makeBot, NOW } from "./helpers";
 
 const PROVIDERS: ProviderInfo[] = [
@@ -150,6 +151,43 @@ describe("setup changes", () => {
     expect(text).toContain("- claude: models opus (default) [thinking: low, high], haiku; modes default (default), plan");
     expect(text).toContain("Connected apps: not set up.");
     expect(botDetails(setup(), "scout")).toContain("Instructions (Soul):\n(none)");
+  });
+});
+
+describe("the change format", () => {
+  it("spells out every change's fields once, from the schema, and the shapes they share", () => {
+    const format = changeFormat();
+    for (const type of CHANGE_TYPES) expect(format).toContain(`\n${type}:\n`);
+    expect(format).toContain("- bot: string (The bot: its name or id.)");
+    expect(format).toContain("- model?: string | null (Model id from get_setup; null for the provider's default.)");
+    expect(format).toContain("- avatar?: Avatar");
+    expect(format).toContain("- add_apps?: App[] (Connected apps it may use, or new limits on ones it has.)");
+    expect(format).toContain("- schedule: Schedule");
+    expect(format).toContain('Schedule: { type: "once" | "daily" | "cron" | "interval" | "webhook"; at?: string (For "once": local date and time, "YYYY-MM-DD HH:MM".)');
+    expect(format).toContain("weekdays?: (integer 0-6)[]");
+    expect(format).toContain("- env?: { [name]: string }");
+    // Each shared shape is spelled out once.
+    expect(format.match(/^Avatar: /gm)).toHaveLength(1);
+    // Only the asked types, and the shapes they use.
+    const routine = changeFormat(["add_routine"]);
+    expect(routine).toContain("add_routine:");
+    expect(routine).not.toContain("create_bot:");
+    expect(routine).toContain("Schedule: {");
+    expect(routine).not.toContain("Avatar: {");
+  });
+
+  it("lists only each change's type for propose_changes, and checks the rest against the full schema", () => {
+    const listed = JSON.stringify(z.toJSONSchema(ListedChangesSchema));
+    expect(listed.length).toBeLessThan(800);
+    expect(JSON.stringify(z.toJSONSchema(ChangesSchema)).length).toBeGreaterThan(10_000);
+    const ok = checkChanges([{ type: "delete_bot", bot: "Scout" }]);
+    expect(ok).toEqual({ changes: [{ type: "delete_bot", bot: "Scout" }] });
+    const wrong = checkChanges(ListedChangesSchema.parse([{ type: "create_bot", nam: "Ada", avatar: { colour: 99 } }]));
+    expect("problem" in wrong && wrong.problem).toContain("- changes[0].name: Invalid input: expected string, received undefined");
+    expect("problem" in wrong && wrong.problem).toContain("- changes[0].avatar.colour: Too big");
+    // The format of the types it used, to fix them with.
+    expect("problem" in wrong && wrong.problem).toContain("\ncreate_bot:\n- name: string");
+    expect("problem" in wrong && wrong.problem).not.toContain("delete_preset:");
   });
 });
 

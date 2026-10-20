@@ -24,6 +24,7 @@ export const searchChats = defineTool({
     since: z.string().max(20).optional().describe('How far back: "24h", "3d", "2w", "today", "yesterday" or a date like 2026-09-01.'),
     limit: z.number().int().min(1).max(25).optional().describe("How many results at most (default 12)."),
   }),
+  led: true,
   async run({ query, since, limit = 12 }, { bot, agentId, host }) {
     const now = new Date();
     const words = searchWords(query ?? "");
