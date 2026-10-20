@@ -120,7 +120,7 @@ interface SessionSpec {
   mcpServers: Record<string, McpServerConfig>;  // bot 的 MCP 服务器，加上 pocket-bots 自己的
   trustedTools: string[];                       // 免审批："server" 或 "server/tool"
   hostedMcpServers?: string[];                  // pocket-bots 自己托管的服务器，适配器可改用原生方式提供
-  extraDirectories?: string[];                  // 记忆、技能目录和聊天的额外文件夹（工作目录之外）；只有 Claude 原生支持（additionalDirectories）
+  extraDirectories?: string[];                  // 记忆、技能目录和聊天的额外文件夹（工作目录之外）；Claude、Codex 原生支持（additionalDirectories）
   approvals: ApprovalHandler;                   // 所有审批请求都回调到这里
   resume?: ResumeHandle;                        // agent 自己的会话 id，存在 SQLite 里
 }
@@ -129,6 +129,7 @@ interface RuntimeSession {
   send(input: UserInput, opts: { whenBusy: "steer" | "queue" | "interrupt" | "reject"; expectedTurnId?: string; clientMessageId: string }): Promise<SendResult>;
   interrupt(): Promise<{ canceledTurnId: string | null }>;   // 等这一轮真正结束才返回
   commands(): Promise<SlashCommand[]>;          // 这个 agent 的斜杠命令
+  setExtraDirectories?(directories: string[]): void;   // 不重开会话换一组额外目录，下一轮起生效（liveDirectories，只有 Codex）
   usage(): ContextUsage | null;
   liveTurn?: boolean; alive(): boolean | undefined; kill(signal): void; abandonTurn(): void;   // 看护用
   close(): Promise<void>;
@@ -156,7 +157,7 @@ type RuntimeEvent =
 
 五个 agent 的输出被统一成同一种**时间线条目**（`TimelineItem`）：用户消息、回复、思考、工具调用（带结构化详情：命令和输出、文件编辑的 diff、读文件、搜索、子 agent…）、待办列表、错误、通知、上下文压缩。存储和界面都只认这一种形状。
 
-`RuntimeCapabilities` 写死每个 agent 已验证的能力：能不能插话、插话落在哪（下一步 / 当前工具调用之后）、「收下」信号是真的送达还是只是排队、能不能看图、有没有子 agent 工具、续接时是否还用开始时的 system prompt、会不会报告上下文压缩、有没有向用户提问的工具。
+`RuntimeCapabilities` 写死每个 agent 已验证的能力：能不能插话、插话落在哪（下一步 / 当前工具调用之后）、「收下」信号是真的送达还是只是排队、能不能看图、有没有子 agent 工具、续接时是否还用开始时的 system prompt、额外目录是不是原生交给 CLI、能不能不重开会话就换一组、会不会报告上下文压缩、有没有向用户提问的工具。
 
 ### 3.4 runtime 层 ↔ agent CLI
 
@@ -203,6 +204,7 @@ pocket-bots 不实现 agent，它是 agent CLI 的「宿主」：给 CLI 一个�
 - **Grok 的每次 MCP 调用都会请求权限**：pocket-bots 的工具和白名单里的自动回答允许。
 - **Pi 原本没有审批**：pocket-bots 生成的扩展在 `tool_call` 钩子里回调到审批策略，Pi 也就有了审批。
 - **提问工具**：每个 CLI 的提问工具都被转换成一种「种类为 question 的审批」（`runtime/src/questions.ts`），界面显示成表单，回答按各 CLI 要求的格式送回。
+- **Codex 的额外目录**：`thread/start`、`thread/resume` 只收沙箱模式，所以额外目录随每次 `turn/start` 的 `sandboxPolicy` 交出去：开线程时 Codex 回的沙箱（带着用户 `config.toml` 里的设置）加上这些目录作为 `writableRoots`。一轮的沙箱 Codex 会沿用到之后的轮次，续接后却回到线程自己的，列表也可能中途换了，所以只要有目录要加（或要去掉）每轮都带；换列表因此不用重开会话（`liveDirectories`）。只用于沙箱是 workspace-write 的模式（Auto、Always Ask），只读和完全访问不动。`packages/runtime/test/live-directories.ts` 在真 CLI 上验证：额外目录里写文件不弹审批，中途加的下一轮能写，去掉的写不了，续接后照样能写。
 - **续接时的 system prompt**：Claude Code 和 Codex 续接一个会话时会忽略新传的 system prompt，继续用开始时的那份。群聊座位因此记下每个会话按哪个 prompt 跑，prompt 改了就在续接后的第一条输入前补发（§6.6）。
 
 ### 4.1 审批
@@ -264,11 +266,11 @@ skills/<name>/             这个 bot 用的技能（链接到共用的技能库
 uploads/                   聊天里上传的非文本文件
 ```
 
-托管目录同时就是 agent 的工作目录；选了自定义工作目录时，记忆和技能目录作为「额外可访问的目录」交给 agent，读写它们不弹审批。**这只对 Claude 成立**：`SessionSpec.extraDirectories` 只有 Claude 适配器读（映射成 `additionalDirectories`），Codex、OpenCode、Pi、Grok 的适配器忽略它，能力位 `RuntimeCapabilities.additionalDirectories` 就是这个区别（只有 claude 为 true）；其他 CLI 上 agent 照样能按绝对路径访问这些目录，但可能弹审批。
+托管目录同时就是 agent 的工作目录；选了自定义工作目录时，记忆和技能目录作为「额外可访问的目录」交给 agent，读写它们不弹审批。**这只对 Claude 和 Codex 成立**：`SessionSpec.extraDirectories` 只有这两个适配器读，Claude 映射成 `additionalDirectories`，Codex 映射成 workspace-write 沙箱的可写目录（`writableRoots`，见 §4；只读、完全访问模式不用，那里所有目录本来一样）；OpenCode、Pi、Grok 的适配器忽略它，能力位 `RuntimeCapabilities.additionalDirectories` 就是这个区别（claude、codex 为 true）；这三个 CLI 上 agent 照样能按绝对路径访问这些目录，但可能弹审批。
 
 **聊天的额外文件夹**（`chats.extra_folders`，JSON 数组，上限 20）是主目录之外的另一组目录，主目录 `chats.cwd` 的规则不变（创建后固定）。创建聊天（`pocket.chats.start`）时给，之后用 `pocket.chats.folders` 整体替换；每一项和主目录一样经 `workFolder` 校验（`~/` 展开、必须是存在的绝对路径文件夹），去重、去掉和主目录相同的，超了抛 `RequestError`。`chatSpecs` 把它们并进 `extraDirectories`（和技能目录、bot 目录合并去重，不含主目录），并写进 system prompt 的「Extra folders」段（§5.2）。
 
-改已开聊天的额外文件夹时主目录没变，所以不新开会话、不带简报，而是**续接同一个会话**（`ChatService.setExtraFolders`）：会话空闲就关掉，下一次 open 带着 `resume` 和新的目录；正在跑的一轮不打断，标记「待换」，下一条在空闲时到的输入先关掉旧会话再续接。让 agent 知道最新的列表：新会话和每次都重发 system prompt 的 CLI（`keepsPromptOnResume` 为假）靠 system prompt；Claude、Codex 续接时不重发 prompt，所以 `chats.folders_told` 记着上次告诉 agent 的列表，续接时不一样就把一段 `<pocket-bots-folders-update>` 说明放在下一条输入前面（顺序在常驻 prompt 更新之后，成功送达后记下；`shared/extra-folders.ts`），聊天界面把它拆出来折叠成一行「Extra folders updated」。「Extra folders」段不进常驻 prompt（`volatile`），所以改目录不会触发整段 prompt 的补发。
+改已开聊天的额外文件夹时主目录没变，所以不新开会话、不带简报（`ChatService.setExtraFolders`）。能就地换目录的 runtime（`RuntimeCapabilities.liveDirectories`，只有 Codex）连会话都不关：按新列表重新算一遍 spec 里的目录，交给 `RuntimeSession.setExtraDirectories`，下一轮起生效；会话忙着也马上交，正在跑的一轮还用原来的沙箱。其他 runtime **续接同一个会话**：会话空闲就关掉，下一次 open 带着 `resume` 和新的目录；正在跑的一轮不打断，标记「待换」，下一条在空闲时到的输入先关掉旧会话再续接。会话还在打开时改的（spec 已经算好），也标记「待换」，下一条空闲时的输入再换（Codex 就地换，其他关掉续接）。让 agent 知道最新的列表：新会话和每次都重发 system prompt 的 CLI（`keepsPromptOnResume` 为假）靠 system prompt；Claude、Codex 续接时不重发 prompt，就地换了目录的会话也还是开会话时那份 prompt，所以 `chats.folders_told` 记着上次告诉 agent 的列表，续接或就地换目录时不一样就把一段 `<pocket-bots-folders-update>` 说明放在下一条输入前面（顺序在常驻 prompt 更新之后，成功送达后记下；`shared/extra-folders.ts`），聊天界面把它拆出来折叠成一行「Extra folders updated」。「Extra folders」段不进常驻 prompt（`volatile`），所以改目录不会触发整段 prompt 的补发。
 
 审批：额外文件夹不自动进信任列表；只有审批卡 **Allow in folder…** 的候选（`folderChoices`）会把请求所在的额外文件夹排在聊天主目录之后、上级目录之前。群座位的聊天不能单独改额外文件夹（`pocket.chats.folders` 抛 `RequestError`）；群的额外文件夹（`groups.extra_folders`）变了，`GroupChats` 把它同步写到每个座位聊天上（座位就是普通聊天，快照、prompt、审批候选都读自己这一列；新座位建好后再对一次，防止建座位期间群改了），再按上面的方式续接，不走换目录的新座位加简报。
 
@@ -581,5 +583,5 @@ groups … group_reminder_events、group_messages_fts   -- 见 §6.2；groups.ex
 | 测试 | 内容 |
 |---|---|
 | `packages/runtime/test/contract.ts` | 每个适配器跑同一套合同测试：调用 pocket-bots 的 MCP 工具；一条需要审批的命令；跑到一半插话并被执行；打断；关掉会话后在新进程续接，还记得前文、工具还能用。`npm run test:live -- <runtime>` 用真的 CLI 和登录跑 |
-| `packages/runtime/test/live-commands.ts`、`live-prompt-resume.ts` | 真 CLI 上列出斜杠命令并跑 `/compact`；验证续接的会话是否还用开始时的 prompt |
+| `packages/runtime/test/live-commands.ts`、`live-prompt-resume.ts`、`live-directories.ts` | 真 CLI 上列出斜杠命令并跑 `/compact`；验证续接的会话是否还用开始时的 prompt；验证 Codex 在额外目录里写文件不弹审批、中途换的列表下一轮生效 |
 | `npm test` | 单元和端到端测试，用脚本化的假 runtime，不调模型：ChatService 的会话、续接和看护（假计时器）；群聊的存储规则、投递、读、发言前检查、草稿、任务、线程、提醒、@ 的去向、出错和断路器、座位换新、重启补课、bot 的附件和提问；定时任务、队列、ask_bot、记忆、技能、导入导出、搜索、HTTP 错误码等 |

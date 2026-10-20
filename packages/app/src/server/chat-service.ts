@@ -289,7 +289,7 @@ export class ChatService {
   private readonly standing = new Map<string, { hash: string; update: string | null; resumed: string | null }>();
   /** Per open session whose agent hasn't been told the chat's current extra folders: the note its next input carries. */
   private readonly foldersOwed = new Map<string, { folders: string[]; text: string }>();
-  /** Chats whose extra folders changed under a session that was busy: it reopens (resumed) at its next idle input. */
+  /** Chats whose extra folders changed under a session that was busy or still opening: it takes the new list at its next idle input (refreshFolders). */
   private readonly foldersStale = new Set<string>();
   private reaper: ReturnType<typeof setInterval> | null = null;
   private progressCheck: ReturnType<typeof setInterval> | null = null;
@@ -512,8 +512,8 @@ export class ChatService {
     } else {
       // A start writing its first input goes first; what follows goes to its session.
       if (start) await start.done;
-      // Extra folders changed while the session was busy: now it's idle, it reopens (resumed) with the new list.
-      if (this.foldersStale.has(chatId) && this.idle(chatId)) await this.closeSession(chatId);
+      // Extra folders changed while the session was busy or opening: now it's idle, it takes the new list.
+      if (this.foldersStale.has(chatId) && this.idle(chatId)) await this.refreshFolders(chatId);
       const live = this.live.get(chatId);
       if (live && live.session.state !== "closed") result = await this.write(chatId, live.session, outgoing, false);
       else if (start) result = startResult(await start.done);
@@ -594,9 +594,10 @@ export class ChatService {
 
   /**
    * Sets the chat's extra folders (checked by the caller). The working folder doesn't change, so the
-   * chat isn't started over: an idle session closes now and the next input resumes it with the new
-   * list; a busy one is left to finish its turn and reopens at its next idle input. A closed session
-   * simply opens with the new list.
+   * chat isn't started over. A session whose runtime takes a new list in place gets it now, from its
+   * next turn on, busy or not. Any other idle session closes now and the next input resumes it with
+   * the new list; a busy one is left to finish its turn and changes at its next idle input. A closed
+   * session simply opens with the new list.
    */
   async setExtraFolders(chatId: string, folders: string[]): Promise<void> {
     const row = this.db.get<ChatRow>("SELECT * FROM chats WHERE id = ?", chatId);
@@ -605,8 +606,33 @@ export class ChatService {
     this.db.run("UPDATE chats SET extra_folders = ? WHERE id = ?", JSON.stringify(folders), chatId);
     this.updated(chatId);
     if (!this.live.has(chatId) && !this.starts.has(chatId)) return;
-    if (this.idle(chatId)) await this.closeSession(chatId);
+    if (this.movesFolders(chatId) || this.idle(chatId)) await this.refreshFolders(chatId);
     else this.foldersStale.add(chatId);
+  }
+
+  /** The chat's open session takes a new list of extra directories in place (RuntimeCapabilities.liveDirectories). */
+  private movesFolders(chatId: string): boolean {
+    const session = this.live.get(chatId)?.session;
+    return !!session && session.state !== "closed" && !!session.setExtraDirectories && !!this.runtimes.get(session.provider)?.capabilities.liveDirectories;
+  }
+
+  /**
+   * Brings the chat's session onto its current extra folders. One that takes them in place gets the
+   * directories its spec now has, and its agent is told the list with the next input (its prompt
+   * has the list it opened with); any other closes, and the next input resumes it with the list.
+   */
+  private async refreshFolders(chatId: string): Promise<void> {
+    this.foldersStale.delete(chatId);
+    const live = this.live.get(chatId);
+    if (!live || !this.movesFolders(chatId)) return this.closeSession(chatId);
+    const row = this.db.get<ChatRow>("SELECT * FROM chats WHERE id = ?", chatId);
+    if (!row) return;
+    const { extraDirectories, folders } = await this.specFor(this.recordOf(row));
+    // Closed meanwhile, or the list changed again: that change brings its own.
+    const now = this.db.get<Pick<ChatRow, "extra_folders">>("SELECT extra_folders FROM chats WHERE id = ?", chatId);
+    if (this.live.get(chatId) !== live || now?.extra_folders !== row.extra_folders) return;
+    live.session.setExtraDirectories!(extraDirectories ?? []);
+    this.planFolders(row, folders ?? [], true);
   }
 
   /** The chat has an open session that's waiting for input: nothing running, starting or waiting on the user. */

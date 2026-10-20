@@ -354,6 +354,63 @@ describe("a chat's extra folders", () => {
     expect(fake.sessions.filter((session) => session.spec.key === id)).toHaveLength(1);
   });
 
+  it("hands a runtime that takes a new list in place the folders without reopening it, and tells its agent with the next input", async () => {
+    const { chats, fake, texts, turn } = setupFolders(true);
+    fake.capabilities.liveDirectories = true;
+    const id = await chats.create({ botId: null, provider: "fake", cwd: tmpdir() });
+    await turn(id, "first");
+    await chats.setExtraFolders(id, ["/work/api", "/work/docs"]);
+    expect(fake.sessions[0]!.state).not.toBe("closed");
+    expect(fake.sessions[0]!.directories).toEqual(["/work/api", "/work/docs"]);
+    await turn(id, "second");
+    await chats.setExtraFolders(id, []);
+    expect(fake.sessions[0]!.directories).toEqual([]);
+    await turn(id, "third");
+    expect(fake.sessions).toHaveLength(1);
+    expect(texts).toEqual(["first", `${foldersUpdate(["/work/api", "/work/docs"])}second`, `${foldersUpdate([])}third`]);
+  });
+
+  it("hands them to a busy session at once, for its next turn", async () => {
+    const { chats, fake, texts, turn } = setupFolders(true);
+    fake.capabilities.liveDirectories = true;
+    const id = await chats.create({ botId: null, provider: "fake", cwd: tmpdir() });
+    await turn(id, "first");
+    const ended = settled(chats, id);
+    await chats.send(id, { text: "slow turn" });
+    await chats.setExtraFolders(id, ["/work/api"]);
+    expect(fake.sessions[0]!.directories).toEqual(["/work/api"]);
+    expect((await ended).outcome.kind).toBe("completed");
+    await turn(id, "after");
+    expect(fake.sessions).toHaveLength(1);
+    expect(texts).toEqual(["first", "slow turn", `${foldersUpdate(["/work/api"])}after`]);
+  });
+
+  it("hands them in place at the next input when they changed while the session opened", async () => {
+    const { chats, fake, texts, turn } = setupFolders(true);
+    fake.capabilities.liveDirectories = true;
+    let release = () => {};
+    let opening = () => {};
+    const reached = new Promise<void>((resolve) => (opening = resolve));
+    fake.beforeOpen = () => {
+      opening();
+      return new Promise<void>((resolve) => (release = resolve));
+    };
+    const id = await chats.create({ botId: null, provider: "fake", cwd: tmpdir() });
+    const ended = settled(chats, id);
+    const sent = chats.send(id, { text: "first" });
+    // Its spec is built: the change comes too late for it.
+    await reached;
+    await chats.setExtraFolders(id, ["/work/api"]);
+    release();
+    expect((await sent).ok).toBe(true);
+    await ended;
+    expect(fake.sessions[0]!.directories).toEqual([]);
+    await turn(id, "next");
+    expect(fake.sessions).toHaveLength(1);
+    expect(fake.sessions[0]!.directories).toEqual(["/work/api"]);
+    expect(texts).toEqual(["first", `${foldersUpdate(["/work/api"])}next`]);
+  });
+
   it("splits the note off the input again, after a standing-prompt update", () => {
     const text = `${standingPromptUpdate("Rules v2")}${foldersUpdate(["/a", "/b"])}what's left?`;
     const { standing, text: rest } = splitStandingUpdate(text);

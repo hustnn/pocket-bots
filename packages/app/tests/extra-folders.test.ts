@@ -106,14 +106,14 @@ describe("what the agent gets", () => {
     expect(promptSections(makeBot({}), { memory: "", memoryPath: null, recentWork: [], playbooks: [], skills: [], botTools: false, apps: [] }).map((section) => section.title)).toEqual(["Persona", "Project guidance"]);
   });
 
-  it("says in the capabilities that only Claude takes them natively", () => {
-    expect([new ClaudeAdapter(), new CodexAdapter(), new OpenCodeAdapter(), new GrokAdapter(), new PiAdapter(), new FakeAdapter()].map((adapter) => [adapter.id, adapter.capabilities.additionalDirectories])).toEqual([
-      ["claude", true],
-      ["codex", false],
-      ["opencode", false],
-      ["grok", false],
-      ["pi", false],
-      ["fake", false],
+  it("says in the capabilities that Claude and Codex take them natively, and Codex takes a new list in place", () => {
+    expect([new ClaudeAdapter(), new CodexAdapter(), new OpenCodeAdapter(), new GrokAdapter(), new PiAdapter(), new FakeAdapter()].map((adapter) => [adapter.id, adapter.capabilities.additionalDirectories, adapter.capabilities.liveDirectories])).toEqual([
+      ["claude", true, false],
+      ["codex", true, true],
+      ["opencode", false, false],
+      ["grok", false, false],
+      ["pi", false, false],
+      ["fake", false, false],
     ]);
   });
 });

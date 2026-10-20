@@ -33,7 +33,7 @@ export const echoScript: FakeScript = (turn, step) => (step === 0 ? { say: `echo
 export class FakeAdapter implements RuntimeAdapter {
   readonly id = "fake" as const;
   readonly label = "Test runtime";
-  readonly capabilities: RuntimeCapabilities = { steer: true, steerLands: "after_tool", steerAcceptance: "delivered", images: false, subAgents: false, keepsPromptOnResume: false, additionalDirectories: false, reportsCompaction: true };
+  readonly capabilities: RuntimeCapabilities = { steer: true, steerLands: "after_tool", steerAcceptance: "delivered", images: false, subAgents: false, keepsPromptOnResume: false, additionalDirectories: false, liveDirectories: false, reportsCompaction: true };
   readonly sessions: FakeSession[] = [];
 
   script: FakeScript;
@@ -88,18 +88,25 @@ export class FakeSession extends SessionBase implements RuntimeSession {
   /** The signals kill() got; a kill ends the "process" (unless it's already gone). */
   readonly kills: string[] = [];
   private runtimeTurn = false;
+  /** SessionSpec.extraDirectories, until setExtraDirectories replaces them (a test turns liveDirectories on to have it called). */
+  directories: string[];
 
   constructor(spec: SessionSpec, script: FakeScript, listCommands: () => SlashCommand[] = () => []) {
     super();
     this.spec = spec;
     this.script = script;
     this.listCommands = listCommands;
+    this.directories = spec.extraDirectories ?? [];
     this.currentState = "idle";
     queueMicrotask(() => this.setHandle(spec.resume ?? { provider: "fake", sessionId: randomUUID() }));
   }
 
   async commands(): Promise<SlashCommand[]> {
     return this.listCommands();
+  }
+
+  setExtraDirectories(directories: string[]): void {
+    this.directories = [...directories];
   }
 
   get liveTurn(): boolean | undefined {

@@ -496,7 +496,8 @@ export const chatStartRpc = defineRpc({
 
 /**
  * Replaces a chat's extra folders. Its working folder stays; the chat's session carries on with
- * the new list (resumed once it's idle). Not for a group seat, whose folders are its group's.
+ * the new list (in place on Codex, resumed once it's idle on the others). Not for a group seat,
+ * whose folders are its group's.
  */
 export const chatFoldersRpc = defineRpc({
   name: "pocket.chats.folders",
