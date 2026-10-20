@@ -3,8 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { FakeAdapter, type FakeScript } from "@pocket-bots/runtime";
-import { ChatService, standingPromptUpdate, type TurnEndedEvent } from "../src/server/chat-service";
+import { ChatService, type TurnEndedEvent } from "../src/server/chat-service";
 import { Db } from "../src/server/db";
+import { groupDelivery } from "../src/shared/group-chat";
+import { splitStandingUpdate, standingPromptUpdate } from "../src/shared/standing-prompt";
 
 function setup(script?: FakeScript) {
   const dir = mkdtempSync(join(tmpdir(), "bots-chats-"));
@@ -195,6 +197,17 @@ describe("a resumed session's standing prompt", () => {
     await turn(id, "fifth");
     expect(texts).toEqual(["first", "second", `${standingPromptUpdate("Rules v2")}third`, "fourth", "fifth"]);
     expect(texts[2]).toMatch(/^<pocket-bots-standing-prompt-update>\npocket-bots updated your standing instructions since this session started\. The instructions below replace the earlier standing instructions \(system or developer prompt\) for the rest of this session; where they differ, follow these\.\n\nRules v2\n<\/pocket-bots-standing-prompt-update>\n\nthird$/);
+  });
+
+  it("splits the update off the input again, so a seat's chat still shows what the group sent", () => {
+    const delivery = '[Group chat "Launch". Members: Writer (you), and the user.]\n\n[Group inbox notice: 1 new message for you to read.]';
+    expect(splitStandingUpdate(`${standingPromptUpdate("Rules v2\n\n- Be brief.")}${delivery}`)).toEqual({ standing: "Rules v2\n\n- Be brief.", text: delivery });
+    expect(groupDelivery(splitStandingUpdate(`${standingPromptUpdate("Rules v2")}${delivery}`).text)).toMatchObject({ group: "Launch" });
+    // Typed in the seat: the user's own words come back as they were.
+    expect(splitStandingUpdate(`${standingPromptUpdate("Rules v2")}what's left?`)).toEqual({ standing: "Rules v2", text: "what's left?" });
+    // Anything without the update in front stays as it is.
+    expect(splitStandingUpdate(delivery)).toEqual({ standing: null, text: delivery });
+    expect(splitStandingUpdate("<pocket-bots-standing-prompt-update> is a tag")).toEqual({ standing: null, text: "<pocket-bots-standing-prompt-update> is a tag" });
   });
 
   it("records a resumed session it has no record of as it is", async () => {

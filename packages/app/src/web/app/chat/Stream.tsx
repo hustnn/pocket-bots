@@ -7,10 +7,11 @@ import { groupDelivery } from "../../../shared/group-chat";
 import { peerMessage, type PeerMessage } from "../../../shared/peers";
 import { proposalIdOf } from "../../../shared/proposals";
 import { parseReply } from "../../../shared/reply";
+import { splitStandingUpdate } from "../../../shared/standing-prompt";
 import type { BotVoice } from "../../../shared/bot";
 import type { ChatCard, TimelineEntry } from "../../../shared/rpc";
 import { buildToolCallPresentation, taskStatus, type PlanOutcome } from "../../../shared/tools";
-import { Icon, iconFromLucide } from "../../components/icons";
+import { Icon, iconFromLucide, type IconName } from "../../components/icons";
 import { Markdown } from "../../components/Markdown";
 import { CopyButton, IconButton, Modal } from "../../components/ui";
 import { buildRows, layoutStream, type StreamEntry, type StreamLayoutItem, type StreamRow, type TurnFooterInfo } from "../../chat/model";
@@ -225,24 +226,27 @@ function PeerRow({ peer }: { peer: PeerMessage }) {
   );
 }
 
-/** What a group chat sent this bot's seat, folded like a thought: the bot's own chat isn't the group. */
-function GroupDeliveryRow({ delivery }: { delivery: { group: string; body: string } }) {
+/**
+ * What pocket-bots put in the bot's input, folded like a thought: what a group chat sent its seat
+ * (the bot's own chat isn't the group), or the updated instructions a resumed seat was given.
+ */
+function FoldedInput({ icon, title, body }: { icon: IconName; title: string; body: string }) {
   const [open, setOpen] = useState(false);
   return (
     <div>
       <div className="tool-row" onClick={() => setOpen(!open)}>
-        <Icon name="messages" size={14} />
-        <span className="tool-name">Group chat · {delivery.group}</span>
+        <Icon name={icon} size={14} />
+        <span className="tool-name">{title}</span>
         {open ? null : (
           <span className="tool-summary" style={{ fontFamily: "var(--font)", fontSize: 13 }}>
-            {preview(delivery.body)}
+            {preview(body)}
           </span>
         )}
         <Icon name={open ? "chevronDown" : "chevronRight"} size={13} />
       </div>
       {open ? (
         <div className="peer-message">
-          <Markdown text={delivery.body} />
+          <Markdown text={body} />
         </div>
       ) : null}
     </div>
@@ -295,9 +299,26 @@ const Row = memo(function Row({ item, chatId, botId, cwd, voice, onReply, onShow
   let body;
   switch (row.kind) {
     case "user": {
-      const delivery = groupDelivery(row.text);
-      const peer = delivery ? null : peerMessage(row.text);
-      body = delivery ? <GroupDeliveryRow delivery={delivery} /> : peer ? <PeerRow peer={peer} /> : <UserMessage row={row} onShowQuote={onShowQuote} />;
+      // A resumed seat's first input can carry its updated instructions in front of what was sent.
+      const { standing, text } = splitStandingUpdate(row.text);
+      const delivery = groupDelivery(text);
+      const peer = delivery ? null : peerMessage(text);
+      const message = delivery ? (
+        <FoldedInput icon="messages" title={`Group chat · ${delivery.group}`} body={delivery.body} />
+      ) : peer ? (
+        <PeerRow peer={peer} />
+      ) : (
+        <UserMessage row={standing === null ? row : { ...row, text }} onShowQuote={onShowQuote} />
+      );
+      body =
+        standing === null ? (
+          message
+        ) : (
+          <>
+            <FoldedInput icon="refresh" title="Instructions updated" body={standing} />
+            {message}
+          </>
+        );
       break;
     }
     case "assistant":
