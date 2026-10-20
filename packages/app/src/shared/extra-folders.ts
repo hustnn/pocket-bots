@@ -9,7 +9,7 @@ export const MAX_EXTRA_FOLDERS = 20;
 
 /** What the agent is told about the list, in its system prompt and in an update. */
 export function extraFoldersText(folders: readonly string[]): string {
-  if (folders.length === 0) return "The user has no extra folders for this chat now: use only your working folder.";
+  if (folders.length === 0) return "The user removed this chat's extra folders; the folders listed before are no longer part of this chat.";
   return [
     "The user added these folders to this chat besides your working folder. You can read and work in them by their absolute paths; actions there may need the user's approval, as in the working folder.",
     ...folders.map((folder) => `- ${folder}`),

@@ -79,8 +79,8 @@ export function rpcHandlers(services: Services): Map<string, RpcRegistration> {
       workspaces.push({ id: directory, directory });
     };
     for (const bot of await host.bots()) add(bot.cwd);
-    for (const group of await groups.list()) add(group.cwd);
-    for (const chat of listAllChats(host).slice(0, 200)) add(chat.cwd);
+    for (const group of await groups.list()) for (const directory of [group.cwd, ...group.extraFolders]) add(directory);
+    for (const chat of listAllChats(host).slice(0, 200)) for (const directory of [chat.cwd, ...chat.extraFolders]) add(directory);
     return { workspaces };
   });
 

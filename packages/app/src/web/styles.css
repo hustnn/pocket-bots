@@ -1387,7 +1387,13 @@ pre {
   color: var(--fg);
 }
 
-/* An extra folder's chip carries its remove button. */
+/* An extra folder's chip: outlined, so it reads apart from the working folder's, and carries its remove button. */
+.folder-chip.extra {
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
 .folder-chip .folder-remove {
   display: inline-flex;
   align-items: center;

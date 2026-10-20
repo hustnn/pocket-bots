@@ -94,6 +94,12 @@ describe("what the agent gets", () => {
     expect(seat.standingPrompt).not.toContain("/work/api");
   });
 
+  it("says only what changed when the list is emptied, without telling the agent to stay in its working folder", () => {
+    const text = extraFoldersText([]);
+    expect(text).toBe("The user removed this chat's extra folders; the folders listed before are no longer part of this chat.");
+    expect(text).not.toContain("only your working folder");
+  });
+
   it("places the section after the project guidance", () => {
     const sections = promptSections(makeBot({}), { memory: "", memoryPath: null, recentWork: [], playbooks: [], skills: [], botTools: false, apps: [], folders: ["/work/api"] });
     expect(sections.map((section) => section.title)).toEqual(["Persona", "Project guidance", "Extra folders"]);
