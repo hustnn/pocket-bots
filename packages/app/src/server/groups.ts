@@ -852,6 +852,7 @@ export class GroupChats {
       case "update": {
         if (!input.status) throw new RequestError("Which status? One of todo, in_progress, done, closed.");
         const target = number();
+        await this.statusSettable(bot, groupId);
         const held = this.preflight(bot, groupId, 0, "task");
         if (held) return held;
         const result = this.store.setTaskStatus(groupId, target, input.status, me);
@@ -984,6 +985,14 @@ export class GroupChats {
     if (!leaderId || leaderId === bot.id || assignee?.kind !== "bot" || assignee.id === bot.id) return;
     const leader = (await this.allBots()).get(leaderId)?.name ?? "the leader";
     throw new RequestError(`In this group ${leader} hands out the work: you can't assign tasks to other members. Tell @${leader} what ${assignee.name} should do and why.`);
+  }
+
+  /** In a group with a leader, only the leader moves a task's status: it decides when a member's piece is done. */
+  private async statusSettable(bot: Bot, groupId: string): Promise<void> {
+    const leaderId = this.store.leader(groupId);
+    if (!leaderId || leaderId === bot.id) return;
+    const leader = (await this.allBots()).get(leaderId)?.name ?? "the leader";
+    throw new RequestError(`In this group ${leader} sets task statuses: you can't change them. When your piece is done, answer in its thread @mentioning ${leader}.`);
   }
 
   /** Who a task goes to by name: a member bot ("me" is the asking bot), the user, or nobody. */

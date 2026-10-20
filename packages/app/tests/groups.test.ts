@@ -1006,6 +1006,9 @@ describe("a group with a leader", () => {
     expect(woken).toEqual(["beta"]);
     await group.groups.read(beta, group.id, { unread: true });
     expect(await group.groups.claim(beta, group.id, seq)).toContain("You've claimed task");
+    // Only the leader moves a task's status, even when the member calls the unlisted tool.
+    await expect(group.groups.task(beta, group.id, { action: "update", task: seq, status: "done" })).rejects.toThrow(/In this group Alpha sets task statuses: you can't change them/);
+    expect(group.store.task(group.id, { number: seq })!.status).toBe("in_progress");
     // The leader sets the piece done after checking it; it didn't do the work, so it isn't told to say what it did.
     expect(await group.groups.task(alpha, group.id, { action: "update", task: seq, status: "done" })).toBe(`Task #${seq} is now done.`);
 
