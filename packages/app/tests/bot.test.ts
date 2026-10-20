@@ -68,7 +68,7 @@ function server(id: string, name: string, patch: Partial<LibraryMcpServer> = {})
 }
 
 describe("promptSections", () => {
-  it("orders persona, standing instructions, memory and skills", () => {
+  it("orders persona, standing instructions, project guidance, memory and skills", () => {
     const sections = promptSections(bot(), {
       memory: "likes tea",
       memoryPath: "/m/MEMORY.md",
@@ -78,13 +78,14 @@ describe("promptSections", () => {
       botTools: true,
       apps: [],
     });
-    expect(sections.map((section) => section.title)).toEqual(["Persona", "Standing instructions", "Memory", "Recent work", "Skills", "Bot tools"]);
-    expect(sections[5]!.text).toContain("propose_routine");
-    expect(sections[3]!.text).toContain('you said: "Done."');
+    expect(sections.map((section) => section.title)).toEqual(["Persona", "Standing instructions", "Project guidance", "Memory", "Recent work", "Skills", "Bot tools"]);
+    expect(sections[6]!.text).toContain("propose_routine");
+    expect(sections[4]!.text).toContain('you said: "Done."');
     expect(sections[0]!.text).toBe("You are Email Manager, a personal bot running inside Pocket Bots.\nRole: Inbox triage\nAbout: Triages the inbox.");
     expect(sections[1]!.text).toContain("BEGIN STANDING INSTRUCTIONS\nBe brief.");
-    expect(sections[2]!.text).toContain("likes tea");
-    expect(sections[4]!.text).toContain('- pdf: PDFs. Read "/m/skills/pdf/SKILL.md"');
+    expect(sections[2]!.text).toContain("read AGENTS.md in your working folder");
+    expect(sections[3]!.text).toContain("likes tea");
+    expect(sections[5]!.text).toContain('- pdf: PDFs. Read "/m/skills/pdf/SKILL.md"');
   });
 
   it("tells the bot its memory is read-only unless memory writing is on", () => {
@@ -107,8 +108,8 @@ describe("promptSections", () => {
     expect(memoryText({}, false)).not.toContain("likes tea");
   });
 
-  it("leaves out memory and skills when the bot has no local folder", () => {
-    expect(promptSections(bot({ soul: "" }), { memory: "", memoryPath: null, recentWork: [], playbooks: [], skills: [], botTools: false, apps: [] }).map((section) => section.title)).toEqual(["Persona"]);
+  it("leaves out memory and skills when the bot has no local folder, but still points it at AGENTS.md", () => {
+    expect(promptSections(bot({ soul: "" }), { memory: "", memoryPath: null, recentWork: [], playbooks: [], skills: [], botTools: false, apps: [] }).map((section) => section.title)).toEqual(["Persona", "Project guidance"]);
   });
 });
 

@@ -366,8 +366,16 @@ export interface PromptSection {
 }
 
 /**
+ * Every bot gets this, whatever its folder holds. The CLIs are started without their own project-file loading
+ * (Claude with no setting sources, Pi with --no-context-files), so a repo's AGENTS.md only reaches the bot if it
+ * is told to read it. Standing instructions and the user's messages stay above it.
+ */
+const PROJECT_GUIDANCE =
+  "Before you start the first task in a chat, read AGENTS.md in your working folder, if there is one, and follow it from then on. It is the project's own guidance for coding agents. Your standing instructions and what the user says in this chat take precedence over it.";
+
+/**
  * The bot's system prompt, in order: persona, standing
- * instructions, memory, then the skills index.
+ * instructions, project guidance, memory, then the skills index.
  */
 /**
  * The prompt's sections. Without `volatile`, what changes from day to day is left out (the
@@ -386,6 +394,7 @@ export function promptSections(bot: Bot, context: PromptContext, { volatile = tr
       text: `BEGIN STANDING INSTRUCTIONS\n${bot.soul.trim()}\nEND STANDING INSTRUCTIONS\nFollow these unless the user asks otherwise in this chat.`,
     });
   }
+  sections.push({ title: "Project guidance", text: PROJECT_GUIDANCE });
   if (context.group) sections.push({ title: "Group chat", text: context.group });
   if (context.memoryPath) {
     const body = !volatile ? "" : context.memory.trim() ? `\n\nCurrent memory:\n${context.memory.trim()}` : "\n\nYour memory is empty so far.";
