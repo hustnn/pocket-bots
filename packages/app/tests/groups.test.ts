@@ -444,8 +444,9 @@ describe("group chats", () => {
     let [message] = (await group.groups.messages(group.id)).messages;
     expect(message!.task).toEqual({ number: 1, status: "done", assignee: { kind: "user", id: "user", name: "the user" }, revision: 2, title: "Draft the release notes for version two.", description: null, createdBy: "user", amended: null });
     expect(message!.reactions).toEqual([{ emoji: "👍", names: ["the user"], ids: ["user"] }]);
-    // A second tap takes the reaction back; reopening and unclaiming leave the status as it was (assignee and
-    // status are independent), and a second unclaim is refused; removing the task leaves the message.
+    // A second tap takes the reaction back. A done task can't be unclaimed, so it's reopened first; unclaiming
+    // then leaves the status as it was (assignee and status are independent), and a second unclaim is refused;
+    // removing the task leaves the message.
     await group.groups.userReact(group.id, seq, "👍");
     await group.groups.userTask(group.id, { action: "status", number: 1, status: "in_progress" });
     await group.groups.userTask(group.id, { action: "unclaim", number: 1 });
@@ -546,7 +547,10 @@ describe("group chats", () => {
     // Replying to a thread message puts the reply in its thread.
     expect(await group.groups.send(beta, group.id, { text: "Following up.", replyTo: 2 })).toMatch(/in thread #1\./);
     await expect(group.groups.claim(beta, group.id, 2)).rejects.toThrow(/Only top-level messages can be tasks/);
-    expect(await group.groups.claim(beta, group.id, 1)).toMatch(/^You've claimed task #1;/);
+    const claimed = await group.groups.claim(beta, group.id, 1);
+    expect(claimed).toMatch(/^You've claimed task #1;/);
+    expect(claimed).toContain("When the work is done, set it to done with group_task (action update) and say in the group what you did.");
+    expect(await group.groups.task(beta, group.id, { action: "update", task: 1, status: "done" })).toBe("Task #1 is now done. Say in the group what you did.");
   });
 
   it("runs tasks: creating one with an assignee tells a muted bot, which claims it; status changes go to its thread", async () => {
@@ -1002,6 +1006,8 @@ describe("a group with a leader", () => {
     expect(woken).toEqual(["beta"]);
     await group.groups.read(beta, group.id, { unread: true });
     expect(await group.groups.claim(beta, group.id, seq)).toContain("You've claimed task");
+    // The leader sets the piece done after checking it; it didn't do the work, so it isn't told to say what it did.
+    expect(await group.groups.task(alpha, group.id, { action: "update", task: seq, status: "done" })).toBe(`Task #${seq} is now done.`);
 
     // Without a leader, every bot hears the group again.
     await group.groups.update(group.id, { leaderId: null });

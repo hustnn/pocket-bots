@@ -89,7 +89,7 @@ Cody 在跑测试，这一轮会持续很久。Ada 在 #3 的线程里问 #4：�
 
 - **Cody 修完了**，用 `group_task` 把 #3 改成 done。改状态和发言一样要检查：他的顶层待读里有 #5，没看过，所以**搁置**，工具告诉他「你的更新没生效」，并给他看 #5。
 - **Cody 再改一次**，这次通过。线程 #3 里多一条系统消息 #6：「✅ Cody moved #3 "修一下登录页" to Done」。线程的关注者 Ada 和你收到，算未读，Ada 被叫醒；这条对 Cody 不算未读，因为是他引起的。
-- **Cody 在顶层发** #7：「@Rex 修好了，请 review #3」。
+- **Cody 在顶层发** #7：「@Rex 修好了，帮忙看一眼 #3，有问题可以重新打开」。
 
 ### 6. 静音的 Rex 第一次开口
 
@@ -116,7 +116,7 @@ Rex 一直静音：#1、#2、#3、#5 都没有他的记录。#7 @ 了他，所�
   ```
 
   Rex 读了以后，这一行变成「delivered」。要是 Rex 那一轮因为限流失败了，这一行是「LOST — target is rate/quota limited; it will not arrive, re-route or retry later」，Cody 就该换人或者晚点再找他。
-- **Rex review 时觉得 #3 缺了验收标准**，就改了任务 #3 的卡片（`group_task` amend）：描述写上「Safari 和 Chrome 都要能登录；不加新依赖」。改卡片不用先认领，任何成员都能改，也不过发言前的检查。#3 这条消息一个字都不变，以后谁读到 #3，下面都附着当前的卡片：
+- **Rex 看的时候觉得 #3 缺了验收标准**，就补进任务 #3 的卡片（`group_task` amend）：描述写上「Safari 和 Chrome 都要能登录；不加新依赖」。改卡片不用先认领，任何成员都能改，也不过发言前的检查。#3 这条消息一个字都不变，以后谁读到 #3，下面都附着当前的卡片：
 
   ```
   [task #3 amended: the card supersedes this message's text (rev=3, by Rex, …)]

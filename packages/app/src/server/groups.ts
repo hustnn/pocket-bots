@@ -858,7 +858,9 @@ export class GroupChats {
         if (!result.ok) return `Not changed: ${result.reason}.`;
         this.lifecycleNote(groupId, result.task, this.statusNote(bot.name, groupId, result.task), bot.id);
         this.changed(groupId);
-        return `Task #${target} is now ${result.task.status}.${result.task.status === "done" ? " Say in the group what you did." : ""}`;
+        // With a leader, the leader sets done after checking a member's work it didn't do itself.
+        const report = result.task.status === "done" && !this.store.leader(groupId);
+        return `Task #${target} is now ${result.task.status}.${report ? " Say in the group what you did." : ""}`;
       }
       case "unclaim": {
         const result = this.store.unclaimTask(groupId, number(), me);

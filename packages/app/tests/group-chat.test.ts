@@ -349,9 +349,10 @@ describe("a group with a leader", () => {
     expect(leader).toContain("  - Writer: Writes · runs on Claude Code with claude-sonnet-5-5");
     expect(leader).toContain("reply in the same thread and @mention the member: the thread is the piece's context");
     expect(leader).not.toContain("Sub-agents:");
-    // The leader hands pieces out by @mention and sets them done: no claiming or splitting.
+    // The leader hands pieces out by @mention and sets them done: no claiming, splitting or in_review.
     expect(leader).not.toContain("Claim before acting");
     expect(leader).not.toContain("group_task create");
+    expect(leader).not.toContain("in_review");
     // The leader checks the result without repeating the checks the member reports it ran.
     expect(leader).toContain("check the result before you build on it or pass it on; checks the member reports it already ran don't need repeating.");
     const member = groupPrompt("Launch", { lead: { role: "member", leader: "Lead" } });
