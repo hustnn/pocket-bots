@@ -422,6 +422,16 @@ const MIGRATIONS: Migration[] = [
   (db) => {
     db.exec("UPDATE group_tasks SET status = 'done', completed_at = COALESCE(completed_at, updated_at) WHERE status = 'in_review'");
   },
+  // 20: extra folders, a JSON list beside the working folder, on a chat and on a group (its seats' chats
+  // carry a copy). `folders_told` is the list the chat's agent was last told: its session's system prompt
+  // carried it, or a note in front of an input did.
+  (db) => {
+    db.exec(`
+      ALTER TABLE chats ADD COLUMN extra_folders TEXT NOT NULL DEFAULT '[]';
+      ALTER TABLE chats ADD COLUMN folders_told TEXT;
+      ALTER TABLE groups ADD COLUMN extra_folders TEXT NOT NULL DEFAULT '[]';
+    `);
+  },
 ];
 
 /** How much of one message the search index takes: a long pasted attachment doesn't need all of it. */

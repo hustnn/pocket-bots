@@ -120,7 +120,7 @@ interface SessionSpec {
   mcpServers: Record<string, McpServerConfig>;  // bot 的 MCP 服务器，加上 pocket-bots 自己的
   trustedTools: string[];                       // 免审批："server" 或 "server/tool"
   hostedMcpServers?: string[];                  // pocket-bots 自己托管的服务器，适配器可改用原生方式提供
-  extraDirectories?: string[];                  // 记忆、技能目录（工作目录之外也免审批）
+  extraDirectories?: string[];                  // 记忆、技能目录和聊天的额外文件夹（工作目录之外）；只有 Claude 原生支持（additionalDirectories）
   approvals: ApprovalHandler;                   // 所有审批请求都回调到这里
   resume?: ResumeHandle;                        // agent 自己的会话 id，存在 SQLite 里
 }
@@ -264,7 +264,13 @@ skills/<name>/             这个 bot 用的技能（链接到共用的技能库
 uploads/                   聊天里上传的非文本文件
 ```
 
-托管目录同时就是 agent 的工作目录；选了自定义工作目录时，记忆和技能目录作为「额外可访问的目录」交给 agent，读写它们不弹审批。
+托管目录同时就是 agent 的工作目录；选了自定义工作目录时，记忆和技能目录作为「额外可访问的目录」交给 agent，读写它们不弹审批。**这只对 Claude 成立**：`SessionSpec.extraDirectories` 只有 Claude 适配器读（映射成 `additionalDirectories`），Codex、OpenCode、Pi、Grok 的适配器忽略它，能力位 `RuntimeCapabilities.additionalDirectories` 就是这个区别（只有 claude 为 true）；其他 CLI 上 agent 照样能按绝对路径访问这些目录，但可能弹审批。
+
+**聊天的额外文件夹**（`chats.extra_folders`，JSON 数组，上限 20）是主目录之外的另一组目录，主目录 `chats.cwd` 的规则不变（创建后固定）。创建聊天（`pocket.chats.start`）时给，之后用 `pocket.chats.folders` 整体替换；每一项和主目录一样经 `workFolder` 校验（`~/` 展开、必须是存在的绝对路径文件夹），去重、去掉和主目录相同的，超了抛 `RequestError`。`chatSpecs` 把它们并进 `extraDirectories`（和技能目录、bot 目录合并去重，不含主目录），并写进 system prompt 的「Extra folders」段（§5.2）。
+
+改已开聊天的额外文件夹时主目录没变，所以不新开会话、不带简报，而是**续接同一个会话**（`ChatService.setExtraFolders`）：会话空闲就关掉，下一次 open 带着 `resume` 和新的目录；正在跑的一轮不打断，标记「待换」，下一条在空闲时到的输入先关掉旧会话再续接。让 agent 知道最新的列表：新会话和每次都重发 system prompt 的 CLI（`keepsPromptOnResume` 为假）靠 system prompt；Claude、Codex 续接时不重发 prompt，所以 `chats.folders_told` 记着上次告诉 agent 的列表，续接时不一样就把一段 `<pocket-bots-folders-update>` 说明放在下一条输入前面（顺序在常驻 prompt 更新之后，成功送达后记下；`shared/extra-folders.ts`），聊天界面把它拆出来折叠成一行「Extra folders updated」。「Extra folders」段不进常驻 prompt（`volatile`），所以改目录不会触发整段 prompt 的补发。
+
+审批：额外文件夹不自动进信任列表；只有审批卡 **Allow in folder…** 的候选（`folderChoices`）会把请求所在的额外文件夹排在聊天主目录之后、上级目录之前。群座位的聊天不能单独改额外文件夹（`pocket.chats.folders` 抛 `RequestError`）；群的额外文件夹（`groups.extra_folders`）变了，`GroupChats` 把它同步写到每个座位聊天上（座位就是普通聊天，快照、prompt、审批候选都读自己这一列；新座位建好后再对一次，防止建座位期间群改了），再按上面的方式续接，不走换目录的新座位加简报。
 
 ### 5.2 system prompt
 
@@ -274,14 +280,15 @@ uploads/                   聊天里上传的非文本文件
 2. **Standing instructions**：你写的常驻指令；
 3. **Project guidance**：所有 bot 都有，固定一句话：开始一个聊天的第一个任务之前，先读工作目录里的 `AGENTS.md`（有的话）并照着做；常驻指令和你在聊天里说的优先。各个 CLI 启动时都没有开它们自己的项目文件加载（Claude 的 `settingSources` 是空的，Pi 带 `--no-context-files`），所以不写这一句，bot 不会去看仓库里的 AGENTS.md；
 4. **Group chat**：只有群聊座位才有，讲怎么在群里协作（§6.9）；
-5. **Memory**：`MEMORY.md` 的当前内容和记忆文件的约定。`memoryAutoWrite` 关闭时说记忆只读、值得记的事告诉用户，打开时说自己更新；这句写在常驻部分，切换开关会改变常驻 prompt；
-6. **Recent work**：最近两天每个聊天里 bot 最后说的话（来自每日日志），让新聊天知道最近在忙什么；
-7. **Skills**：技能名和「什么时候用」，bot 需要时自己读 `SKILL.md`；
-8. **Playbooks**：只放触发词出现在第一条消息里的那几个；
-9. **Connected apps**：能用的应用、账号和工具范围；
-10. **Bot tools**：pocket-bots 自己的工具怎么用。
+5. **Extra folders**：聊天有额外文件夹时，列出它们的绝对路径，说明可以按路径读写、操作可能要审批；
+6. **Memory**：`MEMORY.md` 的当前内容和记忆文件的约定。`memoryAutoWrite` 关闭时说记忆只读、值得记的事告诉用户，打开时说自己更新；这句写在常驻部分，切换开关会改变常驻 prompt；
+7. **Recent work**：最近两天每个聊天里 bot 最后说的话（来自每日日志），让新聊天知道最近在忙什么；
+8. **Skills**：技能名和「什么时候用」，bot 需要时自己读 `SKILL.md`；
+9. **Playbooks**：只放触发词出现在第一条消息里的那几个；
+10. **Connected apps**：能用的应用、账号和工具范围；
+11. **Bot tools**：pocket-bots 自己的工具怎么用。
 
-记忆内容和最近的工作每天都在变，算「易变」部分；其余是「常驻 prompt」，群聊座位按它的哈希判断要不要补发（§6.6）。只有群聊座位会补发：bot 自己的聊天不记常驻 prompt 的哈希，Claude Code 和 Codex 续接的老会话继续用开始时的写法，所以开关的兜底（下面）不依赖 prompt。
+记忆内容、最近的工作和额外文件夹的列表会变，算「易变」部分（额外文件夹的变化另有一段说明送达，见 §5.1）；其余是「常驻 prompt」，群聊座位按它的哈希判断要不要补发（§6.6）。只有群聊座位会补发：bot 自己的聊天不记常驻 prompt 的哈希，Claude Code 和 Codex 续接的老会话继续用开始时的写法，所以开关的兜底（下面）不依赖 prompt。
 
 ### 5.3 一轮对话
 
@@ -542,10 +549,12 @@ chats            id, bot_id, provider, model, thinking, mode, cwd, title, labels
                  standing_prompt       -- 会话按哪个常驻 prompt 的哈希跑
                  compaction_failures   -- 会话、模型、压缩连着失败几次
                  indexed_seq           -- 搜索索引补到了时间线的哪一条
+                 extra_folders         -- 主目录之外的额外文件夹（JSON 数组）；群座位是所在群的副本
+                 folders_told          -- 上次告诉 agent 的额外文件夹列表（JSON 数组）
 timeline         chat_id, key, seq_start, seq_end, turn_id, ts, item(JSON)   -- 合并过流式片段的时间线条目
 turns            chat_id, turn_id, started_at, ended_at, outcome, error, usage
 timeline_fts     FTS5 trigram：单聊里你和 bot 的消息
-groups … group_reminder_events、group_messages_fts   -- 见 §6.2
+groups … group_reminder_events、group_messages_fts   -- 见 §6.2；groups.extra_folders 是群的额外文件夹（JSON 数组）
 ```
 
 搜索（⌘K、聊天里的 ⌘F）用两张 FTS5 trigram 表：群消息发出时就进索引；单聊的回复是一点点流进来的，所以 `timeline_fts` 不在写入时维护，而是每次搜索前把各聊天新增的条目补进去。trigram 能查词的任意一部分和中文；不到三个字的词改成在命中的行里过滤。

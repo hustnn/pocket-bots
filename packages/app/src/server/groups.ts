@@ -63,7 +63,7 @@ import { dataPath } from "./bot-home";
 import { briefingPanel } from "./briefing";
 import { isBusy } from "./chat-service";
 import type { StartChatInput } from "./chats";
-import { botWorkingFolder, sendToChat, workFolder } from "./chats";
+import { botWorkingFolder, extraFolders, sendToChat, workFolder } from "./chats";
 import { RequestError } from "./errors";
 import type { PocketHost } from "./host";
 import {
@@ -333,6 +333,7 @@ export class GroupChats {
       wakeMode: group.wake_mode,
       leaderId: this.store.leader(group.id),
       cwd: group.cwd,
+      extraFolders: this.extraFoldersOf(group),
       muted: members.filter((member) => member.muted_from_seq !== null).map((member) => member.bot_id),
       unread: unread.length > 0,
       unreadThreads: unread.filter((place) => place.conv).map((place) => place.conv),
@@ -342,7 +343,7 @@ export class GroupChats {
   }
 
   /** A new group; with `leaderId`, that member plans and hands out the work; with `cwd`, every seat works in that folder. */
-  async create(input: { name?: string | null; memberIds: string[]; leaderId?: string | null; cwd?: string | null }): Promise<{ id: string }> {
+  async create(input: { name?: string | null; memberIds: string[]; leaderId?: string | null; cwd?: string | null; extraFolders?: string[] }): Promise<{ id: string }> {
     const memberIds = [...new Set(input.memberIds)];
     const problem = membersProblem(memberIds);
     if (problem) throw new RequestError(problem);
@@ -351,8 +352,9 @@ export class GroupChats {
     if (missing) throw new RequestError(`There's no bot with the id ${missing}.`);
     if (input.leaderId && !memberIds.includes(input.leaderId)) throw new RequestError("The leader must be one of the group's bots.");
     const cwd = input.cwd?.trim() ? await workFolder(input.cwd) : null;
+    const folders = input.extraFolders?.length ? await extraFolders(input.extraFolders, cwd) : [];
     const id = newGroupChatId();
-    this.store.createGroup({ id, name: input.name?.trim() || defaultGroupName(memberIds.map((botId) => bots.get(botId)!.name)), memberIds, leaderId: input.leaderId ?? null, cwd });
+    this.store.createGroup({ id, name: input.name?.trim() || defaultGroupName(memberIds.map((botId) => bots.get(botId)!.name)), memberIds, leaderId: input.leaderId ?? null, cwd, extraFolders: folders });
     this.changed(id);
     return { id };
   }
@@ -360,11 +362,13 @@ export class GroupChats {
   /**
    * `leaderId`: a member to lead the group, null for no leader; left out, the leader stays.
    * `cwd`: the folder its seats work in, null (or empty) for each bot's own; left out, it stays.
+   * `extraFolders`: the folders its seats may use besides it, replacing the list; left out, it stays.
    */
-  async update(groupId: string, input: { name?: string | null; memberIds?: string[] | null; wakeMode?: WakeMode | null; leaderId?: string | null; cwd?: string | null }): Promise<void> {
+  async update(groupId: string, input: { name?: string | null; memberIds?: string[] | null; wakeMode?: WakeMode | null; leaderId?: string | null; cwd?: string | null; extraFolders?: string[] }): Promise<void> {
     const group = this.require(groupId);
     // Checked before anything changes, so a folder that isn't there changes nothing.
     const cwd = input.cwd === undefined ? undefined : input.cwd?.trim() ? await workFolder(input.cwd) : null;
+    const folders = input.extraFolders === undefined ? undefined : await extraFolders(input.extraFolders, cwd === undefined ? group.cwd : cwd);
     if (input.name !== undefined && input.name !== null && input.name.trim()) this.store.updateGroup(groupId, { name: input.name.trim() });
     if (input.wakeMode) this.store.updateGroup(groupId, { wakeMode: input.wakeMode });
     const before = this.store.leader(groupId);
@@ -393,10 +397,31 @@ export class GroupChats {
     if (after !== before) await this.leaderNote(groupId, after);
     if (cwd !== undefined && cwd !== group.cwd) {
       this.store.updateGroup(groupId, { cwd });
+      // A working folder moved onto one of the extra folders leaves the list (a list sent with it was checked against it).
+      // Its seats start over in it, so they take the shorter list then: no note of its own.
+      if (cwd && folders === undefined && this.extraFoldersOf(group).includes(cwd)) this.store.updateGroup(groupId, { extraFolders: this.extraFoldersOf(group).filter((folder) => folder !== cwd) });
       // A session can't change folders: each seat moves the next time it starts a turn (pump).
       this.note(groupId, cwd ? `📁 the user set the group's working folder to ${cwd}: each bot's next turn here runs there.` : "📁 the user removed the group's working folder: each bot's next turn here runs in its own folder.", "group.folder", USER_ID);
     }
+    if (folders !== undefined && JSON.stringify(folders) !== JSON.stringify(this.extraFoldersOf(group))) await this.setExtraFolders(groupId, folders);
     this.changed(groupId);
+  }
+
+  private extraFoldersOf(group: GroupRow): string[] {
+    return JSON.parse(group.extra_folders) as string[];
+  }
+
+  /**
+   * The group's extra folders change. They aren't a working folder, so no seat starts over and
+   * none is briefed: each seat's chat takes the new list, an idle session resumes with it at its next
+   * input and a busy one when its turn is done. Nobody is woken for the note.
+   */
+  private async setExtraFolders(groupId: string, folders: string[]): Promise<void> {
+    this.store.updateGroup(groupId, { extraFolders: folders });
+    this.note(groupId, folders.length ? `📁 the user set the group's extra folders to ${folders.join(", ")}: each bot's next turn here can use them.` : "📁 the user removed the group's extra folders.", "group.folder", USER_ID);
+    for (const member of this.store.members(groupId)) {
+      if (member.seat_chat_id) await this.host.chats.setExtraFolders(member.seat_chat_id, folders).catch(() => undefined);
+    }
   }
 
   /** The folder a member's seat works in: the group's, or the bot's own. */
@@ -2014,6 +2039,7 @@ export class GroupChats {
           prompt: text,
           title: `Group · ${group.name}`,
           cwd: folder,
+          extraFolders: this.extraFoldersOf(this.store.group(groupId) ?? group),
           labels: { [GROUP_LABEL]: groupId },
           group: { id: groupId, name: group.name },
           clientMessageId,
@@ -2021,6 +2047,9 @@ export class GroupChats {
           ...(files.attachments.length ? { attachments: files.attachments } : {}),
         });
         this.store.setSeat(groupId, botId, chatId);
+        // The group's folders may have changed while the seat was starting, before it had a chat to copy them to.
+        const current = this.store.group(groupId);
+        if (current) await this.host.chats.setExtraFolders(chatId, this.extraFoldersOf(current)).catch(() => undefined);
         // It started: the spawn-fail backoff is over, and so is a run of spawn errors; a
         // crash-loop window opens.
         const started = this.spawnBackoffs.get(key);

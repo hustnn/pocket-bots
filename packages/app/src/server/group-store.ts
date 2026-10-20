@@ -52,6 +52,8 @@ export interface GroupRow {
   leader_id: string | null;
   /** The folder its seats work in; null: each bot's own. */
   cwd: string | null;
+  /** JSON list of the extra folders its seats may use besides the working folder. */
+  extra_folders: string;
   last_seq: number;
   created_at: string;
   updated_at: string;
@@ -241,19 +243,20 @@ export class GroupStore {
     return this.db.get<GroupRow>("SELECT * FROM groups WHERE id = ?", groupId) ?? null;
   }
 
-  createGroup(input: { id: string; name: string; memberIds: string[]; leaderId?: string | null; cwd?: string | null }): void {
+  createGroup(input: { id: string; name: string; memberIds: string[]; leaderId?: string | null; cwd?: string | null; extraFolders?: string[] }): void {
     const at = now();
     this.db.tx(() => {
-      this.db.run("INSERT INTO groups (id, name, wake_mode, leader_id, cwd, created_at, updated_at) VALUES (?, ?, 'everyone', ?, ?, ?, ?)", input.id, input.name, input.leaderId ?? null, input.cwd ?? null, at, at);
+      this.db.run("INSERT INTO groups (id, name, wake_mode, leader_id, cwd, extra_folders, created_at, updated_at) VALUES (?, ?, 'everyone', ?, ?, ?, ?, ?)", input.id, input.name, input.leaderId ?? null, input.cwd ?? null, JSON.stringify(input.extraFolders ?? []), at, at);
       for (const botId of input.memberIds) this.db.run("INSERT INTO group_members (group_id, bot_id) VALUES (?, ?)", input.id, botId);
     });
   }
 
-  updateGroup(groupId: string, patch: { name?: string; wakeMode?: WakeMode; leaderId?: string | null; cwd?: string | null }): void {
+  updateGroup(groupId: string, patch: { name?: string; wakeMode?: WakeMode; leaderId?: string | null; cwd?: string | null; extraFolders?: string[] }): void {
     if (patch.name !== undefined) this.db.run("UPDATE groups SET name = ?, updated_at = ? WHERE id = ?", patch.name, now(), groupId);
     if (patch.wakeMode !== undefined) this.db.run("UPDATE groups SET wake_mode = ? WHERE id = ?", patch.wakeMode, groupId);
     if (patch.leaderId !== undefined) this.db.run("UPDATE groups SET leader_id = ? WHERE id = ?", patch.leaderId, groupId);
     if (patch.cwd !== undefined) this.db.run("UPDATE groups SET cwd = ? WHERE id = ?", patch.cwd, groupId);
+    if (patch.extraFolders !== undefined) this.db.run("UPDATE groups SET extra_folders = ? WHERE id = ?", JSON.stringify(patch.extraFolders), groupId);
   }
 
   /** The group's leader while it's a member, or null. */

@@ -1,6 +1,7 @@
 import type { ChatSnapshot, ProvidersSnapshot, TimelinePage } from "./chat-types";
 import { z } from "zod";
 import { BotMcpServerSchema, BotSchema, McpServerConfigSchema, McpToolSchema, StoreSchema } from "./bot";
+import { MAX_EXTRA_FOLDERS } from "./extra-folders";
 import { GROUP_MAX_BOTS, GROUP_NAME_MAX, GroupMessageSchema, GroupSummarySchema, GroupTaskSchema, TaskStatusSchema, USER_TEXT_MAX, WakeModeSchema } from "./group-chat";
 import { ProposalSchema } from "./proposals";
 import { defineRpc } from "./rpc-core";
@@ -483,11 +484,24 @@ const ReplyQuote = z.string().max(20_000).optional();
 /** A folder on this computer a chat or a group works in: absolute, or under ~/. */
 const WorkFolder = z.string().max(4096);
 
-/** Starts a new chat with a bot; with `cwd`, in that folder instead of the bot's own. */
+/** Folders besides the working folder a chat or a group may use (at most MAX_EXTRA_FOLDERS; the server checks each). */
+const ExtraFolders = z.array(WorkFolder).max(MAX_EXTRA_FOLDERS);
+
+/** Starts a new chat with a bot; with `cwd`, in that folder instead of the bot's own; with `extraFolders`, using those folders too. */
 export const chatStartRpc = defineRpc({
   name: "pocket.chats.start",
-  input: z.object({ botId: BotId, ...MessageInput, cwd: WorkFolder.nullable().optional() }),
+  input: z.object({ botId: BotId, ...MessageInput, cwd: WorkFolder.nullable().optional(), extraFolders: ExtraFolders.optional() }),
   output: z.object({ chatId: z.string() }),
+});
+
+/**
+ * Replaces a chat's extra folders. Its working folder stays; the chat's session carries on with
+ * the new list (resumed once it's idle). Not for a group seat, whose folders are its group's.
+ */
+export const chatFoldersRpc = defineRpc({
+  name: "pocket.chats.folders",
+  input: z.object({ chatId: ChatId, extraFolders: ExtraFolders }),
+  output: z.object({ extraFolders: z.array(z.string()) }),
 });
 
 /** Sends a message to a chat; while it's working the message steers (default) or interrupts the current turn. */
@@ -636,8 +650,9 @@ export const groupCreateRpc = defineRpc({
   /**
    * `leaderId`: one of the bots, which plans and hands out the work; the others take only what it hands them.
    * `cwd`: the folder every bot's session for the group works in; without one, each works in its own.
+   * `extraFolders`: folders every bot may use besides it.
    */
-  input: z.object({ name: z.string().max(GROUP_NAME_MAX).nullable().optional(), memberIds: MemberIds, leaderId: z.string().min(1).nullable().optional(), cwd: WorkFolder.nullable().optional() }),
+  input: z.object({ name: z.string().max(GROUP_NAME_MAX).nullable().optional(), memberIds: MemberIds, leaderId: z.string().min(1).nullable().optional(), cwd: WorkFolder.nullable().optional(), extraFolders: ExtraFolders.optional() }),
   output: z.object({ groupId: z.string() }),
 });
 
@@ -653,6 +668,8 @@ export const groupUpdateRpc = defineRpc({
     leaderId: z.string().min(1).nullable().optional(),
     /** The group's working folder, or null for each bot's own; left out, it stays. */
     cwd: WorkFolder.nullable().optional(),
+    /** The group's extra folders, replacing the list; left out, it stays. */
+    extraFolders: ExtraFolders.optional(),
   }),
   output: z.object({ ok: z.boolean() }),
 });

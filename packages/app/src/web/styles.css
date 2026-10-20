@@ -1387,6 +1387,44 @@ pre {
   color: var(--fg);
 }
 
+/* An extra folder's chip: outlined, so it reads apart from the working folder's, and carries its remove button. */
+.folder-chip.extra {
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.folder-chip .folder-remove {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.6;
+}
+
+.folder-chip .folder-remove:hover {
+  opacity: 1;
+}
+
+/* A group's extra folders, under its title. */
+.group-folders {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Under the composer's bar: what extra folders mean on a CLI that reaches them by path. */
+.composer .folder-note {
+  padding: 0 10px 8px;
+  font-size: 12px;
+}
+
 .attachments {
   display: flex;
   flex-wrap: wrap;

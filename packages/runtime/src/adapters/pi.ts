@@ -70,7 +70,7 @@ export class PiAdapter implements RuntimeAdapter {
   readonly id = "pi" as const;
   readonly label = "Pi";
   // Pi has no sub-agent tool of its own (pi-subagents is an extension a user may or may not load).
-  readonly capabilities: RuntimeCapabilities = { steer: true, steerLands: "after_tool", steerAcceptance: "delivered", images: true, subAgents: false, keepsPromptOnResume: false, reportsCompaction: true };
+  readonly capabilities: RuntimeCapabilities = { steer: true, steerLands: "after_tool", steerAcceptance: "delivered", images: true, subAgents: false, keepsPromptOnResume: false, additionalDirectories: false, reportsCompaction: true };
   private readonly options: { binary?: string };
 
   constructor(options: { binary?: string } = {}) {

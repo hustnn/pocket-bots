@@ -39,9 +39,10 @@ export class Providers {
               models: models.map((model) => ({ ...model, ...(model.thinkingOptions?.find((option) => option.isDefault) ? { defaultThinkingOptionId: model.thinkingOptions.find((option) => option.isDefault)!.id } : {}) })),
               modes: adapter.modes(),
               defaultModeId: DEFAULT_MODES[adapter.id] ?? adapter.modes()[0]?.id ?? null,
+              additionalDirectories: adapter.capabilities.additionalDirectories,
             };
           } catch (error) {
-            return { provider: adapter.id, label: adapter.label, status: "error", enabled: false, error: error instanceof Error ? error.message : String(error), models: [], modes: [], defaultModeId: null };
+            return { provider: adapter.id, label: adapter.label, status: "error", enabled: false, error: error instanceof Error ? error.message : String(error), models: [], modes: [], defaultModeId: null, additionalDirectories: adapter.capabilities.additionalDirectories };
           }
         }),
     );

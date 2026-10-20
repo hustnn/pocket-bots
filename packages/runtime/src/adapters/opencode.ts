@@ -57,7 +57,7 @@ const COMPACT: SlashCommand = { name: "compact", description: "Summarize the con
 export class OpenCodeAdapter implements RuntimeAdapter {
   readonly id = "opencode" as const;
   readonly label = "OpenCode";
-  readonly capabilities: RuntimeCapabilities = { steer: true, steerLands: "after_tool", steerAcceptance: "delivered", images: false, subAgents: true, keepsPromptOnResume: false, reportsCompaction: true, questionTool: "question" };
+  readonly capabilities: RuntimeCapabilities = { steer: true, steerLands: "after_tool", steerAcceptance: "delivered", images: false, subAgents: true, keepsPromptOnResume: false, additionalDirectories: false, reportsCompaction: true, questionTool: "question" };
   private readonly options: { binary?: string };
   private modelCache: { at: number; models: ModelDef[] } | null = null;
 

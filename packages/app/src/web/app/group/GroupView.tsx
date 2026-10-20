@@ -16,7 +16,7 @@ import { markTermsIn, pendingTermsFor, placeKey } from "../../lib/highlight";
 import { MOD, useShortcut } from "../../lib/keys";
 import { navigate, replaceRoute } from "../../lib/router";
 import { QuestionForm } from "../chat/Cards";
-import { folderName } from "../folders";
+import { ExtraFolders, folderName, PATH_ACCESS_NOTE, useReachesFoldersByPath } from "../folders";
 import { GroupComposer, senderName } from "./GroupComposer";
 import { MembersDialog } from "./GroupDialogs";
 
@@ -709,6 +709,30 @@ function useVisible(): boolean {
   return visible;
 }
 
+/**
+ * The folders the group's bots may use besides their working folder: shown under the title,
+ * with a remove button on each and a "+" to add one. A change reaches each bot's seat without
+ * starting it over (the seat resumes with the new list).
+ */
+function GroupFolders({ group, providers }: { group: GroupSummary; providers: string[] }) {
+  const feedback = useFeedback();
+  const byPath = useReachesFoldersByPath(providers);
+  const change = async (extraFolders: string[]) => {
+    try {
+      await rpc(groupUpdateRpc, { groupId: group.id, extraFolders });
+    } catch (error) {
+      feedback.error(`Couldn't change the folders: ${errorText(error)}`);
+    }
+  };
+  return (
+    <div className="group-folders">
+      <span className="hint">Extra folders</span>
+      <ExtraFolders folders={group.extraFolders} exclude={group.cwd ? [group.cwd] : []} subject="group" onChange={(next) => void change(next)} />
+      {group.extraFolders.length > 0 && byPath ? <span className="hint">{PATH_ACCESS_NOTE}</span> : null}
+    </div>
+  );
+}
+
 export function GroupView({ groupId, at, atThread }: { groupId: string; at?: number; atThread?: number }) {
   const feedback = useFeedback();
   const groups = useGroups();
@@ -916,6 +940,7 @@ export function GroupView({ groupId, at, atThread }: { groupId: string; at?: num
         <IconButton icon="users" title="Members" onClick={() => setEditingMembers(true)} />
         <MenuButton title="Group actions" entries={menu} />
       </div>
+      <GroupFolders group={group} providers={members.map((bot) => bot.provider)} />
       {searching ? <SearchPanel groupId={groupId} signal={searching} onPick={(message) => {
             if (!message.thread) return show(message.seq);
             setBoard(false);
