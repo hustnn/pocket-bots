@@ -463,13 +463,16 @@ describe("group chats", () => {
       const texts = group.chats.items(before, 20).flatMap((item) => (item.type === "user_message" ? [item.text] : []));
       expect(texts.some((text) => text.includes("was renewed") || text.includes("your working folder for the group is now"))).toBe(false);
 
-      // The group's working folder moving still starts the seats over, with a briefing.
+      // The group's working folder moving still starts the seats over, with a briefing. Moved onto an
+      // extra folder, it leaves the list.
       await group.groups.update(group.id, { cwd: docs });
+      expect((await group.groups.list())[0]!.extraFolders).toEqual([repo]);
       await group.groups.postFromUser(group.id, { text: "third thing" });
       await until(async () => (await seatOf()) !== before && group.idle());
       expect(group.chats.get(before)?.archivedAt).toBeTruthy();
       // The folder it works in is not also an extra folder for it.
       expect(group.chats.get(await seatOf())?.cwd).toBe(docs);
+      expect(group.chats.get(await seatOf())?.extraFolders).toEqual([repo]);
       const last = group.fake.sessions.at(-1)!.spec.extraDirectories;
       expect(last).toContain(repo);
       expect(last).not.toContain(docs);

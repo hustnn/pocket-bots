@@ -397,6 +397,9 @@ export class GroupChats {
     if (after !== before) await this.leaderNote(groupId, after);
     if (cwd !== undefined && cwd !== group.cwd) {
       this.store.updateGroup(groupId, { cwd });
+      // A working folder moved onto one of the extra folders leaves the list (a list sent with it was checked against it).
+      // Its seats start over in it, so they take the shorter list then: no note of its own.
+      if (cwd && folders === undefined && this.extraFoldersOf(group).includes(cwd)) this.store.updateGroup(groupId, { extraFolders: this.extraFoldersOf(group).filter((folder) => folder !== cwd) });
       // A session can't change folders: each seat moves the next time it starts a turn (pump).
       this.note(groupId, cwd ? `📁 the user set the group's working folder to ${cwd}: each bot's next turn here runs there.` : "📁 the user removed the group's working folder: each bot's next turn here runs in its own folder.", "group.folder", USER_ID);
     }
