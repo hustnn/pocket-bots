@@ -163,6 +163,7 @@ export function ChatView({ bot, chatId, at, panelOpen, onTogglePanel }: { bot: B
           reply={chatId ? reply : null}
           onReplyChange={setReply}
           botFolder={bot.cwd}
+          botProvider={bot.provider}
           onStarted={(started) => navigate({ page: "bot", botId: bot.id, chatId: started })}
         />
       ) : null}

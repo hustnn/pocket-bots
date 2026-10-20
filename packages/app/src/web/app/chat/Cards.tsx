@@ -51,13 +51,13 @@ function permissionTitle(permission: Permission): string {
 }
 
 /** A permission request card: tool, plan and question requests. */
-export function PermissionCard({ chatId, permission, botId, cwd }: { chatId: string; permission: Permission; botId: string; cwd: string | null }) {
+export function PermissionCard({ chatId, permission, botId, cwd, extraFolders = [] }: { chatId: string; permission: Permission; botId: string; cwd: string | null; extraFolders?: readonly string[] }) {
   const feedback = useFeedback();
   const [busy, setBusy] = useState<string | null>(null);
   useEffect(() => setBusy(null), [permission.id]);
   const isPlan = permission.kind === "plan";
   const shell = cwd && permission.kind === "tool" ? shellCommand(permission, cwd) : null;
-  const folders = cwd ? folderChoices(permission, cwd) : [];
+  const folders = cwd ? folderChoices(permission, cwd, extraFolders) : [];
   const folderButton = useRef<HTMLSpanElement>(null);
   const [folderMenu, setFolderMenu] = useState<DOMRect | null>(null);
 

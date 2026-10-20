@@ -428,6 +428,57 @@ describe("group chats", () => {
     }
   });
 
+  it("gives the seats the group's extra folders, and resumes an idle seat with a changed list instead of starting it over", async () => {
+    const group = await setup(reads(() => null));
+    stop = group.stop;
+    const repo = await mkdtemp(join(tmpdir(), "bots-groups-repo-"));
+    const docs = await mkdtemp(join(tmpdir(), "bots-groups-docs-"));
+    try {
+      await expect(group.groups.update(group.id, { extraFolders: [join(repo, "missing")] })).rejects.toThrow("There's no folder at");
+      await group.groups.update(group.id, { extraFolders: [repo, repo, `${repo}/sub/..`] });
+      expect((await group.groups.list())[0]!.extraFolders).toEqual([repo]);
+      await group.groups.postFromUser(group.id, { text: "first thing" });
+      await until(() => group.chats.list({}).length === 2 && group.idle());
+      const seatOf = async () => (await group.groups.list())[0]!.seats.alpha!;
+      const before = await seatOf();
+      // The seats' chats carry the group's list, and their sessions got it as extra directories.
+      expect(group.chats.get(before)?.extraFolders).toEqual([repo]);
+      expect(group.fake.sessions.map((session) => session.spec.extraDirectories)).toEqual([[repo], [repo]]);
+
+      await group.groups.update(group.id, { extraFolders: [repo, docs] });
+      expect(await group.texts()).toContainEqual(`system: 📁 the user set the group's extra folders to ${repo}, ${docs}: each bot's next turn here can use them.`);
+      // Both idle sessions were closed, and nobody was woken for the note.
+      expect(group.fake.sessions.map((session) => session.state)).toEqual(["closed", "closed"]);
+      await settle(group);
+      expect(group.chats.get(before)?.extraFolders).toEqual([repo, docs]);
+      const sessions = group.fake.sessions.length;
+      await group.groups.postFromUser(group.id, { text: "second thing" });
+      await until(() => group.fake.sessions.length === sessions + 2 && group.idle());
+      // The same seat chats, resumed on the new list: no new seat, no briefing.
+      expect(await seatOf()).toBe(before);
+      expect(group.chats.get(before)?.archivedAt).toBeNull();
+      const resumed = group.fake.sessions.slice(sessions);
+      expect(resumed.every((session) => !!session.spec.resume)).toBe(true);
+      expect(resumed.map((session) => session.spec.extraDirectories)).toEqual([[repo, docs], [repo, docs]]);
+      const texts = group.chats.items(before, 20).flatMap((item) => (item.type === "user_message" ? [item.text] : []));
+      expect(texts.some((text) => text.includes("was renewed") || text.includes("your working folder for the group is now"))).toBe(false);
+
+      // The group's working folder moving still starts the seats over, with a briefing.
+      await group.groups.update(group.id, { cwd: docs });
+      await group.groups.postFromUser(group.id, { text: "third thing" });
+      await until(async () => (await seatOf()) !== before && group.idle());
+      expect(group.chats.get(before)?.archivedAt).toBeTruthy();
+      // The folder it works in is not also an extra folder for it.
+      expect(group.chats.get(await seatOf())?.cwd).toBe(docs);
+      const last = group.fake.sessions.at(-1)!.spec.extraDirectories;
+      expect(last).toContain(repo);
+      expect(last).not.toContain(docs);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+      await rm(docs, { recursive: true, force: true });
+    }
+  });
+
   it("lets the user claim, move along, unclaim, react to and search messages; a task's changes are noted in its thread", async () => {
     let wakes = 0;
     const group = await setup((turn, step) => {

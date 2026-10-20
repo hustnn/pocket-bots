@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { APPS_MCP_NAME, appsPrompt, type PromptApp } from "./apps";
 import { botToolsPrompt, TOOLS_MCP_NAME } from "./bot-tools";
+import { extraFoldersText } from "./extra-folders";
 import { renderPlaybooks } from "./playbooks";
 
 /** Agent label carrying the bot id. */
@@ -358,6 +359,8 @@ export interface PromptContext {
   botTools: boolean | "seat" | "led";
   /** The connected apps the bot may use; empty when it has none. */
   apps: PromptApp[];
+  /** The chat's extra folders besides its working folder (extra-folders.ts). */
+  folders?: string[];
 }
 
 export interface PromptSection {
@@ -396,6 +399,8 @@ export function promptSections(bot: Bot, context: PromptContext, { volatile = tr
   }
   sections.push({ title: "Project guidance", text: PROJECT_GUIDANCE });
   if (context.group) sections.push({ title: "Group chat", text: context.group });
+  // Not in the standing prompt: a change to the list reaches a resumed session as its own note (foldersUpdate).
+  if (volatile && context.folders?.length) sections.push({ title: "Extra folders", text: extraFoldersText(context.folders) });
   if (context.memoryPath) {
     const body = !volatile ? "" : context.memory.trim() ? `\n\nCurrent memory:\n${context.memory.trim()}` : "\n\nYour memory is empty so far.";
     // The daily log is the app's own record, kept whether or not the bot may write its memory.

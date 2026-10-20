@@ -7,6 +7,7 @@ import { groupDelivery } from "../../../shared/group-chat";
 import { peerMessage, type PeerMessage } from "../../../shared/peers";
 import { proposalIdOf } from "../../../shared/proposals";
 import { parseReply } from "../../../shared/reply";
+import { splitFoldersUpdate } from "../../../shared/extra-folders";
 import { splitStandingUpdate } from "../../../shared/standing-prompt";
 import type { BotVoice } from "../../../shared/bot";
 import type { ChatCard, TimelineEntry } from "../../../shared/rpc";
@@ -300,7 +301,8 @@ const Row = memo(function Row({ item, chatId, botId, cwd, voice, onReply, onShow
   switch (row.kind) {
     case "user": {
       // A resumed seat's first input can carry its updated instructions in front of what was sent.
-      const { standing, text } = splitStandingUpdate(row.text);
+      const { standing, text: afterStanding } = splitStandingUpdate(row.text);
+      const { folders, text } = splitFoldersUpdate(afterStanding);
       const delivery = groupDelivery(text);
       const peer = delivery ? null : peerMessage(text);
       const message = delivery ? (
@@ -308,14 +310,15 @@ const Row = memo(function Row({ item, chatId, botId, cwd, voice, onReply, onShow
       ) : peer ? (
         <PeerRow peer={peer} />
       ) : (
-        <UserMessage row={standing === null ? row : { ...row, text }} onShowQuote={onShowQuote} />
+        <UserMessage row={standing === null && folders === null ? row : { ...row, text }} onShowQuote={onShowQuote} />
       );
       body =
-        standing === null ? (
+        standing === null && folders === null ? (
           message
         ) : (
           <>
-            <FoldedInput icon="refresh" title="Instructions updated" body={standing} />
+            {standing === null ? null : <FoldedInput icon="refresh" title="Instructions updated" body={standing} />}
+            {folders === null ? null : <FoldedInput icon="folder" title="Extra folders updated" body={folders} />}
             {message}
           </>
         );
@@ -529,7 +532,7 @@ export function Stream({
             </div>
           ) : null}
           {permissions.map((permission) => (
-            <PermissionCard key={permission.id} chatId={chatId} permission={permission} botId={botId} cwd={agent?.cwd ?? null} />
+            <PermissionCard key={permission.id} chatId={chatId} permission={permission} botId={botId} cwd={agent?.cwd ?? null} extraFolders={agent?.extraFolders} />
           ))}
           {agent?.status === "error" && agent.lastError ? <div className="notice error">{agent.lastError}</div> : null}
         </div>

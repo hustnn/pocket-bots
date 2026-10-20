@@ -11,6 +11,8 @@ export interface ChatSnapshot {
   provider: ProviderId;
   model: string | null;
   cwd: string;
+  /** Folders besides `cwd` the chat's agent may use; a group seat's are its group's. */
+  extraFolders: string[];
   title: string | null;
   labels: Record<string, string>;
   status: ChatStatus;
@@ -70,6 +72,8 @@ export interface ProviderEntry {
   models: (ModelDef & { isSelectable?: boolean; defaultThinkingOptionId?: string })[];
   modes: ModeDef[];
   defaultModeId: string | null;
+  /** The CLI takes extra folders natively (Claude); the others reach them by path, and the user may be asked. */
+  additionalDirectories: boolean;
 }
 
 export interface ProvidersSnapshot {

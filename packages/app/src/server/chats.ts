@@ -9,6 +9,7 @@ import { QUIET_TOOLS, TOOLS_MCP_NAME } from "../shared/bot-tools";
 import { GROUP_LABEL, type GroupLead } from "../shared/group-chat";
 import { replyText } from "../shared/reply";
 import { expandLearn } from "../shared/skills";
+import { MAX_EXTRA_FOLDERS, splitFoldersUpdate } from "../shared/extra-folders";
 import { splitStandingUpdate } from "../shared/standing-prompt";
 import { newUuid } from "../shared/uuid";
 import { botDataPath, ensureBotHome } from "./bot-home";
@@ -31,6 +32,8 @@ export interface StartChatInput {
   group?: { id: string; name: string };
   /** The folder the chat works in (see workFolder), instead of the bot's own. */
   cwd?: string;
+  /** The chat's extra folders, already checked (see extraFolders). */
+  extraFolders?: string[];
 }
 
 /** Where a bot's chats run: its own folder of yours, or its folder in the data directory. */
@@ -51,6 +54,21 @@ export async function workFolder(raw: string): Promise<string> {
   if (!found) throw new RequestError(`There's no folder at ${folder}.`);
   if (!found.isDirectory()) throw new RequestError(`${folder} is a file, not a folder.`);
   return folder;
+}
+
+/**
+ * The extra folders a user picked for a chat or a group, as they're stored: each checked like a
+ * working folder, without repeats and without `primary` (the working folder), at most MAX_EXTRA_FOLDERS.
+ * Throws a RequestError for the first one that isn't a folder.
+ */
+export async function extraFolders(raw: readonly string[], primary: string | null): Promise<string[]> {
+  const folders: string[] = [];
+  for (const entry of raw) {
+    const folder = await workFolder(entry);
+    if (folder !== primary && !folders.includes(folder)) folders.push(folder);
+  }
+  if (folders.length > MAX_EXTRA_FOLDERS) throw new RequestError(`A chat takes at most ${MAX_EXTRA_FOLDERS} extra folders.`);
+  return folders;
 }
 
 /**
@@ -81,6 +99,7 @@ export async function startChat(host: PocketHost, bot: Bot, input: StartChatInpu
       thinking: bot.thinkingOptionId,
       mode: bot.modeId,
       cwd: input.cwd ?? botWorkingFolder(bot),
+      ...(input.extraFolders?.length ? { extraFolders: input.extraFolders } : {}),
       ...(input.title ? { title: input.title } : {}),
       labels: { [POCKET_LABEL]: "1", [BOT_LABEL]: bot.id, ...(input.group ? { [GROUP_LABEL]: input.group.id } : {}), ...input.labels },
     },
@@ -110,8 +129,10 @@ export function chatSpecs(host: PocketHost, relay: Relay, seatGroup: SeatGroupLo
     const subAgents = capabilities?.subAgents ?? false;
     const questionTool = capabilities?.questionTool;
     // The playbooks follow the chat's first message as typed, without a standing-prompt update in front of it.
-    const message = first?.type === "user_message" ? splitStandingUpdate(first.text).text : (chat.title ?? "");
-    const { systemPrompt: system, standingPrompt } = await systemPrompt({ bot, message, ...(group ? { group: { name: group.name, subAgents, ...(questionTool ? { questionTool } : {}), ...(group.lead ? { lead: group.lead } : {}) } } : {}) }, library);
+    const message = first?.type === "user_message" ? splitFoldersUpdate(splitStandingUpdate(first.text).text).text : (chat.title ?? "");
+    // The chat's own list; a seat's is a copy of its group's (GroupChats keeps them equal). Never the working folder itself.
+    const folders = [...new Set(chat.extraFolders)].filter((folder) => folder !== chat.cwd);
+    const { systemPrompt: system, standingPrompt } = await systemPrompt({ bot, message, folders, ...(group ? { group: { name: group.name, subAgents, ...(questionTool ? { questionTool } : {}), ...(group.lead ? { lead: group.lead } : {}) } } : {}) }, library);
     const mcpServers: Record<string, import("@pocket-bots/runtime").McpServerConfig> = { ...mcpServersRecord(botMcpServers(bot, library)) };
     const tools = await relay.mountTools(bot.id, chat.id, groupId);
     if (tools) mcpServers[TOOLS_MCP_NAME] = tools;
@@ -122,7 +143,7 @@ export function chatSpecs(host: PocketHost, relay: Relay, seatGroup: SeatGroupLo
     const trusted = [...QUIET_TOOLS, ...(bot.contactBots === "allow" ? ["ask_bot"] : [])].map((tool) => `${TOOLS_MCP_NAME}/${tool}`);
     const granted = bot.alwaysAllow.filter((entry) => /^[^/\s]+\/[^/\s]+$/.test(entry) && entry.split("/")[0]! in mcpServers);
     // A seat's standing prompt reaches its resumed session when it changes (see ChatService).
-    return { systemPrompt: system, mcpServers, trustedTools: [...trusted, ...granted], hostedMcpServers: tools ? [TOOLS_MCP_NAME] : [], extraDirectories: botDirectories(bot, library, chat.cwd), ...(groupId ? { standingPrompt } : {}) };
+    return { systemPrompt: system, mcpServers, trustedTools: [...trusted, ...granted], hostedMcpServers: tools ? [TOOLS_MCP_NAME] : [], extraDirectories: [...new Set([...botDirectories(bot, library, chat.cwd), ...folders])].filter((folder) => folder !== chat.cwd), folders, ...(groupId ? { standingPrompt } : {}) };
   };
 }
 

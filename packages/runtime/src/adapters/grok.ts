@@ -31,7 +31,7 @@ export class GrokAdapter implements RuntimeAdapter {
   readonly id = "grok" as const;
   readonly label = "Grok Build";
   // Sub-agents: Grok's task tool (spawn_subagent), on unless GROK_SUBAGENTS=0 or [subagents] enabled = false.
-  readonly capabilities: RuntimeCapabilities = { steer: true, steerLands: "after_tool", steerAcceptance: "queued", images: false, subAgents: true, keepsPromptOnResume: false, reportsCompaction: false, questionTool: "ask_user_question" };
+  readonly capabilities: RuntimeCapabilities = { steer: true, steerLands: "after_tool", steerAcceptance: "queued", images: false, subAgents: true, keepsPromptOnResume: false, additionalDirectories: false, reportsCompaction: false, questionTool: "ask_user_question" };
   private readonly options: { binary?: string };
   private modelCache: { at: number; models: ModelDef[] } | null = null;
 

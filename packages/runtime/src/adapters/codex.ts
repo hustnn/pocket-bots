@@ -53,7 +53,7 @@ export class CodexAdapter implements RuntimeAdapter {
   readonly label = "Codex";
   // Sub-agents: spawn_agent, from Codex's multi_agent feature (stable, on by default). No questionTool:
   // request_user_input is only offered in plan mode (default_mode_request_user_input is under development).
-  readonly capabilities: RuntimeCapabilities = { steer: true, steerLands: "next_step", steerAcceptance: "delivered", images: true, subAgents: true, keepsPromptOnResume: true, reportsCompaction: true };
+  readonly capabilities: RuntimeCapabilities = { steer: true, steerLands: "next_step", steerAcceptance: "delivered", images: true, subAgents: true, keepsPromptOnResume: true, additionalDirectories: false, reportsCompaction: true };
   private readonly options: { binary?: string };
   private modelCache: { at: number; models: ModelDef[] } | null = null;
 

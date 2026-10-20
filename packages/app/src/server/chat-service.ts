@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { SQLInputValue } from "node:sqlite";
 import type { ApprovalDecision, ApprovalRequest, ContextUsage, ProviderId, ResumeHandle, RuntimeAdapter, RuntimeEvent, RuntimeSession, SendResult, SessionSpec, SlashCommand, TimelineItem } from "@pocket-bots/runtime";
 import type { ChatSnapshot, ChatStatus, TimelineCursor, TimelineEntry, TimelinePage } from "../shared/chat-types";
+import { foldersUpdate } from "../shared/extra-folders";
 import { standingPromptUpdate } from "../shared/standing-prompt";
 import { TIMELINE_INDEX_CHARS, type Db } from "./db";
 import { RequestError } from "./errors";
@@ -102,6 +103,8 @@ export interface NewChat {
   thinking?: string | null;
   mode?: string | null;
   cwd: string;
+  /** Folders besides `cwd` the agent may use (checked by the caller). */
+  extraFolders?: string[];
   title?: string | null;
   labels?: Record<string, string>;
 }
@@ -129,6 +132,7 @@ export interface ChatRecord {
   thinking: string | null;
   mode: string | null;
   cwd: string;
+  extraFolders: string[];
   title: string | null;
   labels: Record<string, string>;
 }
@@ -139,7 +143,7 @@ export interface ChatRecord {
  * a runtime that keeps a resumed session's first prompt, a change to it is delivered with the
  * first input after the resume (see standingPromptUpdate).
  */
-export type SpecBuilder = (chat: ChatRecord) => Promise<Pick<SessionSpec, "systemPrompt" | "mcpServers" | "trustedTools"> & Partial<Pick<SessionSpec, "env" | "extraDirectories" | "hostedMcpServers">> & { standingPrompt?: string }>;
+export type SpecBuilder = (chat: ChatRecord) => Promise<Pick<SessionSpec, "systemPrompt" | "mcpServers" | "trustedTools"> & Partial<Pick<SessionSpec, "env" | "extraDirectories" | "hostedMcpServers">> & { standingPrompt?: string; folders?: string[] }>;
 /** Answers an approval without the user (a saved command), or null to ask them. */
 export type ApprovalPolicy = (chat: ChatSnapshot, request: ApprovalRequest) => Promise<ApprovalDecision | null>;
 
@@ -159,6 +163,8 @@ interface ChatRow {
   thinking: string | null;
   mode: string | null;
   cwd: string;
+  extra_folders: string;
+  folders_told: string | null;
   title: string | null;
   labels: string;
   resume: string | null;
@@ -281,6 +287,10 @@ export class ChatService {
   private readonly flushTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** Per open session: the standing prompt hash to record once the runtime names its session, and the update its first input owes. */
   private readonly standing = new Map<string, { hash: string; update: string | null; resumed: string | null }>();
+  /** Per open session whose agent hasn't been told the chat's current extra folders: the note its next input carries. */
+  private readonly foldersOwed = new Map<string, { folders: string[]; text: string }>();
+  /** Chats whose extra folders changed under a session that was busy: it reopens (resumed) at its next idle input. */
+  private readonly foldersStale = new Set<string>();
   private reaper: ReturnType<typeof setInterval> | null = null;
   private progressCheck: ReturnType<typeof setInterval> | null = null;
 
@@ -462,7 +472,7 @@ export class ChatService {
     const at = now();
     const title = (input.title ?? (first ? titleFrom(first.text) : null))?.slice(0, TITLE_MAX) ?? null;
     this.db.run(
-      `INSERT INTO chats (id, bot_id, provider, model, thinking, mode, cwd, title, labels, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)`,
+      `INSERT INTO chats (id, bot_id, provider, model, thinking, mode, cwd, extra_folders, title, labels, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)`,
       id,
       input.botId,
       input.provider,
@@ -470,6 +480,7 @@ export class ChatService {
       input.thinking ?? null,
       input.mode ?? null,
       input.cwd,
+      JSON.stringify(input.extraFolders ?? []),
       title,
       JSON.stringify(input.labels ?? {}),
       at,
@@ -501,6 +512,8 @@ export class ChatService {
     } else {
       // A start writing its first input goes first; what follows goes to its session.
       if (start) await start.done;
+      // Extra folders changed while the session was busy: now it's idle, it reopens (resumed) with the new list.
+      if (this.foldersStale.has(chatId) && this.idle(chatId)) await this.closeSession(chatId);
       const live = this.live.get(chatId);
       if (live && live.session.state !== "closed") result = await this.write(chatId, live.session, outgoing, false);
       else if (start) result = startResult(await start.done);
@@ -579,6 +592,29 @@ export class ChatService {
     this.updated(chatId);
   }
 
+  /**
+   * Sets the chat's extra folders (checked by the caller). The working folder doesn't change, so the
+   * chat isn't started over: an idle session closes now and the next input resumes it with the new
+   * list; a busy one is left to finish its turn and reopens at its next idle input. A closed session
+   * simply opens with the new list.
+   */
+  async setExtraFolders(chatId: string, folders: string[]): Promise<void> {
+    const row = this.db.get<ChatRow>("SELECT * FROM chats WHERE id = ?", chatId);
+    if (!row) throw new RequestError("This chat doesn't exist.");
+    if (row.extra_folders === JSON.stringify(folders)) return;
+    this.db.run("UPDATE chats SET extra_folders = ? WHERE id = ?", JSON.stringify(folders), chatId);
+    this.updated(chatId);
+    if (!this.live.has(chatId) && !this.starts.has(chatId)) return;
+    if (this.idle(chatId)) await this.closeSession(chatId);
+    else this.foldersStale.add(chatId);
+  }
+
+  /** The chat has an open session that's waiting for input: nothing running, starting or waiting on the user. */
+  private idle(chatId: string): boolean {
+    const live = this.live.get(chatId);
+    return !!live && live.session.state === "idle" && !live.start && !this.starts.has(chatId) && !this.approvals.get(chatId)?.size;
+  }
+
   /** The user looked at the chat. */
   clearAttention(chatId: string): void {
     this.db.run("UPDATE chats SET attention = NULL WHERE id = ? AND attention IN ('finished', 'error')", chatId);
@@ -612,7 +648,7 @@ export class ChatService {
   // ---------------------------------------------------------------- sessions
 
   private recordOf(row: ChatRow): ChatRecord {
-    return { id: row.id, botId: row.bot_id, provider: row.provider as ProviderId, model: row.model, thinking: row.thinking, mode: row.mode, cwd: row.cwd, title: row.title, labels: JSON.parse(row.labels) };
+    return { id: row.id, botId: row.bot_id, provider: row.provider as ProviderId, model: row.model, thinking: row.thinking, mode: row.mode, cwd: row.cwd, extraFolders: JSON.parse(row.extra_folders), title: row.title, labels: JSON.parse(row.labels) };
   }
 
   /** The chat's running session, or the one a start (its own, if none is under way) opens. */
@@ -753,6 +789,7 @@ export class ChatService {
     if (live.compaction) clearTimeout(live.compaction.timer);
     live.compaction = null;
     this.standing.delete(chatId);
+    this.foldersOwed.delete(chatId);
   }
 
   private label(provider: string): string {
@@ -775,7 +812,9 @@ export class ChatService {
     const adapter = this.runtimes.get(row.provider as ProviderId);
     if (!adapter) throw new Error(`${row.provider} isn't available here.`);
     const record = this.recordOf(row);
-    const { standingPrompt, ...extra } = await this.specFor(record);
+    // Cleared before the spec is built: a change made from here on marks it again.
+    this.foldersStale.delete(row.id);
+    const { standingPrompt, folders, ...extra } = await this.specFor(record);
     let resume = row.resume ? (JSON.parse(row.resume) as ResumeHandle) : undefined;
     // A session whose compaction keeps failing isn't resumed (every resume would fail the same
     // way): a new one starts instead, and the chat says so.
@@ -817,6 +856,7 @@ export class ChatService {
     this.live.set(row.id, { session, off, lastActive: Date.now(), lastEventAt: Date.now(), turnStartedAt: null, start, unaccepted: new Map(), aliases: new Map(), stallNoted: false, compaction: null });
     this.standing.delete(row.id);
     if (standingPrompt !== undefined && adapter.capabilities.keepsPromptOnResume) this.planStanding(row, standingPrompt, resume?.sessionId ?? null);
+    this.planFolders(row, folders ?? [], !!resume && adapter.capabilities.keepsPromptOnResume);
     // Codex, Grok, OpenCode and Pi name their session while opening, before anyone listens: its
     // handle is taken from the session, or the chat could never be resumed.
     if (session.handle) this.handleEvent(row.id, { type: "session_ready", handle: session.handle });
@@ -848,6 +888,24 @@ export class ChatService {
     else if (recorded.hash !== hash) this.standing.set(row.id, { hash, update: standingPromptUpdate(standingPrompt), resumed });
   }
 
+  /**
+   * What the agent knows of the chat's extra folders. A session whose system prompt is built now
+   * (a new one, or a runtime that takes the prompt again on every open) has the list in it. One that
+   * keeps the prompt it started with (`kept`) is told the list in front of its next input when it
+   * isn't the list it was last told.
+   */
+  private planFolders(row: ChatRow, folders: string[], kept: boolean): void {
+    this.foldersOwed.delete(row.id);
+    const told = row.folders_told ? (JSON.parse(row.folders_told) as string[]) : [];
+    if (JSON.stringify(told) === JSON.stringify(folders)) return;
+    if (kept) this.foldersOwed.set(row.id, { folders, text: foldersUpdate(folders) });
+    else this.recordFolders(row.id, folders);
+  }
+
+  private recordFolders(chatId: string, folders: string[]): void {
+    this.db.run("UPDATE chats SET folders_told = ? WHERE id = ?", JSON.stringify(folders), chatId);
+  }
+
   private recordStanding(chatId: string, sessionId: string, hash: string): void {
     this.db.run("UPDATE chats SET standing_prompt = ? WHERE id = ?", JSON.stringify({ sessionId, hash, recordedAt: now() }), chatId);
   }
@@ -866,6 +924,7 @@ export class ChatService {
     if (live.start) this.cancelStart(live.start, "The chat was closed.");
     this.live.delete(chatId);
     this.standing.delete(chatId);
+    this.foldersOwed.delete(chatId);
     if (live.compaction) clearTimeout(live.compaction.timer);
     live.compaction = null;
     for (const [requestId, pending] of this.approvals.get(chatId) ?? []) {
@@ -909,7 +968,8 @@ export class ChatService {
   private async write(chatId: string, session: RuntimeSession, input: Outgoing, inStart: boolean): Promise<SendResult> {
     const live = this.live.get(chatId);
     const owed = this.standing.get(chatId);
-    const text = owed?.update ? `${owed.update}${input.message.text}` : input.message.text;
+    const told = this.foldersOwed.get(chatId);
+    const text = `${owed?.update ?? ""}${told?.text ?? ""}${input.message.text}`;
     const watch = !inStart && live && !session.activeTurnId && session.liveTurn !== undefined ? this.watchTurnStart(chatId, live) : null;
     // Recorded before the send: a runtime may take the input in before send() returns.
     const pending = { ...input, as: "turn" as "turn" | "steer" | "queued" };
@@ -926,6 +986,10 @@ export class ChatService {
     if (result.ok && owed?.update) {
       this.recordStanding(chatId, session.handle?.sessionId ?? owed.resumed!, owed.hash);
       this.standing.delete(chatId);
+    }
+    if (result.ok && told && this.foldersOwed.get(chatId) === told) {
+      this.recordFolders(chatId, told.folders);
+      this.foldersOwed.delete(chatId);
     }
     if (live) {
       if (!result.ok) {
@@ -1288,6 +1352,7 @@ export class ChatService {
       provider: row.provider as ProviderId,
       model: row.model,
       cwd: row.cwd,
+      extraFolders: JSON.parse(row.extra_folders),
       title: row.title,
       labels: JSON.parse(row.labels),
       status,

@@ -190,6 +190,8 @@ export const GroupSummarySchema = z.object({
   leaderId: z.string().nullable().default(null),
   /** The folder every member's session for the group works in; null: each works in its own. */
   cwd: z.string().nullable().default(null),
+  /** Folders besides the working folder every member's session may use. */
+  extraFolders: z.array(z.string()).default([]),
   /** Members that only wake when addressed. */
   muted: z.array(z.string()),
   /** Something the user hasn't read: at the top level or in a thread they follow. */

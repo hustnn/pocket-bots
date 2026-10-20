@@ -41,6 +41,8 @@ export interface ChatStart {
    * `lead` its part when the group has a leader.
    */
   group?: SeatGroupPrompt;
+  /** The chat's extra folders, listed in the prompt. */
+  folders?: string[];
 }
 
 /**
@@ -52,7 +54,8 @@ export async function promptContext(bot: Bot, local: boolean, library: Library, 
   const playbooks = selectPlaybooks(start.message ?? "", bot.playbooks);
   const group = start.group ? groupPrompt(start.group.name, { subAgents: start.group.subAgents ?? false, ...(start.group.questionTool ? { questionTool: start.group.questionTool } : {}), ...(start.group.lead ? { lead: start.group.lead } : {}) }) : null;
   // Connected apps go through this host's relay, so bots on other hosts can't reach them.
-  if (!local) return { memory: "", memoryPath: null, recentWork: [], playbooks, group, skills: [], botTools: false, apps: [] };
+  const folders = start.folders ?? [];
+  if (!local) return { memory: "", memoryPath: null, recentWork: [], playbooks, group, skills: [], botTools: false, apps: [], folders };
   // Only skills whose SKILL.md is still what the user reviewed.
   const skills: typeof library.skills = [];
   for (const skill of botSkills(bot, library)) {
@@ -72,6 +75,7 @@ export async function promptContext(bot: Bot, local: boolean, library: Library, 
     // A seat has no setup tools (tools/mcp.ts ownChat), and a led member's is listed only the tools for its piece (ledMember).
     botTools: start.group ? (start.group.lead?.role === "member" ? "led" : "seat") : true,
     apps: await botApps(bot),
+    folders,
   };
 }
 
@@ -79,8 +83,8 @@ export async function promptContext(bot: Bot, local: boolean, library: Library, 
  * The system prompt for a new chat; a group chat's seat names its group. `standingPrompt` is the
  * same without the parts that change from day to day (see promptSections).
  */
-export async function systemPrompt({ bot, message, group }: { bot: Bot; message?: string; group?: SeatGroupPrompt }, library: Library) {
-  const start: ChatStart = { ...(message !== undefined ? { message } : {}), ...(group ? { group } : {}) };
+export async function systemPrompt({ bot, message, group, folders }: { bot: Bot; message?: string; group?: SeatGroupPrompt; folders?: string[] }, library: Library) {
+  const start: ChatStart = { ...(message !== undefined ? { message } : {}), ...(group ? { group } : {}), ...(folders?.length ? { folders } : {}) };
   const context = await promptContext(bot, true, library, start);
   return { systemPrompt: composeSystemPrompt(bot, context), standingPrompt: composeSystemPrompt(bot, context, { volatile: false }), sections: promptSections(bot, context) };
 }

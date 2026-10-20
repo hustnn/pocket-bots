@@ -80,6 +80,7 @@ export interface Sent {
 export function fakeChats(chats: Record<string, FakeChat>) {
   const sent: Sent[] = [];
   const archived: string[] = [];
+  const folderSets: { chatId: string; folders: string[] }[] = [];
   let failures = 0;
   const snapshot = (id: string) => {
     const chat = chats[id];
@@ -89,6 +90,7 @@ export function fakeChats(chats: Record<string, FakeChat>) {
       provider: "claude",
       model: null,
       cwd: chat.cwd ?? "/tmp",
+      extraFolders: [],
       title: chat.title ?? null,
       labels: chat.labels ?? {},
       status: chat.status,
@@ -109,6 +111,7 @@ export function fakeChats(chats: Record<string, FakeChat>) {
   const service = {
     sent,
     archived,
+    folderSets,
     failNext: () => void failures++,
     get: snapshot,
     items,
@@ -136,6 +139,9 @@ export function fakeChats(chats: Record<string, FakeChat>) {
     },
     archive: async (chatId: string) => {
       archived.push(chatId);
+    },
+    setExtraFolders: async (chatId: string, folders: string[]) => {
+      folderSets.push({ chatId, folders });
     },
     on: () => () => {},
   };

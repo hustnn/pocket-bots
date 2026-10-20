@@ -19,9 +19,10 @@ const within = (folder: string, path: string) => path === folder || path.startsW
  * The folders the user can trust a bot with from a request's approval card, likeliest first: the
  * chat's folder when the request works inside it, then the folder the request works in (a
  * command's folder, a file's folder) and the folders above it. Only absolute paths, and none
- * as broad as the home folder; empty when the request isn't about a command or a file.
+ * as broad as the home folder; empty when the request isn't about a command or a file. When the
+ * request works inside one of the chat's extra folders, that folder comes next after the chat's own.
  */
-export function folderChoices(request: { kind?: string; detail?: unknown; input?: unknown }, cwd: string): string[] {
+export function folderChoices(request: { kind?: string; detail?: unknown; input?: unknown }, cwd: string, extraFolders: readonly string[] = []): string[] {
   if (request.kind !== undefined && request.kind !== "tool") return [];
   const detail = request.detail as { type?: unknown; cwd?: unknown; filePath?: unknown; toolName?: unknown } | undefined;
   const input = (request.input ?? {}) as { path?: unknown; paths?: unknown };
@@ -34,6 +35,9 @@ export function folderChoices(request: { kind?: string; detail?: unknown; input?
   if (!folder || folder.startsWith("~")) return [];
   const choices: string[] = [];
   if (within(cwd, folder)) choices.push(cwd);
+  // The innermost extra folder that holds the request, when there are nested ones.
+  const extra = extraFolders.filter((candidate) => within(candidate, folder)).sort((a, b) => b.length - a.length)[0];
+  if (extra && !choices.includes(extra)) choices.push(extra);
   for (let at = folder; depth(at) >= MIN_FOLDER_DEPTH; at = parentOf(at)) if (!choices.includes(at)) choices.push(at);
   return choices.filter((choice) => depth(choice) >= MIN_FOLDER_DEPTH).slice(0, 5);
 }

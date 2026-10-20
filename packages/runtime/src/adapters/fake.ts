@@ -33,7 +33,7 @@ export const echoScript: FakeScript = (turn, step) => (step === 0 ? { say: `echo
 export class FakeAdapter implements RuntimeAdapter {
   readonly id = "fake" as const;
   readonly label = "Test runtime";
-  readonly capabilities: RuntimeCapabilities = { steer: true, steerLands: "after_tool", steerAcceptance: "delivered", images: false, subAgents: false, keepsPromptOnResume: false, reportsCompaction: true };
+  readonly capabilities: RuntimeCapabilities = { steer: true, steerLands: "after_tool", steerAcceptance: "delivered", images: false, subAgents: false, keepsPromptOnResume: false, additionalDirectories: false, reportsCompaction: true };
   readonly sessions: FakeSession[] = [];
 
   script: FakeScript;
