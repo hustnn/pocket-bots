@@ -808,12 +808,15 @@ export class ChatService {
     return sessionNeedsReset(compactionFailures(row.compaction_failures), resume.sessionId, row.model);
   }
 
-  private async open(row: ChatRow, start: Start): Promise<RuntimeSession> {
-    const adapter = this.runtimes.get(row.provider as ProviderId);
-    if (!adapter) throw new Error(`${row.provider} isn't available here.`);
-    const record = this.recordOf(row);
+  private async open(given: ChatRow, start: Start): Promise<RuntimeSession> {
+    const adapter = this.runtimes.get(given.provider as ProviderId);
+    if (!adapter) throw new Error(`${given.provider} isn't available here.`);
     // Cleared before the spec is built: a change made from here on marks it again.
-    this.foldersStale.delete(row.id);
+    this.foldersStale.delete(given.id);
+    // The row was read before the start waited its turn in the queue: a folders change made meanwhile is read now.
+    const folderColumns = this.db.get<Pick<ChatRow, "extra_folders" | "folders_told">>("SELECT extra_folders, folders_told FROM chats WHERE id = ?", given.id);
+    const row = folderColumns ? { ...given, ...folderColumns } : given;
+    const record = this.recordOf(row);
     const { standingPrompt, folders, ...extra } = await this.specFor(record);
     let resume = row.resume ? (JSON.parse(row.resume) as ResumeHandle) : undefined;
     // A session whose compaction keeps failing isn't resumed (every resume would fail the same

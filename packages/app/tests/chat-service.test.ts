@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { FakeAdapter, type FakeScript } from "@pocket-bots/runtime";
-import { ChatService, type TurnEndedEvent } from "../src/server/chat-service";
+import { ChatService, type ChatServiceOptions, type TurnEndedEvent } from "../src/server/chat-service";
 import { Db } from "../src/server/db";
 import { groupDelivery } from "../src/shared/group-chat";
 import { foldersUpdate, splitFoldersUpdate } from "../src/shared/extra-folders";
@@ -237,7 +237,7 @@ describe("a resumed session's standing prompt", () => {
 
 describe("a chat's extra folders", () => {
   /** A runtime whose spec builder passes the chat's extra folders on, as chatSpecs does; each turn's text is kept. */
-  function setupFolders(keeps: boolean) {
+  function setupFolders(keeps: boolean, options: ChatServiceOptions = {}) {
     const dir = mkdtempSync(join(tmpdir(), "bots-chats-"));
     const db = new Db(join(dir, "bots.sqlite"));
     const texts: string[] = [];
@@ -246,7 +246,7 @@ describe("a chat's extra folders", () => {
       return turn.text.startsWith("slow") ? (step === 0 ? { wait: 200 } : null) : null;
     });
     fake.capabilities.keepsPromptOnResume = keeps;
-    const chats = new ChatService(db, new Map([["fake", fake]]), async (chat) => ({ systemPrompt: "test", mcpServers: {}, trustedTools: [], extraDirectories: chat.extraFolders, folders: chat.extraFolders }), async () => null);
+    const chats = new ChatService(db, new Map([["fake", fake]]), async (chat) => ({ systemPrompt: "test", mcpServers: {}, trustedTools: [], extraDirectories: chat.extraFolders, folders: chat.extraFolders }), async () => null, options);
     chats.start();
     cleanup = () => chats.stop();
     const turn = async (id: string, text: string) => {
@@ -331,6 +331,27 @@ describe("a chat's extra folders", () => {
     expect(texts).toEqual(["first", "second"]);
     expect(otherTexts).toEqual(["first", "second"]);
     await chats.stop();
+  });
+
+  it("opens with the folders set while its start waited in the queue", async () => {
+    // Another chat's start goes first; this one waits out the interval after it.
+    const { chats, fake, turn } = setupFolders(false, { startIntervalMs: 300 });
+    const other = await chats.create({ botId: null, provider: "fake", cwd: tmpdir() });
+    const id = await chats.create({ botId: null, provider: "fake", cwd: tmpdir() });
+    await chats.send(other, { text: "first" });
+    const ended = settled(chats, id);
+    const sent = chats.send(id, { text: "queued" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(fake.sessions.some((session) => session.spec.key === id)).toBe(false);
+    await chats.setExtraFolders(id, ["/work/api"]);
+    expect((await sent).ok).toBe(true);
+    await ended;
+    const opened = fake.sessions.filter((session) => session.spec.key === id);
+    expect(opened).toHaveLength(1);
+    expect(opened[0]!.spec.extraDirectories).toEqual(["/work/api"]);
+    // It has the list already: the next input doesn't reopen it.
+    await turn(id, "next");
+    expect(fake.sessions.filter((session) => session.spec.key === id)).toHaveLength(1);
   });
 
   it("splits the note off the input again, after a standing-prompt update", () => {
