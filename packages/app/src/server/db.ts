@@ -417,6 +417,11 @@ const MIGRATIONS: Migration[] = [
   (db) => {
     db.exec("ALTER TABLE groups ADD COLUMN cwd TEXT");
   },
+  // 19: the in_review task status is gone (todo → in_progress → done). Tasks waiting in review are done;
+  // their history events keep the in_review they recorded, since the history is plain JSON, not validated.
+  (db) => {
+    db.exec("UPDATE group_tasks SET status = 'done', completed_at = COALESCE(completed_at, updated_at) WHERE status = 'in_review'");
+  },
 ];
 
 /** How much of one message the search index takes: a long pasted attachment doesn't need all of it. */

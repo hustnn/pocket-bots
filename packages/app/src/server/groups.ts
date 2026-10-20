@@ -135,10 +135,10 @@ const HANDED_MAX = 8;
 const BRIEFING_MESSAGES = 25;
 const USER_ID = GROUP_USER_ID;
 /** Tasks still being worked on. */
-const OPEN_TASKS: TaskStatus[] = ["todo", "in_progress", "in_review"];
+const OPEN_TASKS: TaskStatus[] = ["todo", "in_progress"];
 /** Task lifecycle notes: an emoji and a label per status. */
-const STATUS_EMOJI: Record<TaskStatus, string> = { todo: "📝", in_progress: "🔄", in_review: "👀", done: "✅", closed: "🚫" };
-const STATUS_LABEL: Record<TaskStatus, string> = { todo: "Todo", in_progress: "In Progress", in_review: "In Review", done: "Done", closed: "Closed" };
+const STATUS_EMOJI: Record<TaskStatus, string> = { todo: "📝", in_progress: "🔄", done: "✅", closed: "🚫" };
+const STATUS_LABEL: Record<TaskStatus, string> = { todo: "Todo", in_progress: "In Progress", done: "Done", closed: "Closed" };
 /** The same failure of the same bot is noted once in this long. */
 const FAILURE_NOTE_MS = 10 * 60_000;
 /** A reminder that fires this late was missed (pocket-bots was stopped): its wake says catch-up. */
@@ -791,7 +791,7 @@ export class GroupChats {
       const leader = (await this.allBots()).get(leaderId)?.name ?? "the leader";
       return `You've claimed task #${seq}; it's ${result.task.status}. When it's done, answer in its thread (thread: ${seq}) @mentioning ${leader}; ${leader} sets its status.`;
     }
-    return `You've claimed task #${seq}; it's ${result.task.status}. Read its thread first if it has one. When the work is done, set it to in_review with group_task (action update) so the user can check it, and say what you did.`;
+    return `You've claimed task #${seq}; it's ${result.task.status}. Read its thread first if it has one. When the work is done, set it to done with group_task (action update) and say in the group what you did.`;
   }
 
   /**
@@ -850,15 +850,18 @@ export class GroupChats {
         return `#${input.task} is now task #${task.number}, todo and unassigned.`;
       }
       case "update": {
-        if (!input.status) throw new RequestError("Which status? One of todo, in_progress, in_review, done, closed.");
+        if (!input.status) throw new RequestError("Which status? One of todo, in_progress, done, closed.");
         const target = number();
+        await this.statusSettable(bot, groupId);
         const held = this.preflight(bot, groupId, 0, "task");
         if (held) return held;
         const result = this.store.setTaskStatus(groupId, target, input.status, me);
         if (!result.ok) return `Not changed: ${result.reason}.`;
         this.lifecycleNote(groupId, result.task, this.statusNote(bot.name, groupId, result.task), bot.id);
         this.changed(groupId);
-        return `Task #${target} is now ${result.task.status}.${result.task.status === "in_review" ? " Say in the group what you did, so the user can check it." : ""}`;
+        // With a leader, the leader sets done after checking a member's work it didn't do itself.
+        const report = result.task.status === "done" && !this.store.leader(groupId);
+        return `Task #${target} is now ${result.task.status}.${report ? " Say in the group what you did." : ""}`;
       }
       case "unclaim": {
         const result = this.store.unclaimTask(groupId, number(), me);
@@ -982,6 +985,14 @@ export class GroupChats {
     if (!leaderId || leaderId === bot.id || assignee?.kind !== "bot" || assignee.id === bot.id) return;
     const leader = (await this.allBots()).get(leaderId)?.name ?? "the leader";
     throw new RequestError(`In this group ${leader} hands out the work: you can't assign tasks to other members. Tell @${leader} what ${assignee.name} should do and why.`);
+  }
+
+  /** In a group with a leader, only the leader moves a task's status: it decides when a member's piece is done. */
+  private async statusSettable(bot: Bot, groupId: string): Promise<void> {
+    const leaderId = this.store.leader(groupId);
+    if (!leaderId || leaderId === bot.id) return;
+    const leader = (await this.allBots()).get(leaderId)?.name ?? "the leader";
+    throw new RequestError(`In this group ${leader} sets task statuses: you can't change them. When your piece is done, answer in its thread @mentioning ${leader}.`);
   }
 
   /** Who a task goes to by name: a member bot ("me" is the asking bot), the user, or nobody. */

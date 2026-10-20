@@ -374,6 +374,8 @@ describe("the seat prompt", () => {
     const plain = groupPrompt("Launch");
     const delegating = groupPrompt("Launch", { subAgents: true });
     expect(plain).not.toContain("Sub-agents:");
+    expect(plain).toContain("set its task to done with group_task and say in the group what you did.");
+    expect(plain).not.toContain("in_review");
     const at = delegating.indexOf("Sub-agents:");
     expect(at).toBeGreaterThan(delegating.indexOf("Reminders and @mentions:"));
     expect(at).toBeLessThan(delegating.indexOf("Writing in the group:"));

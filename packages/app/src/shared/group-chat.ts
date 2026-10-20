@@ -100,16 +100,15 @@ export const GroupSenderSchema = z.discriminatedUnion("kind", [
 ]);
 export type GroupSender = z.infer<typeof GroupSenderSchema>;
 
-/** Task statuses: the ordinary path is todo → in_progress → in_review → done; closed is "won't do". */
-export const TaskStatusSchema = z.enum(["todo", "in_progress", "in_review", "done", "closed"]);
+/** Task statuses: the ordinary path is todo → in_progress → done; closed is "won't do". */
+export const TaskStatusSchema = z.enum(["todo", "in_progress", "done", "closed"]);
 export type TaskStatus = z.infer<typeof TaskStatusSchema>;
 
 /** Allowed moves between statuses (the user, who owns the group, may set any). */
 export const TASK_TRANSITIONS: Readonly<Record<TaskStatus, readonly TaskStatus[]>> = {
   todo: ["in_progress", "closed"],
-  in_progress: ["in_review", "done", "closed"],
-  in_review: ["done", "in_progress", "closed"],
-  done: ["todo", "in_progress", "in_review", "closed"],
+  in_progress: ["done", "closed"],
+  done: ["todo", "in_progress", "closed"],
   closed: ["todo", "in_progress"],
 };
 
@@ -1066,7 +1065,7 @@ export function groupPrompt(groupName: string, options: { subAgents?: boolean; q
               : [
                   "- Claim before acting: if a message needs more than a reply (running tools, making changes, investigating), claim it with group_claim first; answering or discussing needs no claim. Only top-level messages become tasks: task #12 is message #12, and its thread is thread #12.",
                   "- A refused claim is a lock, not a ruling on who owns the work: don't start conflicting work, and if it should be yours, say so in its thread.",
-                  "- When your work is done, set its task to in_review with group_task so the user can check it, then to done once they approve.",
+                  "- When your work is done, set its task to done with group_task and say in the group what you did.",
                   "- Creating tasks with an assignee tells that bot, even when it's muted; assigning an existing task tells nobody, so @mention the bot too. Any member may amend a task's card (title, description): group_task show reads it, history lists its changes, and names on a card grant nothing.",
                   '- To split a large task (group_task create), make the parts independent so bots can work in parallel, and label the ones that must wait by phase ("Phase 1: …"). When you\'re told about new tasks, check group_task list and claim the ones that fit your skills.',
                 ],

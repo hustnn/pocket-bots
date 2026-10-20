@@ -439,18 +439,20 @@ describe("group chats", () => {
     await until(() => wakes === 2 && group.idle());
     await group.groups.userTask(group.id, { action: "claim", seq });
     await expect(group.groups.userTask(group.id, { action: "claim", seq })).rejects.toThrow(/already claimed by you/);
-    await group.groups.userTask(group.id, { action: "status", number: 1, status: "in_review" });
+    await group.groups.userTask(group.id, { action: "status", number: 1, status: "done" });
     await group.groups.userReact(group.id, seq, "👍");
     let [message] = (await group.groups.messages(group.id)).messages;
-    expect(message!.task).toEqual({ number: 1, status: "in_review", assignee: { kind: "user", id: "user", name: "the user" }, revision: 2, title: "Draft the release notes for version two.", description: null, createdBy: "user", amended: null });
+    expect(message!.task).toEqual({ number: 1, status: "done", assignee: { kind: "user", id: "user", name: "the user" }, revision: 2, title: "Draft the release notes for version two.", description: null, createdBy: "user", amended: null });
     expect(message!.reactions).toEqual([{ emoji: "👍", names: ["the user"], ids: ["user"] }]);
-    // A second tap takes the reaction back; unclaiming leaves the status as it was (assignee and
-    // status are independent), and a second unclaim is refused; removing the task leaves the message.
+    // A second tap takes the reaction back. A done task can't be unclaimed, so it's reopened first; unclaiming
+    // then leaves the status as it was (assignee and status are independent), and a second unclaim is refused;
+    // removing the task leaves the message.
     await group.groups.userReact(group.id, seq, "👍");
+    await group.groups.userTask(group.id, { action: "status", number: 1, status: "in_progress" });
     await group.groups.userTask(group.id, { action: "unclaim", number: 1 });
     await expect(group.groups.userTask(group.id, { action: "unclaim", number: 1 })).rejects.toThrow(/task is not assigned/);
     [message] = (await group.groups.messages(group.id)).messages;
-    expect(message!.task).toMatchObject({ number: 1, status: "in_review", assignee: null, revision: 3 });
+    expect(message!.task).toMatchObject({ number: 1, status: "in_progress", assignee: null, revision: 4 });
     expect(message!.reactions).toEqual([]);
     await group.groups.userTask(group.id, { action: "delete", number: 1 });
     [message] = (await group.groups.messages(group.id)).messages;
@@ -466,7 +468,8 @@ describe("group chats", () => {
     ]);
     expect((await group.groups.messages(group.id, { thread: 1 })).messages.map((entry) => entry.text).slice(1)).toEqual([
       '📌 the user claimed #1 "Draft the release notes for version two."',
-      '👀 the user moved #1 "Draft the release notes for version two." to In Review',
+      '✅ the user moved #1 "Draft the release notes for version two." to Done',
+      '🔄 the user moved #1 "Draft the release notes for version two." to In Progress',
       '🔓 the user released #1 "Draft the release notes for version two."',
     ]);
     await settle(group);
@@ -544,7 +547,10 @@ describe("group chats", () => {
     // Replying to a thread message puts the reply in its thread.
     expect(await group.groups.send(beta, group.id, { text: "Following up.", replyTo: 2 })).toMatch(/in thread #1\./);
     await expect(group.groups.claim(beta, group.id, 2)).rejects.toThrow(/Only top-level messages can be tasks/);
-    expect(await group.groups.claim(beta, group.id, 1)).toMatch(/^You've claimed task #1;/);
+    const claimed = await group.groups.claim(beta, group.id, 1);
+    expect(claimed).toMatch(/^You've claimed task #1;/);
+    expect(claimed).toContain("When the work is done, set it to done with group_task (action update) and say in the group what you did.");
+    expect(await group.groups.task(beta, group.id, { action: "update", task: 1, status: "done" })).toBe("Task #1 is now done. Say in the group what you did.");
   });
 
   it("runs tasks: creating one with an assignee tells a muted bot, which claims it; status changes go to its thread", async () => {
@@ -555,7 +561,7 @@ describe("group chats", () => {
         if (step === 0 && turn.text.includes("Assigned @Beta")) return { tool: "group_claim", args: { task: 1 } };
         // A first claim may be held for messages Beta never saw; then it claims again.
         if (last.startsWith("Your claim wasn't made")) return { tool: "group_claim", args: { task: 1 } };
-        if (last.startsWith("You've claimed")) return { tool: "group_task", args: { action: "update", task: 1, status: "in_review" } };
+        if (last.startsWith("You've claimed")) return { tool: "group_task", args: { action: "update", task: 1, status: "done" } };
         return null;
       }),
     );
@@ -564,16 +570,16 @@ describe("group chats", () => {
     const alpha = (await group.host.bot("alpha"))!;
     expect(await group.groups.task(alpha, group.id, { action: "create", titles: ["Write the intro"], assignee: "Beta" })).toBe("Created task #1, todo, assigned to Beta.");
     expect((await group.texts()).at(-1)).toBe('system: 📌 Assigned @Beta to task #1 "Write the intro"');
-    await until(() => group.store.task(group.id, { number: 1 })?.status === "in_review" && group.idle(), 5_000);
+    await until(() => group.store.task(group.id, { number: 1 })?.status === "done" && group.idle(), 5_000);
     const seat = (await group.groups.list())[0]!.seats.beta!;
     const wake = group.chats.items(seat, 20).find((item) => item.type === "user_message");
     expect(wake && wake.type === "user_message" ? wake.text : "").toContain("a task was assigned to you");
-    expect(group.store.task(group.id, { number: 1 })).toMatchObject({ status: "in_review", assignee: { id: "beta" } });
-    expect((await group.groups.messages(group.id, { thread: 1 })).messages.at(-1)!.text).toBe('👀 Beta moved #1 "Write the intro" to In Review');
-    // A bot follows the allowed transitions; the user may set any status.
+    expect(group.store.task(group.id, { number: 1 })).toMatchObject({ status: "done", assignee: { id: "beta" } });
+    expect((await group.groups.messages(group.id, { thread: 1 })).messages.at(-1)!.text).toBe('✅ Beta moved #1 "Write the intro" to Done');
+    // A bot follows the allowed transitions (todo can't jump to done); the user may set any status.
     await group.groups.read(alpha, group.id, {});
-    expect(await group.groups.task(alpha, group.id, { action: "update", task: 1, status: "todo" })).toMatch(/can't go from in_review to todo/);
     await group.groups.userTask(group.id, { action: "status", number: 1, status: "todo" });
+    expect(await group.groups.task(alpha, group.id, { action: "update", task: 1, status: "done" })).toMatch(/can't go from todo to done/);
     // Created with its assignee in one go, so it starts at rev=0.
     expect(await group.groups.task(alpha, group.id, { action: "list", filter: "all" })).toContain("- task #1 · todo · Beta · rev=3: Write the intro");
     expect(await group.groups.claim(alpha, group.id, 1)).toMatch(/Claim refused for task #1: already assigned to Beta/);
@@ -1000,6 +1006,11 @@ describe("a group with a leader", () => {
     expect(woken).toEqual(["beta"]);
     await group.groups.read(beta, group.id, { unread: true });
     expect(await group.groups.claim(beta, group.id, seq)).toContain("You've claimed task");
+    // Only the leader moves a task's status, even when the member calls the unlisted tool.
+    await expect(group.groups.task(beta, group.id, { action: "update", task: seq, status: "done" })).rejects.toThrow(/In this group Alpha sets task statuses: you can't change them/);
+    expect(group.store.task(group.id, { number: seq })!.status).toBe("in_progress");
+    // The leader sets the piece done after checking it; it didn't do the work, so it isn't told to say what it did.
+    expect(await group.groups.task(alpha, group.id, { action: "update", task: seq, status: "done" })).toBe(`Task #${seq} is now done.`);
 
     // Without a leader, every bot hears the group again.
     await group.groups.update(group.id, { leaderId: null });
