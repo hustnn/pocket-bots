@@ -9,6 +9,7 @@ import { QUIET_TOOLS, TOOLS_MCP_NAME } from "../shared/bot-tools";
 import { GROUP_LABEL, type GroupLead } from "../shared/group-chat";
 import { replyText } from "../shared/reply";
 import { expandLearn } from "../shared/skills";
+import { splitStandingUpdate } from "../shared/standing-prompt";
 import { newUuid } from "../shared/uuid";
 import { botDataPath, ensureBotHome } from "./bot-home";
 import type { ChatRecord, OutgoingMessage, SpecBuilder } from "./chat-service";
@@ -88,15 +89,13 @@ export async function startChat(host: PocketHost, bot: Bot, input: StartChatInpu
   return chatId;
 }
 
+/** What a seat's prompt says about its group: its name and, when the group has a leader, the seat's part in it. */
+export type SeatGroupLookup = (groupId: string, botId: string) => Promise<{ name: string; lead?: GroupLead } | null>;
+
 /**
  * The session setup for a bot's chat, rebuilt every time its session opens, so a resumed chat
  * gets the bot's current memory, skills, tools and instructions.
  */
-const STANDING_UPDATE = /^<pocket-bots-standing-prompt-update>[\s\S]*?<\/pocket-bots-standing-prompt-update>\s*/;
-
-/** What a seat's prompt says about its group: its name and, when the group has a leader, the seat's part in it. */
-export type SeatGroupLookup = (groupId: string, botId: string) => Promise<{ name: string; lead?: GroupLead } | null>;
-
 export function chatSpecs(host: PocketHost, relay: Relay, seatGroup: SeatGroupLookup): SpecBuilder {
   return async (chat: ChatRecord) => {
     const bot = chat.botId ? await host.bot(chat.botId) : null;
@@ -111,7 +110,7 @@ export function chatSpecs(host: PocketHost, relay: Relay, seatGroup: SeatGroupLo
     const subAgents = capabilities?.subAgents ?? false;
     const questionTool = capabilities?.questionTool;
     // The playbooks follow the chat's first message as typed, without a standing-prompt update in front of it.
-    const message = first?.type === "user_message" ? first.text.replace(STANDING_UPDATE, "") : (chat.title ?? "");
+    const message = first?.type === "user_message" ? splitStandingUpdate(first.text).text : (chat.title ?? "");
     const { systemPrompt: system, standingPrompt } = await systemPrompt({ bot, message, ...(group ? { group: { name: group.name, subAgents, ...(questionTool ? { questionTool } : {}), ...(group.lead ? { lead: group.lead } : {}) } } : {}) }, library);
     const mcpServers: Record<string, import("@pocket-bots/runtime").McpServerConfig> = { ...mcpServersRecord(botMcpServers(bot, library)) };
     const tools = await relay.mountTools(bot.id, chat.id, groupId);

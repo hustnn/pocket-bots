@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { SQLInputValue } from "node:sqlite";
 import type { ApprovalDecision, ApprovalRequest, ContextUsage, ProviderId, ResumeHandle, RuntimeAdapter, RuntimeEvent, RuntimeSession, SendResult, SessionSpec, SlashCommand, TimelineItem } from "@pocket-bots/runtime";
 import type { ChatSnapshot, ChatStatus, TimelineCursor, TimelineEntry, TimelinePage } from "../shared/chat-types";
+import { standingPromptUpdate } from "../shared/standing-prompt";
 import { TIMELINE_INDEX_CHARS, type Db } from "./db";
 import { RequestError } from "./errors";
 import { ftsFilter } from "./search";
@@ -246,22 +247,6 @@ const labelPath = (key: string) => `$."${key.replace(/"/g, "")}"`;
 
 /** The standing prompt's hash: what a chat's session runs on, recorded per session. */
 export const standingPromptHash = (prompt: string) => createHash("sha256").update(prompt).digest("hex").slice(0, 32);
-
-/**
- * The standing-prompt update: the current standing prompt in front of a resumed session's first input, replacing the one the session
- * started with. Nothing earlier in the conversation changes, so the prompt cache stays valid.
- */
-export function standingPromptUpdate(standingPrompt: string): string {
-  return [
-    "<pocket-bots-standing-prompt-update>",
-    "pocket-bots updated your standing instructions since this session started. The instructions below replace the earlier standing instructions (system or developer prompt) for the rest of this session; where they differ, follow these.",
-    "",
-    standingPrompt,
-    "</pocket-bots-standing-prompt-update>",
-    "",
-    "",
-  ].join("\n");
-}
 
 function titleFrom(text: string): string {
   const line = text.replace(/\s+/g, " ").trim();
