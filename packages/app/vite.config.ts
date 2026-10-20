@@ -11,6 +11,19 @@ export default defineConfig({
   build: {
     outDir: "../../dist/web",
     emptyOutDir: true,
+    rolldownOptions: {
+      output: {
+        // Keep third-party code in its own files so a rebuild of our code doesn't
+        // invalidate the browser cache for React and the markdown stack, and so no
+        // single chunk crosses Vite's 500 kB warning limit.
+        codeSplitting: {
+          groups: [
+            { name: "react", test: /node_modules[\\/](react|react-dom|scheduler)[\\/]/, priority: 20 },
+            { name: "vendor", test: /node_modules/, priority: 10 },
+          ],
+        },
+      },
+    },
   },
   server: {
     port: 5180,
