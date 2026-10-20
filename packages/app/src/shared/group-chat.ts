@@ -1111,9 +1111,9 @@ export type GroupLead = { role: "leader"; members: readonly { name: string; abou
 
 /**
  * The prompt section for a group with a leader. The leader plans, hands out each piece with a
- * complete brief and reviews what comes back from the member's evidence (the commands it ran and
- * their results), rerunning a check only when that's missing or doubtful; a member works only on
- * what it's handed and reports once to the leader, with that evidence. The rules are pocket-bots's own delivery (fromLead), so the section
+ * complete brief and reviews what comes back, without repeating the checks the member reports it
+ * ran; a member works only on what it's handed and reports once to the leader, with the tests and
+ * checks it ran and their results. The rules are pocket-bots's own delivery (fromLead), so the section
  * says what reaches whom. A member whose runtime can start sub-agents is told to do its piece
  * itself: the leader already split the work, and a sub-agent would start over from nothing.
  */
@@ -1126,7 +1126,7 @@ export function leadSection(lead: GroupLead, subAgents = false): string {
       "- A new piece of work is a new top-level group_send that @mentions one member and carries the complete brief: the goal, the files or area, the constraints, what done looks like, and what to report back. The member starts every new piece in a fresh session that remembers nothing of earlier pieces and sees nothing of the group but what you send it, so the brief must stand on its own. The member claims your message, which makes it a task (group_task list).",
       "- The member answers in your message's thread. To iterate on that piece, reply in the same thread and @mention the member: the thread is the piece's context, and the member carries on from it. Keep each piece in its own thread: no new top-level message for a follow-up, and no new piece in an old thread.",
       "- Pieces that don't depend on each other can go to different members at once; keep dependent steps in order. A member works on one piece at a time; another piece for it waits until it's done.",
-      "- When a member reports back, check its report and the changes against the brief before you build on it or pass it on. Its report names the commands it ran (tests, typecheck, builds) with their results: rerun one only when that evidence is missing, something looks wrong, or the member says it didn't verify it, and then read just a summary of the output (its tail, say). If the work isn't right yet, say what to change in its thread; when it is, set its task to done with group_task, then hand out the next piece or tell the user the outcome.",
+      "- When a member reports back, check the result before you build on it or pass it on; checks the member reports it already ran don't need repeating. If it isn't right yet, say what to change in its thread; when it is, set its task to done with group_task, then hand out the next piece or tell the user the outcome.",
       "- When a member is stuck or asks you something, answer in its thread promptly: you're the one who unblocks them. If only the user can decide, ask the user.",
       "- The members you hand work to:",
       ...(lead.members.length ? lead.members.map((member) => `  - ${member.name}${member.about ? `: ${member.about}` : ""}`) : ["  - (none yet)"]),
@@ -1138,7 +1138,7 @@ export function leadSection(lead: GroupLead, subAgents = false): string {
     `- Work only on what ${leader} or the user hands you; ordinary messages in the group don't reach you. Don't pick up other work, claim tasks that weren't handed to you, or start discussions.`,
     `- A piece of work is a top-level message that @mentions you, with its thread. A new piece starts you in a fresh session that remembers nothing of earlier pieces: the message is the whole brief, and it's shown to you in full. Claim it with group_claim, then do it fully, within its brief.`,
     ...(subAgents ? [`- Do the piece yourself: ${leader} has already split the work, and a sub-agent starts from nothing and reads everything again. Start one only when the piece splits into large independent parts worth running in parallel, and tell it not to use the group tools: only you speak in the group.`] : []),
-    `- Answer once, in that message's thread (group_send with thread: its number), @mentioning ${leader}: the outcome first, then what you changed (files), the commands you ran to check it (tests, typecheck, builds) with their results (pass/fail counts), what you didn't verify, and anything left open. ${leader} relies on that evidence instead of rerunning your checks, so keep it exact and short. Then stop; don't wait around or keep checking.`,
+    `- Answer once, in that message's thread (group_send with thread: its number), @mentioning ${leader}: the outcome first, then what you changed (files), what tests and checks you ran and their results, and anything left open. Keep it short: ${leader} decides what's next. Then stop; don't wait around or keep checking.`,
     `- ${leader} follows up in the same thread when it wants changes: that thread is your context for the piece. Back on an older piece, you're shown its thread; group_read (thread: its number) reads the rest.`,
     `- Don't change the task's status: ${leader} decides when it's done. Skip acknowledgments and progress updates: each one wakes ${leader} for nothing. To show you've started, react with group_react, which wakes nobody.`,
     `- When the brief is unclear or something blocks you, ask @${leader} one concise question in the thread instead of guessing, then stop until the answer comes.`,
