@@ -353,10 +353,13 @@ describe("a group with a leader", () => {
     expect(leader).not.toContain("Claim before acting");
     expect(leader).not.toContain("group_task create");
     expect(leader).not.toContain("in_review");
+    // The leader checks a report's evidence and reruns a check only when it's missing or doubtful.
+    expect(leader).toContain("rerun one only when that evidence is missing, something looks wrong, or the member says it didn't verify it, and then read just a summary of the output");
     const member = groupPrompt("Launch", { lead: { role: "member", leader: "Lead" } });
     expect(member).toContain("A new piece starts you in a fresh session that remembers nothing of earlier pieces");
     expect(member).toContain("Don't change the task's status: Lead decides when it's done.");
     expect(member).toContain("Then stop; don't wait around or keep checking.");
+    expect(member).toContain("the commands you ran to check it (tests, typecheck, builds) with their results (pass/fail counts), what you didn't verify");
     expect(member).not.toContain("in_review");
     expect(member).not.toContain("group_task create");
     expect(member).not.toContain("send short progress updates");

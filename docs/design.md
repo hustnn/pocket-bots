@@ -312,11 +312,13 @@ uploads/                   聊天里上传的非文本文件
 
 bot 不能直接改自己或别人的设置，只能提议：卡片逐条列出改动，把要写进 prompt 的文字原样显示，扩大权限、删除之类的单独提醒。
 
+`get_setup` 和三个 `propose_*` 只给 bot 自己的聊天（`tools/mcp.ts` 的 `ownChat`），群聊的座位（leader、成员、没有 leader 的群都一样）不列出也不能调用：提议卡片出在发起的那个聊天里，座位里的卡片群里看不见，而座位每次请求都要带上这些用不到的工具。座位的「Bot tools」一段告诉它：在群里被要求改配置、建定时任务或存技能，就请用户到它自己的聊天里说。
+
 **工具列表每次请求都带**，所以尽量短：
 
 - `propose_changes` 的列表里每条改动只写 `type`（13 种之一），不展开各种改动的字段（完整的 schema 约 15K 字符，原来每个聊天每次请求都要带上）。字段写在 `get_setup` 的总览末尾（不带 `bot` 时），由 `shared/changes.ts` 的 `changeFormat` 从 `ChangeSchema` 生成，不会和校验脱节，共用的形状（Avatar、App、Playbook、Schedule）只写一次。工具执行时再按 `ChangeSchema` 校验（`checkChanges`），不合格式的返回每个问题的位置，加上这次用到的那几种改动的格式，bot 照着改了再提。
 - zod 给每个整数加的安全整数上下界（±2^53）不放进列表（`tools/mcp.ts`）。
-- 有 leader 的群里，成员的座位只列出它干活用得到的工具（§6.8）。
+- 群聊的座位不列出改配置的工具（上面）；有 leader 的群里，成员的座位只列出它干活用得到的工具（§6.8）。
 
 **ask_bot**：被问的 bot 开一个新聊天（标签记着是谁问的），发起方最多等约 50 秒（MCP 客户端大约一分钟放弃一次工具调用）。来得及就直接返回答案；来不及就告诉发起方「答案会自己送来」，等对方这一轮结束，答案作为一条消息送回发起的聊天（它在忙就先进队列）。
 
@@ -485,6 +487,8 @@ They haven't been read. Read them when it suits you: group_read with unread: tru
 | `group_mention_delivery` | 查自己一条消息里每个被 @ 的成员收到没有 |
 | `group_members` | 成员、在忙还是空闲、是否静音、手上的任务 |
 
+**座位没有改配置的工具**：`get_setup`、`propose_changes`、`propose_routine`、`propose_skill` 只在 bot 自己的聊天里有（§5.4）。
+
 **有 leader 的群里，成员只列出干活用得到的工具**：`group_send`、`group_send_draft`、`group_read`、`group_claim`、`group_react`、`group_members`，加上 `search_chats`（工具上标着 `led`，`tools/mcp.ts` 的 `ledMember` 按 `GroupChats.ledBy` 判断）。计划、任务、提醒、关注、静音、@ 的去向、问别的 bot、改配置这些它的规则里用不到，就不放进它每次请求都要带的工具列表；它的 prompt 里「Bot tools」一段也只提这些。只是不列出，调用照样执行：会话只在开始时取一次工具列表，换 leader 后已经开着的会话列表是旧的，下次开会话时才更新（prompt 也一样）。成员 @ 了群外的 bot，结果里不再建议用 `ask_bot`。
 
 ### 6.9 座位的 prompt
@@ -496,8 +500,10 @@ They haven't been read. Read them when it suits you: group_read with unread: tru
 | 角色 | 有的部分 | 大小 |
 |---|---|---|
 | 没有 leader 的群 | 消息、被叫醒时、线程和历史、任务（认领、in_review、建任务和拆活）、提醒和 @、子 agent（能开时）、写法、礼节、约束和权限 | 约 6.9K 字符，带子 agent 约 8K |
-| leader | leader 一段（计划、派活、核对、成员和模型），加上面除「认领、in_review、拆活」和子 agent 以外的部分 | 约 8.5K |
-| 成员 | 成员一段（只做派给它的、做完在线程里汇报一次就停、不改状态、卡住问 leader、能开子 agent 时自己做），加消息、写法、约束和权限 | 约 4.8K |
+| leader | leader 一段（计划、派活、按成员给的证据核对、成员和模型），加上面除「认领、in_review、拆活」和子 agent 以外的部分 | 约 8.8K |
+| 成员 | 成员一段（只做派给它的、做完在线程里汇报一次就停（写明跑了哪些命令、结果、哪些没验证）、不改状态、卡住问 leader、能开子 agent 时自己做），加消息、写法、约束和权限 | 约 5.0K |
+
+**leader 按证据核对**：成员汇报时写明跑了哪些检查命令（测试、typecheck、构建）和结果（通过、失败各几个），以及哪些没验证。leader 看汇报和改动是否符合说明，只有证据缺了、看着不对或者成员说没验证的，才自己重跑，而且只看输出的摘要（比如结尾几行）。基准测试里成员报了「typecheck 通过、435 个测试通过」，leader 还是把 typecheck 和整套测试又跑了一遍。
 
 原来分别是 12.5K（带子 agent 15.1K）、15.1K 和 15.8K。
 

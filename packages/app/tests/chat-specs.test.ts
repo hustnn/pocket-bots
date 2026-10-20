@@ -85,6 +85,9 @@ describe("a chat's session setup", () => {
     const pi = await seat("pi", false);
     expect(pi).toContain('your seat in the group chat "Launch"');
     expect(pi).not.toContain("Sub-agents:");
+    // A seat proposes no setup changes: its bot-tools section says where they go instead.
+    expect(pi).toContain("Setup changes, routines and skills aren't proposed from a group: if the user asks for one here, tell them to ask you in your own chat.");
+    expect(pi).not.toContain("propose_routine");
     // Claude, Codex, OpenCode and Grok Build can start sub-agents; Pi can't on its own.
     // A runtime with its own question tool is told its questions show in the group; one without isn't.
     const questions = async (provider: string, questionTool?: string) => {

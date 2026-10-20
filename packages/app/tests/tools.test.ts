@@ -96,6 +96,13 @@ describe("the bots MCP server", () => {
       expect(seat.url).toContain(`/bots/bot-a/${agentId}/group-abc`);
       const seatList = (await (await post({ jsonrpc: "2.0", id: 7, method: "tools/list" }, seat.headers.Authorization!, seat.url)).json()) as { result: { tools: { name: string }[] } };
       expect(seatList.result.tools.map((tool) => tool.name).slice(0, 2)).toEqual(["group_send", "group_send_draft"]);
+      // Setup changes, routines and skills are proposed in a bot's own chats, not from a seat.
+      for (const name of ["get_setup", "propose_skill", "propose_routine", "propose_changes"]) {
+        expect(list.result.tools.map((tool) => tool.name)).toContain(name);
+        expect(seatList.result.tools.map((tool) => tool.name)).not.toContain(name);
+      }
+      const proposal = (await (await post({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name: "propose_skill", arguments: { name: "x", description: "y", instructions: "z" } } }, seat.headers.Authorization!, seat.url)).json()) as { error: { message: string } };
+      expect(proposal.error.message).toBe("Unknown tool propose_skill");
       // The plain chat's token doesn't open the seat's address.
       expect((await post({ jsonrpc: "2.0", id: 8, method: "tools/list" }, mount.headers.Authorization!, seat.url)).status).toBe(401);
     } finally {

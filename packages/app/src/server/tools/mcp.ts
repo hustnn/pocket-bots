@@ -70,6 +70,13 @@ function inputSchema(schema: ZodType): Record<string, unknown> {
   return rest;
 }
 
+/**
+ * Not a group chat's seat: the setup tools (get_setup, propose_*) are only for a bot's own chats.
+ * A proposal's card shows in the chat that made it, which in a seat is out of the group's sight,
+ * and a seat's listing would carry them on every request for work they're never part of.
+ */
+export const ownChat = (caller: ToolCaller): boolean => !caller.groupId;
+
 /** A member of a group with a leader: it gets only the tools marked `led`. */
 export function ledMember(caller: ToolCaller): boolean {
   return !!caller.groupId && !!caller.groups?.ledBy(caller.groupId, caller.bot.id);

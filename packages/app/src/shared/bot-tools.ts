@@ -26,12 +26,14 @@ export function botToolName(name: string): BotToolName | null {
 
 /**
  * The prompt section for pocket-bots' own tools, given to chats that get them (bots on this host).
- * `led`: a seat of a group with a leader, which is listed only the tools for its piece.
+ * A group chat's seat (`seat`) has no setup tools; a member of a group with a leader (`led`) is
+ * listed only the tools for its piece.
  */
-export function botToolsPrompt(canAsk: boolean, led = false): string {
-  if (led) return 'Your own tools come from the MCP server "bots": the group tools above, and search_chats to look through your past chats and daily log.';
+export function botToolsPrompt(canAsk: boolean, chat: "own" | "seat" | "led" = "own"): string {
+  if (chat === "led") return 'Your own tools come from the MCP server "bots": the group tools above, and search_chats to look through your past chats and daily log.';
   const others = canAsk
     ? "list_bots to see the other bots and ask_bot to ask one for help. When ask_bot says the answer will come to the chat on its own, tell the user it's on its way and end your turn rather than checking again"
     : "list_bots to see the other bots";
+  if (chat === "seat") return `Your own tools come from the MCP server "bots": the group tools above, search_chats to look through your past chats and daily log, and ${others}. Setup changes, routines and skills aren't proposed from a group: if the user asks for one here, tell them to ask you in your own chat.`;
   return `Your own tools come from the MCP server "bots". Use propose_routine for your own recurring or webhook-started work (rather than your runtime's own schedule or cron tools) and propose_skill to keep a way of working for next time. When the user asks you to set up or change bots, skills, MCP servers or defaults, read get_setup and put all the changes in one propose_changes call. The user confirms proposals on a card in the chat. Use search_chats to look through your past chats and daily log, and ${others}.`;
 }

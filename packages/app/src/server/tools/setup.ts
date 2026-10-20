@@ -4,7 +4,7 @@ import { proposalReply } from "../../shared/proposals";
 import { accounts, status } from "../composio";
 import type { PocketHost } from "../host";
 import { createProposal } from "../proposals";
-import { defineTool } from "./mcp";
+import { defineTool, ownChat } from "./mcp";
 
 // The whole setup, for bots that set things up for the user: get_setup reads it,
 // propose_changes puts a batch of changes on a card the user applies. propose_changes' listing
@@ -34,6 +34,7 @@ export const getSetup = defineTool({
   description:
     "Read the bot setup on this computer: the bots, the library of skills and MCP servers, connected apps, what new bots start with, presets, the providers with their models and approval modes, and the format of each change propose_changes takes. Name a bot to get everything about it, including its instructions, playbooks and routines. Read it (without bot) before propose_changes.",
   input: z.object({ bot: z.string().max(100).optional().describe("A bot's name or id, for its full details.") }),
+  available: ownChat,
   async run({ bot }, { host }) {
     const values = await readValues(host);
     if (bot) return botDetails(values, bot);
@@ -50,6 +51,7 @@ export const proposeChanges = defineTool({
     summary: z.string().min(1).max(300).describe("One line saying what the changes do, shown on the card."),
     changes: ListedChangesSchema,
   }),
+  available: ownChat,
   async run({ summary, changes: listed }, { bot, agentId, host }) {
     const checked = checkChanges(listed);
     if ("problem" in checked) throw new Error(checked.problem);
