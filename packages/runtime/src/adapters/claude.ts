@@ -53,7 +53,7 @@ const MODELS: ModelDef[] = [
 export class ClaudeAdapter implements RuntimeAdapter {
   readonly id = "claude" as const;
   readonly label = "Claude";
-  readonly capabilities: RuntimeCapabilities = { steer: true, steerLands: "after_tool", steerAcceptance: "delivered", images: true, subAgents: true, keepsPromptOnResume: true, additionalDirectories: true, reportsCompaction: true, questionTool: "AskUserQuestion" };
+  readonly capabilities: RuntimeCapabilities = { steer: true, steerLands: "after_tool", steerAcceptance: "delivered", images: true, subAgents: true, keepsPromptOnResume: true, additionalDirectories: true, liveDirectories: false, reportsCompaction: true, questionTool: "AskUserQuestion" };
 
   private readonly options: { binary?: string };
 

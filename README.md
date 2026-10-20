@@ -99,6 +99,7 @@ npm run typecheck
 npm test               # 单元测试和端到端测试（用脚本化的假 agent，不调模型）
 npm run test:live -- claude      # 合同测试，跑真的 CLI：claude / codex / opencode / grok / pi / pi-fake
 node packages/runtime/test/live-commands.ts codex   # 列出这个 CLI 的斜杠命令，再跑一次 /compact
+node packages/runtime/test/live-directories.ts      # Codex 在额外目录里写文件不弹审批，中途换的列表下一轮生效
 ```
 
 `npm run dev` 的页面在 <http://127.0.0.1:5180>，`/api` 转发给 6880 端口的后端。给 coding agent 看的开发说明见 [AGENTS.md](AGENTS.md)。

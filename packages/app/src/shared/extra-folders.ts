@@ -2,7 +2,7 @@
 // agent is told about them in its system prompt, and when the list changes under a resumed
 // session (Claude Code and Codex keep the first prompt) in front of its next input, the way a
 // standing-prompt update is (standing-prompt.ts). Claude gets them natively as additional
-// directories; the other CLIs reach them by path.
+// directories, Codex as writable roots of its sandbox; the other CLIs reach them by path.
 
 /** How many extra folders a chat or a group takes. */
 export const MAX_EXTRA_FOLDERS = 20;

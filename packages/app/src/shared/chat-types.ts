@@ -72,7 +72,7 @@ export interface ProviderEntry {
   models: (ModelDef & { isSelectable?: boolean; defaultThinkingOptionId?: string })[];
   modes: ModeDef[];
   defaultModeId: string | null;
-  /** The CLI takes extra folders natively (Claude); the others reach them by path, and the user may be asked. */
+  /** The CLI takes extra folders natively (Claude, Codex); the others reach them by path, and the user may be asked. */
   additionalDirectories: boolean;
 }
 

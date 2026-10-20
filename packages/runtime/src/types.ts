@@ -114,7 +114,7 @@ export interface SessionSpec {
    * call their tools directly to offer them natively (Codex dynamic tools, an OpenCode plugin).
    */
   hostedMcpServers?: string[];
-  /** Folders besides `cwd` the agent may use without asking (memory, skills, the chat's extra folders); Claude only (see RuntimeCapabilities.additionalDirectories). */
+  /** Folders besides `cwd` the agent may use without asking (memory, skills, the chat's extra folders); Claude and Codex only (see RuntimeCapabilities.additionalDirectories). */
   extraDirectories?: string[];
   approvals: ApprovalHandler;
   env?: Record<string, string>;
@@ -193,6 +193,11 @@ export interface RuntimeSession {
   abandonTurn(): void;
   /** The slash commands this session's agent runs when sent "/name args". */
   commands(): Promise<SlashCommand[]>;
+  /**
+   * Replaces `SessionSpec.extraDirectories` from the next turn on; a running turn keeps the ones
+   * it started with. Only adapters whose capabilities say `liveDirectories` have it.
+   */
+  setExtraDirectories?(directories: string[]): void;
   send(input: UserInput, options: SendOptions): Promise<SendResult>;
   /** Stops the running turn; resolves once it has ended (null when nothing was running). */
   interrupt(): Promise<{ canceledTurnId: string | null }>;
@@ -239,8 +244,13 @@ export interface RuntimeCapabilities {
    * resume (Claude Code, Codex). The others take it again on every open.
    */
   keepsPromptOnResume: boolean;
-  /** The adapter hands `SessionSpec.extraDirectories` to the CLI (Claude's additionalDirectories); the others ignore it, and their agents reach those folders by path. */
+  /**
+   * The adapter hands `SessionSpec.extraDirectories` to the CLI (Claude's additionalDirectories,
+   * Codex's writable roots); the others ignore it, and their agents reach those folders by path.
+   */
   additionalDirectories: boolean;
+  /** A session takes a new list of extra directories without reopening (`RuntimeSession.setExtraDirectories`): Codex, per turn. */
+  liveDirectories: boolean;
   /** Context compaction shows up as a `compaction` item. */
   reportsCompaction: boolean;
   /** The agent's own tool for asking the user a question, which comes as an approval of kind "question" (questions.ts). */

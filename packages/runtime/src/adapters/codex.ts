@@ -53,7 +53,8 @@ export class CodexAdapter implements RuntimeAdapter {
   readonly label = "Codex";
   // Sub-agents: spawn_agent, from Codex's multi_agent feature (stable, on by default). No questionTool:
   // request_user_input is only offered in plan mode (default_mode_request_user_input is under development).
-  readonly capabilities: RuntimeCapabilities = { steer: true, steerLands: "next_step", steerAcceptance: "delivered", images: true, subAgents: true, keepsPromptOnResume: true, additionalDirectories: false, reportsCompaction: true };
+  // Extra directories become writable roots of the workspace-write sandbox, sent with each turn.
+  readonly capabilities: RuntimeCapabilities = { steer: true, steerLands: "next_step", steerAcceptance: "delivered", images: true, subAgents: true, keepsPromptOnResume: true, additionalDirectories: true, liveDirectories: true, reportsCompaction: true };
   private readonly options: { binary?: string };
   private modelCache: { at: number; models: ModelDef[] } | null = null;
 
@@ -138,10 +139,17 @@ class CodexSession extends SessionBase implements RuntimeSession {
   private skills = new Map<string, string>();
   /** The turn a /compact is running in. */
   private compactTurn: string | null = null;
+  /** The thread's own sandbox, which the extra directories widen; null outside the workspace-write modes. */
+  private sandbox: Record<string, unknown> | null = null;
+  /** SessionSpec.extraDirectories, until setExtraDirectories replaces them. */
+  private directories: string[];
+  /** The thread's sandbox has our writable roots in it: a turn without any must take them out again. */
+  private widened = false;
 
   constructor(spec: SessionSpec) {
     super();
     this.spec = spec;
+    this.directories = spec.extraDirectories ?? [];
   }
 
   /** liveTurn for Codex: a turn it accepted, or one it says started. */
@@ -220,6 +228,9 @@ class CodexSession extends SessionBase implements RuntimeSession {
       response = await this.rpc.request("thread/start", { ...common, dynamicTools });
     }
     this.threadId = String(response?.thread?.id ?? spec.resume?.sessionId);
+    // The sandbox Codex settled on (the user's config.toml included), echoed back with our roots added.
+    const sandbox = response?.sandbox;
+    this.sandbox = mode.sandbox === "workspace-write" && isRecord(sandbox) && sandbox.type === "workspaceWrite" ? sandbox : null;
     this.currentState = "idle";
     this.setHandle({ provider: "codex", sessionId: this.threadId });
   }
@@ -255,8 +266,10 @@ class CodexSession extends SessionBase implements RuntimeSession {
     this.turnAccepted = false;
     if (slash?.name === "compact") return this.compact(turnId, input.text, options);
     this.pendingInputs.set(options.clientMessageId, { clientMessageId: options.clientMessageId, text: input.text, as: "turn" });
+    const sandbox = this.sandboxPolicy();
     try {
-      await this.rpc.request("turn/start", { threadId: this.threadId, clientUserMessageId: options.clientMessageId, input: content, ...(this.spec.thinking ? { effort: this.spec.thinking } : {}) });
+      await this.rpc.request("turn/start", { threadId: this.threadId, clientUserMessageId: options.clientMessageId, input: content, ...(this.spec.thinking ? { effort: this.spec.thinking } : {}), ...(sandbox ? { sandboxPolicy: sandbox.policy } : {}) });
+      if (sandbox) this.widened = sandbox.widened;
     } catch (error) {
       // A turn given up meanwhile (abandonTurn) isn't this one to end.
       if (this.turnId === turnId) this.endTurn("failed", { error: errorMessage(error) });
@@ -264,6 +277,21 @@ class CodexSession extends SessionBase implements RuntimeSession {
     }
     if (this.turnId === turnId) this.turnAccepted = true;
     return { ok: true, as: "turn", turnId };
+  }
+
+  setExtraDirectories(directories: string[]): void {
+    this.directories = [...directories];
+  }
+
+  /**
+   * The turn's sandbox: the thread's own, with the extra directories as writable roots. Codex keeps
+   * a turn's sandbox for the turns after it, but not across a resume, and the list may have changed
+   * since: it goes with every turn while there are roots to add or to take out.
+   */
+  private sandboxPolicy(): { policy: Record<string, unknown>; widened: boolean } | null {
+    if (!this.sandbox || (!this.directories.length && !this.widened)) return null;
+    const roots = Array.isArray(this.sandbox.writableRoots) ? this.sandbox.writableRoots.map(String) : [];
+    return { policy: { ...this.sandbox, writableRoots: [...new Set([...roots, ...this.directories])] }, widened: this.directories.length > 0 };
   }
 
   /** Compaction runs as a turn of Codex's own; it's accepted once Codex starts it. */
