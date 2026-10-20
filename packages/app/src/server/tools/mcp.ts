@@ -34,6 +34,13 @@ export interface BotTool<Schema extends ZodType = ZodType> {
   input: Schema;
   /** Whether this bot gets the tool at all (for example, only with other bots to ask). */
   available?(caller: ToolCaller): boolean | Promise<boolean>;
+  /**
+   * Listed for a member of a group with a leader (ledMember). Such a seat only works on what it's
+   * handed, so the tools for planning, tasks, reminders and setup stay out of its listing, which
+   * costs tokens on every request. A call to one still runs: a session lists its tools once, maybe
+   * before the leader changed.
+   */
+  led?: boolean;
   run(args: z.output<Schema>, caller: ToolCaller): Promise<string>;
 }
 
@@ -50,9 +57,29 @@ interface JsonRpcRequest {
 
 type JsonRpcResponse = { jsonrpc: "2.0"; id: string | number | null; result?: unknown; error?: { code: number; message: string } };
 
+/** zod gives every integer the safe-integer bounds, which say nothing and cost tokens in every listing. */
+function withoutSafeBounds(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutSafeBounds);
+  if (!value || typeof value !== "object") return value;
+  const entries = Object.entries(value).filter(([key, bound]) => !((key === "maximum" && bound === Number.MAX_SAFE_INTEGER) || (key === "minimum" && bound === Number.MIN_SAFE_INTEGER)));
+  return Object.fromEntries(entries.map(([key, entry]) => [key, withoutSafeBounds(entry)]));
+}
+
 function inputSchema(schema: ZodType): Record<string, unknown> {
-  const { $schema: _schema, ...rest } = z.toJSONSchema(schema) as Record<string, unknown>;
+  const { $schema: _schema, ...rest } = withoutSafeBounds(z.toJSONSchema(schema)) as Record<string, unknown>;
   return rest;
+}
+
+/**
+ * Not a group chat's seat: the setup tools (get_setup, propose_*) are only for a bot's own chats.
+ * A proposal's card shows in the chat that made it, which in a seat is out of the group's sight,
+ * and a seat's listing would carry them on every request for work they're never part of.
+ */
+export const ownChat = (caller: ToolCaller): boolean => !caller.groupId;
+
+/** A member of a group with a leader: it gets only the tools marked `led`. */
+export function ledMember(caller: ToolCaller): boolean {
+  return !!caller.groupId && !!caller.groups?.ledBy(caller.groupId, caller.bot.id);
 }
 
 function issues(error: z.ZodError): string {
@@ -81,8 +108,10 @@ export async function answerMcp(message: JsonRpcRequest, tools: readonly BotTool
     }
     case "ping":
       return ok({});
-    case "tools/list":
-      return ok({ tools: (await offered()).map((tool) => ({ name: tool.name, description: tool.description, inputSchema: inputSchema(tool.input) })) });
+    case "tools/list": {
+      const led = ledMember(caller);
+      return ok({ tools: (await offered()).filter((tool) => tool.led || !led).map((tool) => ({ name: tool.name, description: tool.description, inputSchema: inputSchema(tool.input) })) });
+    }
     case "tools/call": {
       const tool = (await offered()).find((entry) => entry.name === message.params?.name);
       if (!tool) return fail(-32602, `Unknown tool ${String(message.params?.name)}`);

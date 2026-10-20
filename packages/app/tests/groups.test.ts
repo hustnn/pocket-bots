@@ -938,6 +938,8 @@ describe("a group with a leader", () => {
         return null;
       },
       ["alpha", "beta", "gamma"],
+      {},
+      ["delta"],
     );
     stop = group.stop;
     await group.groups.update(group.id, { leaderId: "alpha" });
@@ -948,8 +950,25 @@ describe("a group with a leader", () => {
     expect(prompts.get("alpha")).toContain("You lead this group:");
     expect(prompts.get("alpha")).toMatch(/- Beta: .*runs on/);
     expect(prompts.get("beta")).toContain("This group has a leader, Alpha.");
-    expect(prompts.get("beta")).not.toContain("claim the ones relevant to your skills");
+    expect(prompts.get("beta")).not.toContain("claim the ones that fit your skills");
+    // A member is told only of the tools it's listed.
+    expect(prompts.get("beta")).toContain('Your own tools come from the MCP server "bots": the group tools above, and search_chats');
+    expect(prompts.get("beta")).not.toContain("propose_changes");
+    // No seat proposes setup changes, the leader's neither: that's for the bot's own chats.
+    expect(prompts.get("alpha")).not.toContain("propose_changes");
+    expect(prompts.get("alpha")).toContain("Setup changes, routines and skills aren't proposed from a group");
     expect((await group.groups.list())[0]!.leaderId).toBe("alpha");
+
+    // The leader is listed every tool but the setup ones; a member only those for its piece, though a call to another still runs.
+    const { answerMcp } = await import("../src/server/tools/mcp");
+    const { BOT_TOOLS } = await import("../src/server/tools");
+    const seat = async (botId: string) => ({ bot: (await group.host.bot(botId))!, agentId: "seat", host: group.host, relay: null as never, groups: group.groups, groupId: group.id });
+    const listed = async (botId: string) => ((await answerMcp({ jsonrpc: "2.0", id: 1, method: "tools/list" }, BOT_TOOLS, await seat(botId))) as { result: { tools: { name: string }[] } }).result.tools.map((tool) => tool.name);
+    const setupTools = ["get_setup", "propose_skill", "propose_routine", "propose_changes"];
+    expect(await listed("alpha")).toEqual(BOT_TOOLS.map((tool) => tool.name).filter((name) => !setupTools.includes(name)));
+    expect(await listed("beta")).toEqual(["group_send", "group_send_draft", "group_read", "group_claim", "group_react", "group_members", "search_chats"]);
+    const tasks = (await answerMcp({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "group_task", arguments: { action: "list" } } }, BOT_TOOLS, await seat("beta"))) as { result: { isError?: boolean } };
+    expect(tasks.result.isError).toBeUndefined();
 
     woken.length = 0;
     const ask = await group.groups.postFromUser(group.id, { text: "Add a dark mode." });
@@ -963,8 +982,11 @@ describe("a group with a leader", () => {
     await expect(group.groups.task(beta, group.id, { action: "create", titles: ["find the theme files"], assignee: "Gamma" })).rejects.toThrow(/Alpha hands out the work/);
     await group.groups.read(beta, group.id, { unread: true });
     await group.groups.read(beta, group.id, { topLevel: true });
-    const sent = await group.groups.send(beta, group.id, { text: "@Gamma can you find the theme files?" });
+    const sent = await group.groups.send(beta, group.id, { text: "@Gamma can you find the theme files? @Delta might know." });
     expect(sent).toContain("takes work only from the leader, Alpha, or the user");
+    // A member has no ask_bot, so it isn't pointed to one for a bot outside the group.
+    expect(sent).toContain("- @Delta — not in this group");
+    expect(sent).not.toContain("ask_bot");
     // It reaches the leader, not Gamma.
     await settle(group);
     expect(woken).toEqual(["alpha", "alpha"]);

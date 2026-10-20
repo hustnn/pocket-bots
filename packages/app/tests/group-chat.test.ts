@@ -5,6 +5,7 @@ import {
   deliveryReason,
   groupDelivery,
   groupPrompt,
+  SUBAGENT_DELEGATION_SECTION,
   groupQuestion,
   heldText,
   inboxText,
@@ -347,44 +348,65 @@ describe("a group with a leader", () => {
     expect(leader).toContain("You lead this group:");
     expect(leader).toContain("  - Writer: Writes · runs on Claude Code with claude-sonnet-5-5");
     expect(leader).toContain("reply in the same thread and @mention the member: the thread is the piece's context");
-    expect(leader).not.toContain("Working through sub-agents:");
+    expect(leader).not.toContain("Sub-agents:");
+    // The leader hands pieces out by @mention and sets them done: no claiming, splitting or in_review.
+    expect(leader).not.toContain("Claim before acting");
+    expect(leader).not.toContain("group_task create");
+    expect(leader).not.toContain("in_review");
+    // The leader checks the result without repeating the checks the member reports it ran.
+    expect(leader).toContain("check the result before you build on it or pass it on; checks the member reports it already ran don't need repeating.");
     const member = groupPrompt("Launch", { lead: { role: "member", leader: "Lead" } });
     expect(member).toContain("A new piece starts you in a fresh session that remembers nothing of earlier pieces");
     expect(member).toContain("Don't change the task's status: Lead decides when it's done.");
-    expect(member).not.toContain("set the task to in_review");
-    expect(member).not.toContain("Splitting tasks for parallel execution:");
+    expect(member).toContain("Then stop; don't wait around or keep checking.");
+    expect(member).toContain("then what you changed (files), what tests and checks you ran and their results, and anything left open. Keep it short: Lead decides what's next.");
+    expect(member).not.toContain("in_review");
+    expect(member).not.toContain("group_task create");
     expect(member).not.toContain("send short progress updates");
+    // Nor the tools a member isn't listed (tools/mcp.ts ledMember).
+    for (const tool of ["group_task", "group_reminder", "group_follow", "group_mute", "group_inbox", "group_search", "group_mention_delivery"]) expect(member).not.toContain(tool);
+    expect(member.length).toBeLessThan(leader.length * 0.7);
   });
 });
 
 describe("the seat prompt", () => {
-  it("adds the sub-agent section, between splitting tasks and @mentions, only for a runtime that can start sub-agents", () => {
+  it("adds the sub-agent section, before writing in the group, only for a seat without a leader whose runtime can start sub-agents", () => {
     const plain = groupPrompt("Launch");
     const delegating = groupPrompt("Launch", { subAgents: true });
-    expect(plain).not.toContain("Working through sub-agents:");
-    const at = delegating.indexOf("Working through sub-agents:");
-    expect(at).toBeGreaterThan(delegating.indexOf("Splitting tasks for parallel execution:"));
-    expect(at).toBeLessThan(delegating.indexOf("@Mentions:"));
+    expect(plain).not.toContain("Sub-agents:");
+    const at = delegating.indexOf("Sub-agents:");
+    expect(at).toBeGreaterThan(delegating.indexOf("Reminders and @mentions:"));
+    expect(at).toBeLessThan(delegating.indexOf("Writing in the group:"));
+    // Small and medium work stays with the seat: a sub-agent starts from nothing.
+    expect(delegating).toContain("Each one starts from nothing and reads everything again, so do small and medium work yourself.");
     // Sub-agents stay out of the group.
-    expect(delegating).toContain("5. Only you speak in the group. Tell every sub-agent not to use the group tools: no group_send, group_send_draft, group_claim, group_task, group_react or group_reminder.");
-    expect(delegating.replace(/\nWorking through sub-agents:[\s\S]*?has been reported\.\n/, "")).toBe(plain);
+    expect(delegating).toContain("tell it not to use the group tools (group_send, group_send_draft, group_claim, group_task, group_react, group_reminder): only you speak in the group.");
+    expect(delegating.replace(`\n\n${SUBAGENT_DELEGATION_SECTION}`, "")).toBe(plain);
+  });
+
+  it("tells a led member to do its piece itself, and keeps sub-agents out of the group", () => {
+    const member = groupPrompt("Launch", { subAgents: true, lead: { role: "member", leader: "Lead" } });
+    expect(member).not.toContain("Sub-agents:");
+    expect(member).toContain("- Do the piece yourself: Lead has already split the work, and a sub-agent starts from nothing and reads everything again.");
+    expect(member).toContain("tell it not to use the group tools: only you speak in the group.");
+    expect(groupPrompt("Launch", { lead: { role: "member", leader: "Lead" } })).not.toContain("Do the piece yourself");
   });
 
   it("tells a seat that group messages are text first, files attached with them, and names its runtime's question tool", () => {
     const plain = groupPrompt("Launch");
-    expect(plain).toContain("- Group messages are text first: the text carries the message on its own");
-    expect(plain).toContain("attach it with group_send's files (paths on this computer, at most 6)");
-    expect(plain).not.toContain("Share files by their path");
+    expect(plain).toContain("- Group messages are text first: the text says what you did, what you need and who's next.");
+    expect(plain).toContain("Attach a file (group_send's files, at most 6) only when someone needs the file itself");
     expect(plain).not.toContain("ask with your");
     expect(groupPrompt("Launch", { questionTool: "AskUserQuestion" })).toContain(
-      "- When only the user can decide something (a choice between options, a fact you can't find), ask with your AskUserQuestion tool. The question shows in the group as yours, and the user's answer comes back to you as the tool's result; it reaches no other bot.",
+      "- When only the user can decide something (a choice between options, a fact you can't find), ask with your AskUserQuestion tool: the question shows in the group as yours, and the answer comes back to you alone.",
     );
   });
 
-  it("tells a seat about task amendments and mention delivery", () => {
+  it("tells a seat about task amendments, mention delivery and reminders", () => {
     const prompt = groupPrompt("Launch");
-    expect(prompt).toContain("group_task amend changes a task card's current title or description");
-    expect(prompt).toContain("group_mention_delivery shows what happened to each member a message of yours @mentioned");
+    expect(prompt).toContain("Any member may amend a task's card (title, description)");
+    expect(prompt).toContain("group_mention_delivery shows whether each member got a message of yours");
+    expect(prompt).toContain("rather than a long sleep, your memory, or your runtime's own wake or cron tools");
   });
 });
 

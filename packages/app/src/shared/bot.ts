@@ -350,8 +350,12 @@ export interface PromptContext {
   group?: string | null;
   /** The bot's usable skills with the SKILL.md path the agent should read. Empty when the files aren't on the bot's host. */
   skills: { name: string; description: string; path: string }[];
-  /** Whether chats get pocket-bots' own tools (bots on this host). */
-  botTools: boolean;
+  /**
+   * Whether chats get pocket-bots' own tools (bots on this host): "seat" for a group chat's seat,
+   * which has no setup tools, and "led" for a member's seat in a group with a leader, which gets
+   * only the tools for its piece.
+   */
+  botTools: boolean | "seat" | "led";
   /** The connected apps the bot may use; empty when it has none. */
   apps: PromptApp[];
 }
@@ -407,7 +411,7 @@ export function promptSections(bot: Bot, context: PromptContext, { volatile = tr
   }
   if (context.playbooks.length > 0) sections.push({ title: "Playbooks", text: renderPlaybooks(context.playbooks) });
   if (context.apps.length > 0) sections.push({ title: "Connected apps", text: appsPrompt(context.apps) });
-  if (context.botTools) sections.push({ title: "Bot tools", text: botToolsPrompt(bot.contactBots !== "off") });
+  if (context.botTools) sections.push({ title: "Bot tools", text: botToolsPrompt(bot.contactBots !== "off", context.botTools === true ? "own" : context.botTools) });
   return sections;
 }
 

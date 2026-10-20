@@ -59,6 +59,20 @@ describe("a chat's session setup", () => {
     expect(Object.keys((await specFor({ mcpServerIds: ["m"] }, library)).mcpServers)).toEqual(["bots"]);
   });
 
+  it("gives a led member's seat its own rules and the short bot-tools section", async () => {
+    const bot = makeBot({ provider: "claude" });
+    const host = fakeHost([bot]);
+    (host as unknown as { runtimes: Map<string, unknown> }).runtimes = new Map([["claude", { capabilities: { subAgents: true } }]]);
+    host.attach(fakeChats({ c1: { status: "idle", items: [{ type: "user_message", text: "hello" }] } }));
+    const lookup = async () => ({ name: "Launch", lead: { role: "member" as const, leader: "Lead" } });
+    const prompt = (await chatSpecs(host, relay, lookup)({ id: "c1", botId: bot.id, provider: "claude", model: null, thinking: null, mode: null, cwd: "/tmp", title: null, labels: { [GROUP_LABEL]: "group-x" } })).systemPrompt;
+    expect(prompt).toContain("This group has a leader, Lead.");
+    expect(prompt).toContain("- Do the piece yourself: Lead has already split the work");
+    expect(prompt).not.toContain("Sub-agents:");
+    expect(prompt).toContain('Your own tools come from the MCP server "bots": the group tools above, and search_chats to look through your past chats and daily log.');
+    expect(prompt).not.toContain("propose_routine");
+  });
+
   it("gives a group seat the sub-agent section only when its runtime can start sub-agents", async () => {
     const seat = async (provider: string, subAgents: boolean) => {
       const bot = makeBot({ provider });
@@ -67,10 +81,13 @@ describe("a chat's session setup", () => {
       host.attach(fakeChats({ c1: { status: "idle", items: [{ type: "user_message", text: "hello" }] } }));
       return (await chatSpecs(host, relay, async () => ({ name: "Launch" }))({ id: "c1", botId: bot.id, provider, model: null, thinking: null, mode: null, cwd: "/tmp", title: null, labels: { [GROUP_LABEL]: "group-x" } })).systemPrompt;
     };
-    expect(await seat("claude", true)).toContain("Working through sub-agents:");
+    expect(await seat("claude", true)).toContain("Sub-agents:");
     const pi = await seat("pi", false);
     expect(pi).toContain('your seat in the group chat "Launch"');
-    expect(pi).not.toContain("Working through sub-agents:");
+    expect(pi).not.toContain("Sub-agents:");
+    // A seat proposes no setup changes: its bot-tools section says where they go instead.
+    expect(pi).toContain("Setup changes, routines and skills aren't proposed from a group: if the user asks for one here, tell them to ask you in your own chat.");
+    expect(pi).not.toContain("propose_routine");
     // Claude, Codex, OpenCode and Grok Build can start sub-agents; Pi can't on its own.
     // A runtime with its own question tool is told its questions show in the group; one without isn't.
     const questions = async (provider: string, questionTool?: string) => {
@@ -80,8 +97,8 @@ describe("a chat's session setup", () => {
       host.attach(fakeChats({ c1: { status: "idle", items: [{ type: "user_message", text: "hello" }] } }));
       return (await chatSpecs(host, relay, async () => ({ name: "Launch" }))({ id: "c1", botId: bot.id, provider, model: null, thinking: null, mode: null, cwd: "/tmp", title: null, labels: { [GROUP_LABEL]: "group-x" } })).systemPrompt;
     };
-    expect(await questions("grok", "ask_user_question")).toContain("ask with your ask_user_question tool. The question shows in the group as yours");
-    expect(await questions("pi")).not.toContain("The question shows in the group as yours");
+    expect(await questions("grok", "ask_user_question")).toContain("ask with your ask_user_question tool: the question shows in the group as yours");
+    expect(await questions("pi")).not.toContain("the question shows in the group as yours");
     expect([new ClaudeAdapter(), new CodexAdapter(), new OpenCodeAdapter(), new GrokAdapter(), new PiAdapter()].map((adapter) => [adapter.id, adapter.capabilities.questionTool ?? null])).toEqual([
       ["claude", "AskUserQuestion"],
       ["codex", null],

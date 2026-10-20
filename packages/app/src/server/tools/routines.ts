@@ -2,7 +2,7 @@ import { z } from "zod";
 import { proposalReply } from "../../shared/proposals";
 import { describeSchedule, ScheduleInput, scheduleFrom, upcomingRuns } from "../../shared/routines";
 import { createProposal } from "../proposals";
-import { defineTool } from "./mcp";
+import { defineTool, ownChat } from "./mcp";
 
 // propose_routine: the bot suggests a routine, the user confirms
 // it on a card in the chat, and the runs report back to that chat.
@@ -16,6 +16,7 @@ export const proposeRoutine = defineTool({
     instructions: z.string().min(1).max(20_000).describe("What to do on each run, written so it works without this chat."),
     schedule: ScheduleInput,
   }),
+  available: ownChat,
   async run({ name, instructions, schedule }, { bot, agentId }) {
     const now = new Date();
     const parsed = scheduleFrom(schedule, now);

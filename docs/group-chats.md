@@ -214,7 +214,7 @@ bot 在群里的回复可以带文件和问题，你对问题的回答回到问�
 - **静音**：从静音开始的那条起，静音的 bot 收不到普通的顶层消息的记录，@everyone 也一样。@ 它的消息、指派给它的任务回执照样有记录。线程不受静音影响。
 - **线程里的消息**：线程的关注者，加上这次发送牵涉到的人：发送者、顶层消息的作者（他没有取消关注时）、被 @ 的成员。线程里的 @everyone 把每个成员都算进来，并让他们关注这个线程。取消了关注的人没有记录，除非这条 @ 了他；这一 @ 会让他重新关注，提示里会告诉他。
 - **回复**：消息可以回复某一条（`reply_to`），被回复的 bot 收到的提示里标着「回复了你」。回复不能穿透静音。
-- **有 leader 的群**：leader 按群的唤醒方式照常收。其他成员只收「派给它的活」：来自你、leader，或者你和 leader 引起的系统消息（`fromLead`），并且是找它的（@ 它、回复它、指派给它的任务回执、@everyone）。别的顶层消息不写它的记录，和静音一样，所以也不挡它发言；它关注的线程照样写记录，但不进待读、不叫醒它。一个成员 @ 另一个成员、回复它、@everyone、给它建任务的回执，都到不了那个成员（线程里也不让它关注），`group_send` 的结果在「Undelivered mentions」里说明要找 leader。成员只能认领派给自己的活（指派给它的任务，或者你和 leader @ 它的消息），也不能把任务指派给别的成员。座位的 prompt 里，leader 多一段怎么计划、派活（每条顶层消息 @ 一个成员，带完整的说明）、检查结果，并列出每个成员的介绍和模型，不带子 agent 那一段；成员多一段只做派给它的事、做完在任务的线程里向 leader 汇报一次、不发确认和进度、卡住了问 leader。换 leader 时发一条 @everyone 的系统消息（`group.leader`），已经开着的座位靠它知道新规则，下次开会话时 prompt 也跟着变。leader 离开群，群就没有 leader 了。
+- **有 leader 的群**：leader 按群的唤醒方式照常收。其他成员只收「派给它的活」：来自你、leader，或者你和 leader 引起的系统消息（`fromLead`），并且是找它的（@ 它、回复它、指派给它的任务回执、@everyone）。别的顶层消息不写它的记录，和静音一样，所以也不挡它发言；它关注的线程照样写记录，但不进待读、不叫醒它。一个成员 @ 另一个成员、回复它、@everyone、给它建任务的回执，都到不了那个成员（线程里也不让它关注），`group_send` 的结果在「Undelivered mentions」里说明要找 leader。成员只能认领派给自己的活（指派给它的任务，或者你和 leader @ 它的消息），也不能把任务指派给别的成员。座位的 prompt 里，leader 多一段怎么计划、派活（每条顶层消息 @ 一个成员，带完整的说明）、检查结果，并列出每个成员的介绍和模型，不带子 agent 那一段，也不带认领、in_review 和拆任务（它派活靠 @，核对后自己把任务标成 done）；leader 核对结果时不重复成员已经跑过的检查；成员多一段只做派给它的事、做完在任务的线程里向 leader 汇报一次就停（带上跑了哪些测试和检查、结果如何）、不发确认和进度、卡住了问 leader、能开子 agent 时派给它的活自己做，别的只留消息、写法、约束和权限几段，没有线程、任务、提醒、礼节这些用不到的规则。成员的工具也只列出它用得到的（`group_send`、`group_send_draft`、`group_read`、`group_claim`、`group_react`、`group_members` 和 `search_chats`，见下面「bot 的群聊工具」）。换 leader 时发一条 @everyone 的系统消息（`group.leader`），已经开着的座位靠它知道新规则，下次开会话时 prompt 也跟着变。leader 离开群，群就没有 leader 了。
 - **成员的一件活（piece）**：`workOf` 定每条待读属于哪件活：线程里的消息属于那个线程；你或 leader 在顶层 @ 它的消息是一件新活，就是它自己的编号；别的（系统消息、@everyone、顶层的回复）不属于哪件活，跟着当前的活一起送。座位记着它的会话在做哪件活（`group_members.seat_task`）。叫醒时（`pieceFor`）：当前这件活有新消息就先送它，否则送最早的那件；属于别的活的待读先不提示，等这件做完再说。要送的活和会话正在做的不是同一件时：会话忙就等这一轮结束，空闲就把座位换新（归档旧聊天，开新会话，不带简报，看过的记录全部清掉）。所以新活从一个空的上下文开始；回到一件老活时，新座位没给它看过那个线程，被 @（或被回复）时线程上下文照常附上：顶层的派活消息、@ 之前最近的 6 条回复和那条 @。成员的叫醒里，这件活的消息直接给全文（最多 8 条，`[For you, in full (already read):]`），座位收下就算看过、从待读里取走，它不用再 `group_read`；不再附「没完成的任务」。成员在顶层不做「第一次碰」的检查（顶层只有派给它的东西），所以新会话认领时不会因为顶层别的消息被搁置。它认领后的提示是：做完在线程里 @ leader 回答，状态由 leader 改。
 - **@everyone**：顶层的 @everyone 投给每个没静音的成员，标出「for @everyone」。
 - **系统消息**按种类处理，见下面的「任务和系统消息」。
@@ -459,7 +459,7 @@ Current description: Safari 和 Chrome 都要能登录；不加新依赖
 
 - 每个成员 bot 在每个群里有一个座位，是这个 bot 自己的一个普通会话，用它自己的模型、审批模式、技能和 MCP。群第一次叫醒它时才建。座位的 system prompt 里多一段讲怎么在群里协作。bot 之间私下说话用 `ask_bot`，不在群里开私聊。
 - **座位在哪个目录**：群设了工作目录（`groups.cwd`）就在那里，没设就在 bot 自己的工作目录。会话开始以后不能换目录，所以座位要去的目录（群的，或 bot 的）和它现在的不一样时（你改了群的目录，或改了 bot 的），它下次被叫醒、空闲时换新座位，和下面的换新一样带一份简报，开头说明目录从哪换到了哪（简报里操作的相对路径还是旧目录的）；忙着的座位先跑完这一轮。改群的目录时群里记一条 `group.folder` 系统消息，只留作记录，不进谁的待读、不叫醒谁（`skip`），所以不会为了换目录让每个 bot 白跑一轮。目录必须是本机上存在的文件夹，`~/` 会展开；不存在就拒绝，什么都不改。
-- **子 agent**：运行时能开子 agent 的座位，prompt 里在「拆任务」和「@」两段之间多一段「Working through sub-agents」：自己留在对话里想、回话、分派、核对，动手的活交给子 agent 并行做；先回话再分派；子 agent 什么都看不到，要交代完整；**只有你在群里说话**，告诉每个子 agent 不要用群聊工具（`group_send`、`group_send_draft`、`group_claim`、`group_task`、`group_react`、`group_reminder`），这一条要紧，因为 Claude 的子 agent 默认继承 MCP 工具；结果自己核对后再报；子 agent 都做完、结果都报了才停。能开子 agent 的运行时：Claude（`Agent`）、Codex（`spawn_agent`）、OpenCode（`task`）、Grok Build（`task`）；Pi 自己没有，不加这一段。由运行时接口的 `capabilities.subAgents` 决定。
+- **子 agent**：运行时能开子 agent 的座位，没有 leader 的群里 prompt 在「提醒和 @」和「写法」两段之间多一段「Sub-agents」：每个子 agent 都是从零开始的新会话，要把需要的东西重读一遍，所以小活和中等的活自己做；只有大的、能拆成几块并行的活，或者会让它长时间顾不上群的活，才交给子 agent；先回话再分派；子 agent 什么都看不到，要交代完整；**只有你在群里说话**，告诉每个子 agent 不要用群聊工具（`group_send`、`group_send_draft`、`group_claim`、`group_task`、`group_react`、`group_reminder`），这一条要紧，因为 Claude 的子 agent 默认继承 MCP 工具；结果自己核对后再报；子 agent 都做完、结果都报了才停。有 leader 的群里，leader 没有这一段（动手的活派给成员）；成员的规则里换成一句：派给你的活自己做，leader 已经拆过了，只有能拆成几块大的、值得并行的才开子 agent，并且不让它用群聊工具。以前这一段让每个座位把超过几次工具调用的活都交给子 agent：基准测试里 Haiku 成员把整件探索交给一个 Explore 子 agent，多出一个带着约 22K token 首个请求的新会话，占了整个群 37% 的 token。能开子 agent 的运行时：Claude（`Agent`）、Codex（`spawn_agent`）、OpenCode（`task`）、Grok Build（`task`）；Pi 自己没有，不加这一段。由运行时接口的 `capabilities.subAgents` 决定。
 - **座位换新**：座位空闲超过 1 小时、上下文超过 128k token 时，下次被叫醒就换一个新座位，从一份约 8k token 以内的简报开始：
   - 它看过的最近 25 条消息（每条约 2k、整段约 4k token 上限）；
   - 正在用的文件，重新读出当前内容（最多 14 个，2 小时内碰过的现在重读，每个约 700 token；名字像密钥的只列路径）；
@@ -523,7 +523,7 @@ bot 在群里的回复可以带文件和问题，和一对一聊天一样，你�
 - **它不进任何待读**：系统消息分类里有一种 `bot.question`，归「不写投递记录」，所以不叫醒谁，不算谁的未读（包括你，群的提醒点靠「有审批在等你」显示），也不算进发言前检查的第 3 步（数的是投递记录）。bot 第一次在顶层发言前看最近 3 条（first touch）时，看的是这个地方的消息本身，问题也在里面，和别的不写投递记录的系统消息一样。bot 自己发言后读位置能不能跳过它，也和别的顶层系统消息一样不算。
 - 你在群里回答（`pocket.groups.answer`）：交给 ChatService 的 `respond`，就是座位里那个审批的回答；审批已经不在了（这一轮结束了），问题记成 closed，告诉你它不再等了。在座位里回答也行，`permission.resolved` 让群里的问题跟着变。
 - pocket-bots 重启时，审批随旧进程没了，还是 pending 的问题记成 closed。
-- 其他审批、secret 的问题、登录还在座位里：群顶上「X needs your approval」只看这些（群里已经显示的问题不算），点一下进座位。草稿（提议卡片）也只在座位里。
+- 其他审批、secret 的问题、登录还在座位里：群顶上「X needs your approval」只看这些（群里已经显示的问题不算），点一下进座位。座位里没有提议工具（`get_setup`、`propose_*`），改配置、建定时任务、存技能在 bot 自己的聊天里做。
 
 ## bot 的群聊工具
 
@@ -543,6 +543,8 @@ bot 在群里的回复可以带文件和问题，和一对一聊天一样，你�
 | `group_mention_delivery` | 查自己一条消息里每个被 @ 的成员：送到了、还在路上、丢了（为什么，该换人还是晚点再试），以及消息还送到了谁、没送到谁 |
 | `group_members` | 成员、各自在不在忙、有没有静音、手上有哪些任务 |
 
+工具列表每次请求都要带，所以说明只讲调用做什么，什么时候该用写在座位的 prompt 里。所有座位（leader、成员、没有 leader 的群）都不列出改配置的 `get_setup`、`propose_changes`、`propose_routine`、`propose_skill`，这些只在 bot 自己的聊天里有。有 leader 的群里，成员只列出 `group_send`、`group_send_draft`、`group_read`、`group_claim`、`group_react`、`group_members` 和 `search_chats`：它只做派给它的活，任务、提醒、关注、静音、@ 的去向、搜索群消息、问别的 bot、改配置都用不到。只是不列出，调用照样执行，因为会话只在开始时取一次工具列表，换 leader 之后已经开着的会话还是旧列表，下次开会话才换。
+
 这些工具都在 pocket-bots 的 `bots` MCP 服务器上，所有 agent 都免审批。
 
 ## 代码在哪
@@ -561,7 +563,8 @@ bot 在群里的回复可以带文件和问题，和一对一聊天一样，你�
 | `packages/app/src/server/briefing.ts` | 座位换新时的简报 |
 | `packages/app/src/server/db.ts` | 表结构（迁移 6 是这套消息管理，7 是任务的版本号，8 是提醒，9 把普通消息的唤醒原因 room 改名为 group，10 是任务卡片、任务的历史和 @ 记录，11 是「给它看到过哪」和会话按哪个 prompt 跑，12 是会话的压缩连着失败几次，13 是 bot 的问题和草稿带的文件，14 是单聊的搜索索引，15 是唤醒方式存成 everyone，16 是群的 leader，17 是成员的座位在做哪件活） |
 | `packages/app/src/server/chats.ts` | 座位的会话设置：运行时能开子 agent 时，prompt 里加子 agent 那一段；座位的固定 prompt（不含每天会变的部分） |
-| `packages/app/src/server/tools/groups.ts` | 座位的群聊工具 |
+| `packages/app/src/server/tools/groups.ts` | 座位的群聊工具；标着 `led` 的是有 leader 时成员也列出的那几个 |
+| `packages/app/src/server/tools/mcp.ts` | MCP 的 `tools/list` 和 `tools/call`；`ledMember`：成员只列出 `led` 的工具 |
 | `packages/app/src/web/app/group/` | 群聊页面（bot 消息的附件、bot 的问题卡片）、线程面板、任务看板、输入框 |
 | `packages/app/tests/group-store.test.ts` | 存储层的规则：投递记录、静音、线程、系统消息、读位置、看过的记录、草稿、任务的版本号、任务卡片和历史、@ 记录、提醒 |
 | `packages/app/tests/reminders.test.ts` | 提醒的规则、下次响的时间（含时区和夏令时）、输入检查和文字 |
@@ -571,5 +574,5 @@ bot 在群里的回复可以带文件和问题，和一对一聊天一样，你�
 | `packages/app/tests/supervision.test.ts` | 假计时器下的运行时看护：同时 6 个、间隔半秒、同一个聊天不等、排队时来的消息一起带上、会话打不开和运行时不报事件的启动超时、看不到的轮次 30 秒回到空闲、进程没了的卡住运行（SIGTERM、10 秒后 SIGKILL、没收下的再发一次）、进程还在只记一次、忙着却没有轮次时回到空闲、压缩 5 分钟没结束、Pi 的压缩失败 3 次后开新会话、成功清零、只对 Pi 计数 |
 | `packages/runtime/test/supervision.test.ts` | 放弃一轮、进程在不在；用一个假的 `pi`（讲 Pi 的 RPC）测压缩失败、成功、运行时的轮次，和每个新会话有自己的 id |
 | `packages/app/tests/chat-service.test.ts` | 续接时补发改过的 prompt（只发一次、没有记录的只记下、不需要的运行时不发）；会话打开和压缩的信号；续接的句柄 |
-| `packages/app/tests/chat-specs.test.ts` | 只有能开子 agent 的运行时，座位的 prompt 里才有那一段；有提问工具的运行时，prompt 里说它的问题会进群 |
+| `packages/app/tests/chat-specs.test.ts` | 只有能开子 agent 的运行时，座位的 prompt 里才有那一段；有提问工具的运行时，prompt 里说它的问题会进群；有 leader 时成员的座位只有它自己的规则和简短的工具说明 |
 | `packages/runtime/test/questions.test.ts` | 每个运行时的问题和回答的转换（Claude 按问题原文、Codex 按 id、OpenCode 按字段、Grok Build 的 accepted / cancelled）、多选拆回选项、假运行时的提问 |

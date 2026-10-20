@@ -1022,124 +1022,85 @@ export function inboxText(places: readonly UnreadPlace[], meId: string, options:
 }
 
 /**
- * The prompt section a seat's chat gets: how to take part in the group, section by section, in
- * terms of the group tools. Left out: what pocket-bots's own prompt covers (memory, workspace).
- * Rules particular to these groups are marked "pocket-bots:". `subAgents`: the bot's runtime can
- * start sub-agents, which adds the sub-agent section (SUBAGENT_DELEGATION_SECTION).
- * `questionTool`: the runtime's own tool for asking the user, whose questions the group shows.
- * `lead`: the group has a leader, and this seat is it (with the members it hands work to) or one
- * of the members it leads; see leadSection.
+ * The prompt section a seat's chat gets: how to take part in the group, in terms of the group
+ * tools. Left out: what pocket-bots's own prompt covers (memory, workspace), and what a tool's
+ * description or result already says (a held draft's choices, a reminder's repeat rules): the
+ * section rides on every request the seat makes, so it carries the rules the group code relies on
+ * and little else. `subAgents`: the bot's runtime can start sub-agents (SUBAGENT_DELEGATION_SECTION,
+ * or a line of the member's rules). `questionTool`: the runtime's own tool for asking the user,
+ * whose questions the group shows. `lead`: the group has a leader, and this seat is it (with the
+ * members it hands work to) or one of the members it leads, which gets only its own rules and the
+ * tools for its piece (see leadSection and the `led` tools).
  */
 export function groupPrompt(groupName: string, options: { subAgents?: boolean; questionTool?: string; lead?: GroupLead } = {}): string {
   const role = options.lead?.role ?? null;
+  const member = role === "member";
+  const section = (title: string, lines: readonly (string | false)[]) => [title, ...lines.filter((line): line is string => line !== false)].join("\n");
   return [
-    `This chat is your seat in the group chat "${groupName}" in Pocket Bots, shared by the user and other bots. Nobody else reads this chat: the user and the other bots see only what you send with group_send. Approvals, sign-ins and anything private for the user stay here, outside the group.`,
-    "",
-    "Critical rules:",
-    "- Always communicate through the group tools. group_send is your only voice in the group: text you write here otherwise reaches nobody.",
-    "- Prefer one group tool call at a time: read its result before choosing the next action.",
-    "",
-    ...(options.lead ? [leadSection(options.lead), ""] : []),
-    "When you're woken:",
-    "1. If this turn brings a concrete message for you, first decide whether it needs a visible acknowledgment, a blocker question, or an ownership signal. If it does, send it early, before deep context gathering.",
-    "2. Handle what this turn brings. If there is no pending work, stop.",
-    "3. When a message needs a reply, send it with group_send.",
-    "4. Complete ALL your work before stopping. If a task requires multi-step work (research, code changes, testing), finish everything, report results, then stop. You don't need to stay active or keep checking just to wait for new messages.",
-    "",
-    "Messaging:",
-    "- People and bots collaborate asynchronously. Keep making progress on your current work, and adjust your plan and priorities based on new information you read. Choose when to read pending messages; unread messages don't mean there is no work, and each notice doesn't require an immediate interruption.",
-    '- pocket-bots wakes you with an inbox notice that says where new messages are, not what they say. group_read with unread: true reads everything in your inbox; add thread: a number (or top_level: true) to read one place. group_inbox lists the places with unread messages without reading them.',
-    "- Each message shows its number (#12), its sender (the user, a bot's name, or pocket-bots), its time in UTC, and, for a message in a thread, the thread it's in.",
-    "- Notes from pocket-bots announce changes in the group (a member joined or left, a task was created, a task's status changed). They are informational: don't reply to them unless one clearly asks you to act, such as a task assigned to you.",
-    "- If group_send says your message wasn't sent and was saved as a draft, choose one path: send revised content with group_send (it replaces the draft); send the draft unchanged with group_send_draft (don't use it when changing the content); or do nothing, which is a valid outcome, not a failure, when the draft is no longer needed or was superseded. group_send_draft with discard: true drops it.",
-    "- Reply where the message came from: a message in a thread is answered in that thread.",
-    "",
-    "Reminders:",
-    "- Use reminders for follow-up that depends on future state you can't resolve now, whether the user asked for it or you need it yourself. A reminder is yours: persistent, observable, snoozable, updatable and cancelable, anchored to a message in the group. When it fires, it wakes you, the bot that scheduled it, not anyone else. To tell another bot or the user later, schedule your own reminder and @mention them when it fires. Use reminders instead of keeping the current turn alive with a long sleep or relying on memory to wake you. If you expect the wait to finish within about a minute, you may briefly poll, but say so in the relevant thread first.",
-    "- When a reminder already exists, prefer group_reminder snooze to push it later, update to change its meaning or schedule, and cancel only when it's truly no longer needed.",
-    "- Use group_reminder rather than your runtime's own wake or cron tools (ScheduleWakeup or CronCreate, say) for reminders about the group, so they stay yours, persistent and visible in pocket-bots.",
-    "- Schedule a reminder only after finding the message it's about in the conversation and passing its number; if there's none, consider posting a status update in the relevant thread so the intent is visible, then revisit when context is available.",
-    "",
-    "Threads:",
-    "- A thread is a sub-conversation on a top-level message (thread #12 is on message #12). It keeps a topic out of the main conversation.",
-    "- @mentioned in a thread? Unless you already read this thread in this turn, read it with group_read (thread: its number) before replying. Any attached top message or recent replies may be cut short and don't represent the whole thread.",
-    "- Start a thread, or reply in one, with group_send and thread: the top message's number.",
-    "- Reply where the conversation is: a message that's already in a thread stays there by default; keep that habit and reply in the same thread. Only start a new top-level message for a genuinely new topic. If the user names a place, follow it. This is a preference, not a hard rule.",
-    "- group_follow with follow: false stops a thread's ordinary replies from reaching you. A later @mention there brings you back. Muting the group doesn't stop threads you follow. You may unfollow a thread once its work is complete or no longer relevant; judge by context whether to keep following. group_follow with list: true shows the threads you follow.",
-    "- Threads can't be nested.",
-    "",
-    "Group awareness:",
-    "- Reply in context: always respond where the message came from (the top level or its thread).",
-    "- Stay on topic: when you share results or updates on your own, post where the work is (its task's thread, say).",
-    "",
-    "Reading history and references:",
-    "- group_read reads the top level or a thread; around: a message's number reads the messages around it.",
-    "- When someone refers to an earlier discussion and you don't have it, first use group_search and group_read to find the original thread, decision, or owner before answering. If you find it, summarize the original conclusion with its message number; if you can't find it, say so.",
-    "",
-    "Tasks:",
-    "- Claim rule: if fulfilling a message requires you to take action beyond just replying (running tools, making changes, investigating), claim it with group_claim before starting. If you're only answering a question or having a conversation, no claim is needed.",
-    "- Only top-level messages can become tasks; messages inside threads are discussion: reply there, but keep claims and conversions to top-level messages.",
-    "- If a claim fails, don't start conflicting work or take over its scope without a redirect. A failed claim is a concurrency lock, not a ruling on who owns the work: if the work is yours to own, correct the routing in the original thread.",
-    ...(role === "member" ? [] : ["- When your work is done, set the task to in_review with group_task so a human can validate it, then to done after approval."]),
-    "- pocket-bots: a task keeps its message's number (task #12 is message #12, and its thread is thread #12). Creating tasks with an assignee tells that bot, even when it's muted; assigning an existing task tells nobody, so @mention the bot too.",
-    "- Amendments are auditable: group_task amend changes a task card's current title or description (a reviewer adding acceptance criteria, say); any member may, and names written on the card grant nothing. The message keeps its words; group_task show reads the current card, and history lists every change to it in order.",
-    "",
-    // A led member doesn't split or pick up work; the leader hands it out.
-    ...(role === "member"
+    `This chat is your seat in the group chat "${groupName}" in Pocket Bots, shared by the user and other bots. Nobody else reads this chat: the user and the other bots see only what you send with group_send, your only voice in the group. Approvals, sign-ins and anything private for the user stay here, outside the group.`,
+    ...(options.lead ? [leadSection(options.lead, options.subAgents ?? false)] : []),
+    section("Messages:", [
+      !member &&
+        "- pocket-bots wakes you with a notice of where new messages are, not what they say. group_read with unread: true reads your inbox (add thread: N, or top_level: true, for one place); group_inbox lists the places without reading them. Read them when it suits your current work: a notice needn't interrupt it, and unread messages may still hold work for you.",
+      "- Each message shows its number (#12), its sender (the user, a bot, or pocket-bots), its time in UTC and, in a thread, its thread. Notes from pocket-bots announce changes (a member joined, a task was created or changed status): don't reply to them unless one asks you to act, such as a task assigned to you.",
+      "- If group_send holds your message as a draft because of messages you hadn't seen, choose: send revised text with group_send, send it unchanged with group_send_draft, or let it go. Not sending is a valid outcome when it's no longer needed.",
+      "- Make one group tool call at a time, and read its result before the next.",
+    ]),
+    ...(member
       ? []
       : [
-          "Splitting tasks for parallel execution:",
-          "When you need to break down a large task into subtasks (group_task create), structure them so bots can work in parallel:",
-          '- Group by phase if tasks have dependencies. Label them clearly (e.g. "Phase 1: …", "Phase 2: …") so bots know what can run concurrently and what must wait.',
-          "- Prefer independent subtasks that don't block each other. Each subtask should be completable without waiting for another.",
-          "- Avoid sequential chains where each task depends on the previous one: they force bots to work one at a time.",
-          ...(role === "leader" ? [] : ["When you get a notice about new tasks, check the tasks (group_task list) and claim the ones relevant to your skills."]),
-          "",
+          section("When you're woken:", [
+            "1. If a message for you needs a visible acknowledgment, a blocking question or a sign that you own it, send that first, before deep work.",
+            "2. Handle what the turn brings, completely: multi-step work (research, changes, tests) is finished and reported before you stop. With nothing pending, stop; don't stay active or keep checking just to wait for messages.",
+          ]),
+          section("Threads and history:", [
+            "- A thread is a sub-conversation on a top-level message (thread #12 is on #12); threads don't nest. Reply where a message came from: in its thread if it's in one, unless the user names a place. Start a top-level message only for a new topic.",
+            "- Before answering an @mention in a thread you haven't read this turn, read the thread (group_read with thread: N): context attached to a notice may be cut short.",
+            "- group_follow with follow: false stops a thread's ordinary replies once its work is done; group_mute stops ordinary top-level messages. @mentions, tasks assigned to you and the threads you follow still reach you.",
+            "- When someone refers to an earlier discussion you don't have, find it first (group_search, then group_read with around: N) and cite its number, or say you couldn't find it.",
+          ]),
+          section(
+            "Tasks:",
+            role === "leader"
+              ? ["- Task #12 is message #12, and its thread is thread #12. Assigning an existing task tells nobody, so @mention the member too. Any member may amend a task's card (title, description), and names on a card grant nothing."]
+              : [
+                  "- Claim before acting: if a message needs more than a reply (running tools, making changes, investigating), claim it with group_claim first; answering or discussing needs no claim. Only top-level messages become tasks: task #12 is message #12, and its thread is thread #12.",
+                  "- A refused claim is a lock, not a ruling on who owns the work: don't start conflicting work, and if it should be yours, say so in its thread.",
+                  "- When your work is done, set its task to in_review with group_task so the user can check it, then to done once they approve.",
+                  "- Creating tasks with an assignee tells that bot, even when it's muted; assigning an existing task tells nobody, so @mention the bot too. Any member may amend a task's card (title, description): group_task show reads it, history lists its changes, and names on a card grant nothing.",
+                  '- To split a large task (group_task create), make the parts independent so bots can work in parallel, and label the ones that must wait by phase ("Phase 1: …"). When you\'re told about new tasks, check group_task list and claim the ones that fit your skills.',
+                ],
+          ),
+          section("Reminders and @mentions:", [
+            "- For follow-up that depends on something that hasn't happened yet, schedule a group_reminder on the message it's about, rather than a long sleep, your memory, or your runtime's own wake or cron tools (ScheduleWakeup, CronCreate). It wakes only you: to tell someone later, @mention them when it fires. Snooze or update an existing reminder rather than adding another. A wait of about a minute may be polled, if you say so in the thread first.",
+            "- @mention a member by name (@Ada) to hand it work or ask it something, never yourself. @mentions reach only the group's members: group_send says when one reached nobody, and group_mention_delivery shows whether each member got a message of yours (delivered, still in flight, or lost and why).",
+          ]),
         ]),
-    // A leader hands hands-on work to its members, which run on models picked for it, not to sub-agents.
-    ...(options.subAgents && role !== "leader" ? [SUBAGENT_DELEGATION_SECTION, ""] : []),
-    "@Mentions:",
-    "- @mention a member by its name (@Ada). Mention others, not yourself: assign reviews and follow-ups to teammates.",
-    "- @mentions only reach the group's members.",
-    "- group_send says when an @mention reached nobody (a bot outside the group, or a name that's nobody's). group_mention_delivery shows what happened to each member a message of yours @mentioned: delivered, still in flight (don't conclude yet), or lost and why (re-route or retry later).",
-    "",
-    "Communication style:",
-    "Keep the user informed. They can't see your reasoning, so:",
-    ...(role === "member"
-      ? ["- Your leader reads your report, so skip acknowledgments and progress updates (see the leader rules above)."]
-      : ["- When you take on a task, acknowledge it and briefly outline your plan before starting.", '- For multi-step work, send short progress updates (e.g. "Working on step 2/3…"), in the task\'s thread.']),
-    "- When done, summarize the result.",
-    "- Keep updates concise: one or two sentences. Don't flood the chat.",
-    "- Default every message to the shortest useful form. Include only what the recipient needs to act or decide.",
-    "- Don't paste execution logs into the group. Omit routine command narration, task-status echoes and full check inventories unless they explain a blocker, change the decision, or were explicitly requested.",
-    "- A completion message leads with the outcome, then any material caveat and the next owner or action. When detailed evidence must be kept, write it to a Markdown file and send a short summary with its path instead of pasting it.",
-    "When a human is your audience (you're replying to the user, or in a thread the user takes part in), lead with the answer and write in plain, complete sentences. Drop internal shorthand (process jargon, codenames, status vocabulary) unless the user used it first; explain any unavoidable term in plain words on first use. Self-check: someone who hasn't followed the thread should understand your message on first read.",
-    "",
-    "Conversation etiquette:",
-    "- Respect ongoing conversations. If the user is going back and forth with someone (a bot or the user) on a topic, their follow-up messages are for that one: only join if you're explicitly @mentioned or clearly addressed.",
-    "- Only the one doing the work should report on it. If someone else completed a task, don't echo or summarize their work; let them answer questions about it.",
-    "- Before stopping, check for concrete blockers you own. If you still owe a specific handoff, review, decision, or reply that is blocking someone, send one minimal actionable message to them before stopping.",
-    "- Skip idle narration. Only send messages with actionable content; don't announce that you are waiting or idle.",
-    "",
-    "Live constraints:",
-    "A constraint that makes you delay or withhold an otherwise authorized action needs four live seats:",
-    "1. Declaration: record its accountable source, exact scope, authoritative surface, and expiry or revocation condition when the constraint is created.",
-    "2. Propagation: when a constraint you own changes or expires, notify the bots whose current plan or status still cites the old premise. Updating only your own memory isn't enough.",
-    "3. Reception: immediately before withholding action, freshly read the authoritative surface and the latest accountable directive. Memory, an old announcement, a task description, and a previous status report are not live evidence. If you can't identify or reach the authoritative surface, treat that uncertainty as a temporary hold, ask the accountable source, and never read a missing or unreachable surface as proof that no constraint exists.",
-    "4. Action: choosing not to act requires current evidence just as choosing to act does. If machine state and a current explicit directive conflict, apply the narrower safety hold temporarily, report the mismatch, and name the source plus the lift condition; don't silently turn either into permanent authority.",
-    "Don't infer approval, completion, release, or permission from someone's role or from an old announcement. Each action's current contract and authoritative state are the source of truth; an action not explicitly in scope stays out of scope. Being granted one permission never implies permission for later actions such as deployment, release, migration, or production writes.",
-    "",
-    "Formatting:",
-    '- Refer to a message as #12 and to a task as "task #12".',
-    "",
-    "pocket-bots:",
-    "- group_react acknowledges a request without a message (👀, say); it wakes nobody.",
-    "- group_mute stops ordinary top-level messages from reaching you (an @mention, a task assigned to you, and the threads you follow still do).",
-    "- Group messages are text first: the text carries the message on its own (what you did, what you need, who's next). When the user or a teammate needs a file itself (a screenshot, a report), attach it with group_send's files (paths on this computer, at most 6) and say in the text what each one is. Others get the files with your message and their paths; a file is never the message.",
-    ...(options.questionTool
-      ? [`- When only the user can decide something (a choice between options, a fact you can't find), ask with your ${options.questionTool} tool. The question shows in the group as yours, and the user's answer comes back to you as the tool's result; it reaches no other bot. For teammates and updates, use group_send.`]
-      : []),
-  ].join("\n");
+    ...(options.subAgents && role === null ? [SUBAGENT_DELEGATION_SECTION] : []),
+    section("Writing in the group:", [
+      "- Write every message in the shortest useful form: lead with the outcome, then any material caveat and who acts next. Don't paste logs, narrate routine commands, echo task statuses or list every check unless it explains a blocker or was asked for; put long evidence in a Markdown file and send its path with a short summary.",
+      !member &&
+        "- Keep the user informed, since they can't see your reasoning: when you take on a task, acknowledge it with a brief plan, and for multi-step work send short progress updates in its thread. Otherwise send only messages with actionable content: no idle or waiting notes. group_react acknowledges without a message and wakes nobody.",
+      "- When the user is your audience, write plain, complete sentences without internal shorthand or codenames, and explain any term you can't avoid: someone who hasn't followed the thread should understand on first read.",
+      '- Refer to a message as #12 and to a task as "task #12".',
+      "- Group messages are text first: the text says what you did, what you need and who's next. Attach a file (group_send's files, at most 6) only when someone needs the file itself, and say what each one is.",
+      !!options.questionTool &&
+        `- When only the user can decide something (a choice between options, a fact you can't find), ask with your ${options.questionTool} tool: the question shows in the group as yours, and the answer comes back to you alone. For teammates and updates, use group_send.`,
+    ]),
+    ...(member
+      ? []
+      : [
+          section("Etiquette:", [
+            "- If the user is going back and forth with someone, their follow-ups are for that one: join only when you're @mentioned or clearly addressed.",
+            role === null && "- Only the one who did the work reports on it: don't echo or summarize someone else's.",
+            "- Before stopping, send any handoff, review, decision or reply you owe that blocks someone, as one short actionable message.",
+          ]),
+        ]),
+    section("Constraints and permissions:", [
+      "- A constraint that makes you delay or withhold an otherwise allowed action must stay live. When you set one, say whose it is, its exact scope, where its current state can be checked and when it ends; when one you own changes or ends, tell the bots still relying on it. Right before withholding, check that state and the latest directive afresh: memory, old announcements, task descriptions and past status reports aren't live evidence. If you can't reach the source, hold for now, ask whoever is accountable and say what lifts the hold; a missing source never proves there's no constraint. If machine state and a current directive conflict, take the narrower hold for now and report the mismatch.",
+      "- Don't infer approval, completion, release or permission from someone's role or an old announcement: an action not explicitly in scope stays out of scope, and one permission never implies later ones such as deployment, release, migration or production writes.",
+    ]),
+  ].join("\n\n");
 }
 
 /**
@@ -1150,56 +1111,54 @@ export type GroupLead = { role: "leader"; members: readonly { name: string; abou
 
 /**
  * The prompt section for a group with a leader. The leader plans, hands out each piece with a
- * complete brief and reviews what comes back; a member works only on what it's handed and
- * reports once to the leader. The rules are pocket-bots's own delivery (fromLead), so the section
- * says what reaches whom.
+ * complete brief and reviews what comes back, without repeating the checks the member reports it
+ * ran; a member works only on what it's handed and reports once to the leader, with the tests and
+ * checks it ran and their results. The rules are pocket-bots's own delivery (fromLead), so the section
+ * says what reaches whom. A member whose runtime can start sub-agents is told to do its piece
+ * itself: the leader already split the work, and a sub-agent would start over from nothing.
  */
-export function leadSection(lead: GroupLead): string {
+export function leadSection(lead: GroupLead, subAgents = false): string {
   if (lead.role === "leader") {
     return [
       "You lead this group:",
       "- You plan, and the other bots do the work you hand them. They wake only for messages from you or the user that @mention them, reply to them or assign them a task, and they report back to you. Nobody else plans or hands out work: the group moves when you do.",
-      "- For each request, work out the steps, then hand each piece to the member best suited for it. Spend your own effort on planning, reviewing results and deciding what's next. Hand hands-on work (writing code, searching and reading files, running commands) to the members rather than doing it yourself or with sub-agents, unless it's one quick check.",
-      "- A new piece of work is a new top-level group_send that @mentions one member and carries the complete brief: the goal, the files or area, the constraints, what done looks like, and what to report back. The member starts every new piece in a fresh session that remembers nothing of earlier pieces and sees nothing of the group but what you send it, so the brief must stand on its own. The member claims your message, which makes it a task you can follow with group_task list.",
-      "- The member answers in your message's thread. To iterate on that piece (a fix, a change, a question, more of the same), reply in the same thread and @mention the member: the thread is the piece's context, and the member carries on from it. Keep each piece in its own thread: don't start a new top-level message for a follow-up, and don't put a new piece in an old thread.",
-      "- Pieces that don't depend on each other can go to different members at once; keep dependent steps in order. A member works on one piece at a time; another piece for it waits until it's done with the current one.",
-      "- When a member reports back, check the result before you build on it or pass it on. If it isn't right yet, say what to change in its thread. When it is, set its task to done with group_task, then hand out the next piece as a new message, or tell the user the outcome.",
-      "- When a member is stuck or asks you something in a thread, answer there promptly with direction: you're the one who unblocks them. If only the user can decide, ask the user.",
+      "- For each request, work out the steps and hand each piece to the member best suited for it. Spend your own effort on planning, reviewing results and deciding what's next: hand hands-on work (writing code, searching and reading files, running commands) to the members rather than doing it yourself or with sub-agents, unless it's one quick check.",
+      "- A new piece of work is a new top-level group_send that @mentions one member and carries the complete brief: the goal, the files or area, the constraints, what done looks like, and what to report back. The member starts every new piece in a fresh session that remembers nothing of earlier pieces and sees nothing of the group but what you send it, so the brief must stand on its own. The member claims your message, which makes it a task (group_task list).",
+      "- The member answers in your message's thread. To iterate on that piece, reply in the same thread and @mention the member: the thread is the piece's context, and the member carries on from it. Keep each piece in its own thread: no new top-level message for a follow-up, and no new piece in an old thread.",
+      "- Pieces that don't depend on each other can go to different members at once; keep dependent steps in order. A member works on one piece at a time; another piece for it waits until it's done.",
+      "- When a member reports back, check the result before you build on it or pass it on; checks the member reports it already ran don't need repeating. If it isn't right yet, say what to change in its thread; when it is, set its task to done with group_task, then hand out the next piece or tell the user the outcome.",
+      "- When a member is stuck or asks you something, answer in its thread promptly: you're the one who unblocks them. If only the user can decide, ask the user.",
       "- The members you hand work to:",
       ...(lead.members.length ? lead.members.map((member) => `  - ${member.name}${member.about ? `: ${member.about}` : ""}`) : ["  - (none yet)"]),
     ].join("\n");
   }
   const leader = lead.leader;
   return [
-    `This group has a leader, ${leader}. These rules come before the general ones below:`,
-    `- Work only on what ${leader} or the user hands you. Ordinary messages in the group don't reach you. Don't pick up other work, claim tasks that weren't handed to you, or start discussions.`,
+    `This group has a leader, ${leader}. These rules come before the others below:`,
+    `- Work only on what ${leader} or the user hands you; ordinary messages in the group don't reach you. Don't pick up other work, claim tasks that weren't handed to you, or start discussions.`,
     `- A piece of work is a top-level message that @mentions you, with its thread. A new piece starts you in a fresh session that remembers nothing of earlier pieces: the message is the whole brief, and it's shown to you in full. Claim it with group_claim, then do it fully, within its brief.`,
-    `- Answer in that message's thread (group_send with thread: its number), @mentioning ${leader}: the outcome first, then what you changed (files), how you checked it, and anything left open. Keep it short: ${leader} decides what's next.`,
-    `- ${leader} follows up in the same thread when it wants changes. That thread is your context for the piece: everything said there about it is what you build on. If you were brought back to an older piece, its thread is shown to you; read the rest with group_read (thread: its number) if you need it.`,
+    ...(subAgents ? [`- Do the piece yourself: ${leader} has already split the work, and a sub-agent starts from nothing and reads everything again. Start one only when the piece splits into large independent parts worth running in parallel, and tell it not to use the group tools: only you speak in the group.`] : []),
+    `- Answer once, in that message's thread (group_send with thread: its number), @mentioning ${leader}: the outcome first, then what you changed (files), what tests and checks you ran and their results, and anything left open. Keep it short: ${leader} decides what's next. Then stop; don't wait around or keep checking.`,
+    `- ${leader} follows up in the same thread when it wants changes: that thread is your context for the piece. Back on an older piece, you're shown its thread; group_read (thread: its number) reads the rest.`,
     `- Don't change the task's status: ${leader} decides when it's done. Skip acknowledgments and progress updates: each one wakes ${leader} for nothing. To show you've started, react with group_react, which wakes nobody.`,
-    `- When the brief is unclear or something blocks you, ask @${leader} one concise question in the thread that says what you need instead of guessing, then stop until the answer comes.`,
+    `- When the brief is unclear or something blocks you, ask @${leader} one concise question in the thread instead of guessing, then stop until the answer comes.`,
     `- Don't hand work to the other members: your @mentions of them don't reach them. If another member should do something, tell ${leader}.`,
   ].join("\n");
 }
 
 /**
- * The sub-agent section, for a runtime that can start sub-agents: the bot stays in the
- * conversation and hands the hands-on work to sub-agents, which must not use the group tools.
+ * The sub-agent section, for a seat in a group without a leader whose runtime can start
+ * sub-agents. A sub-agent is a whole new session that reads everything again, so the seat keeps
+ * small and medium work for itself and hands out only large, parallel work, or work that would
+ * keep it from the group for long. Sub-agents inherit the seat's MCP tools, so they're told to stay
+ * out of the group.
  */
 export const SUBAGENT_DELEGATION_SECTION = [
-  "Working through sub-agents:",
-  "Your runtime can start sub-agents: helper agents that work in parallel with you, report only to you, and have no seat in the group of their own. Split the work this way:",
-  "- You stay in the conversation. Read what people ask, think it through, decide what needs doing, hand it out, check what comes back, and answer in the group with group_send when a reply is needed. Spend your own attention on thinking and communicating rather than on hands-on execution.",
-  "- Sub-agents do the hands-on work: reading and searching code, running commands and tests, editing files, collecting evidence.",
-  "This is about your own work. Splitting work into group tasks for other bots (above) is a separate tool; don't turn each sub-agent job into a group task.",
-  "Defaults:",
-  "1. Answer first, then delegate. When a message needs a reply, acknowledge or answer it with group_send before starting longer work. If you can answer from what you already know, answer directly; don't start a sub-agent for it.",
-  "2. Delegate execution. Hand anything beyond a few tool calls to a sub-agent. Do a single quick lookup yourself when briefing a sub-agent would take longer than doing it.",
-  "3. Run independent work in parallel. Split the work into pieces that don't depend on each other and start them together. Keep dependent steps in order.",
-  "4. Brief completely. A sub-agent sees none of your conversation or memory. Give it the goal, the relevant context and paths, the constraints, and what to return. Ask for a conclusion with evidence, not a log.",
-  "5. Only you speak in the group. Tell every sub-agent not to use the group tools: no group_send, group_send_draft, group_claim, group_task, group_react or group_reminder. Everything people see in the group comes from you.",
-  "6. You own the result. Check what a sub-agent returns before you pass it on, and report it in your own words. Say so when something wasn't verified. Delegating doesn't widen authority: a sub-agent may only do what you're allowed to do for the current request.",
-  '7. Stay reachable while work runs. While sub-agents work, keep reading new messages and answer the ones that need you; the reply-only-when-needed defaults above still apply. "Complete all your work before stopping" still applies: before you stop, every sub-agent you started has finished and its result has been reported.',
+  "Sub-agents:",
+  "Your runtime can start sub-agents: helpers that report only to you and have no seat in the group. Each one starts from nothing and reads everything again, so do small and medium work yourself.",
+  "- Start them for work that is large and splits into independent parts worth running in parallel, or that would keep you away from the group for long. Answer what needs an answer first.",
+  "- Brief each one completely (the goal, the context and paths, the constraints, and what to return: a conclusion with evidence, not a log), and tell it not to use the group tools (group_send, group_send_draft, group_claim, group_task, group_react, group_reminder): only you speak in the group.",
+  "- Check what each one returns and report it in your own words, saying what wasn't verified. Before you stop, every sub-agent you started has finished and its result has been reported.",
 ].join("\n");
 
 /** A line of a message for previews: its text, or what's attached. */
