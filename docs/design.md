@@ -272,13 +272,14 @@ uploads/                   聊天里上传的非文本文件
 
 1. **Persona**：名字、角色、简介；
 2. **Standing instructions**：你写的常驻指令；
-3. **Group chat**：只有群聊座位才有，讲怎么在群里协作（§6.9）；
-4. **Memory**：`MEMORY.md` 的当前内容和记忆文件的约定。`memoryAutoWrite` 关闭时说记忆只读、值得记的事告诉用户，打开时说自己更新；这句写在常驻部分，切换开关会改变常驻 prompt；
-5. **Recent work**：最近两天每个聊天里 bot 最后说的话（来自每日日志），让新聊天知道最近在忙什么；
-6. **Skills**：技能名和「什么时候用」，bot 需要时自己读 `SKILL.md`；
-7. **Playbooks**：只放触发词出现在第一条消息里的那几个；
-8. **Connected apps**：能用的应用、账号和工具范围；
-9. **Bot tools**：pocket-bots 自己的工具怎么用。
+3. **Project guidance**：所有 bot 都有，固定一句话：开始一个聊天的第一个任务之前，先读工作目录里的 `AGENTS.md`（有的话）并照着做；常驻指令和你在聊天里说的优先。各个 CLI 启动时都没有开它们自己的项目文件加载（Claude 的 `settingSources` 是空的，Pi 带 `--no-context-files`），所以不写这一句，bot 不会去看仓库里的 AGENTS.md；
+4. **Group chat**：只有群聊座位才有，讲怎么在群里协作（§6.9）；
+5. **Memory**：`MEMORY.md` 的当前内容和记忆文件的约定。`memoryAutoWrite` 关闭时说记忆只读、值得记的事告诉用户，打开时说自己更新；这句写在常驻部分，切换开关会改变常驻 prompt；
+6. **Recent work**：最近两天每个聊天里 bot 最后说的话（来自每日日志），让新聊天知道最近在忙什么；
+7. **Skills**：技能名和「什么时候用」，bot 需要时自己读 `SKILL.md`；
+8. **Playbooks**：只放触发词出现在第一条消息里的那几个；
+9. **Connected apps**：能用的应用、账号和工具范围；
+10. **Bot tools**：pocket-bots 自己的工具怎么用。
 
 记忆内容和最近的工作每天都在变，算「易变」部分；其余是「常驻 prompt」，群聊座位按它的哈希判断要不要补发（§6.6）。只有群聊座位会补发：bot 自己的聊天不记常驻 prompt 的哈希，Claude Code 和 Codex 续接的老会话继续用开始时的写法，所以开关的兜底（下面）不依赖 prompt。
 

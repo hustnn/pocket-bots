@@ -38,7 +38,7 @@ describe("playbooks", () => {
     expect(parseTriggers("invoice, receipt\nexpense report, invoice,")).toEqual(["invoice", "receipt", "expense report"]);
     const context = { memory: "", memoryPath: null, recentWork: [], skills: [], botTools: false, apps: [] };
     const bot = makeBot({ playbooks: [playbook("Invoices", ["invoice"])] });
-    expect(promptSections(bot, { ...context, playbooks: selectPlaybooks("pay this invoice", bot.playbooks) }).map((section) => section.title)).toEqual(["Persona", "Playbooks"]);
-    expect(promptSections(bot, { ...context, playbooks: [] }).map((section) => section.title)).toEqual(["Persona"]);
+    expect(promptSections(bot, { ...context, playbooks: selectPlaybooks("pay this invoice", bot.playbooks) }).map((section) => section.title)).toEqual(["Persona", "Project guidance", "Playbooks"]);
+    expect(promptSections(bot, { ...context, playbooks: [] }).map((section) => section.title)).toEqual(["Persona", "Project guidance"]);
   });
 });

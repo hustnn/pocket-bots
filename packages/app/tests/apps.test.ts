@@ -134,10 +134,10 @@ describe("agent config and prompt", () => {
       { name: "Slack", accounts: [], tools: "all" as const },
     ];
     const sections = promptSections(bot(), { memory: "", memoryPath: null, recentWork: [], playbooks: [], skills: [], botTools: false, apps });
-    expect(sections.map((section) => section.title)).toEqual(["Persona", "Connected apps"]);
-    expect(sections[1]!.text).toBe(appsPrompt(apps));
-    expect(sections[1]!.text).toContain("You may use: Gmail, Slack.");
-    expect(sections[1]!.text).not.toContain('"account"');
+    expect(sections.map((section) => section.title)).toEqual(["Persona", "Project guidance", "Connected apps"]);
+    expect(sections[2]!.text).toBe(appsPrompt(apps));
+    expect(sections[2]!.text).toContain("You may use: Gmail, Slack.");
+    expect(sections[2]!.text).not.toContain('"account"');
   });
 
   it("lists an app's accounts by what Composio takes to pick one", () => {

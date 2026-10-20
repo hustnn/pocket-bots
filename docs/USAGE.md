@@ -247,7 +247,7 @@ bot 的记忆之后在 **Memory** 页签里能看到：
 
 ### 预览 system prompt
 
-**Soul → Preview prompt** 能看到新聊天会收到的完整 system prompt，按段落分开：Persona（名字、角色、简介）、Standing instructions、Memory（含当前记忆）、Recent work、Bot tools，有技能、Playbook 时还会多几段；bot 在群聊里的座位还会多一段 Group chat。可以填一条「第一条消息」看看它会匹配哪些 Playbook。
+**Soul → Preview prompt** 能看到新聊天会收到的完整 system prompt，按段落分开：Persona（名字、角色、简介）、Standing instructions、Project guidance（所有 bot 都有：让 bot 开始工作前先读工作目录里的 `AGENTS.md`，没有就跳过）、Memory（含当前记忆）、Recent work、Bot tools，有技能、Playbook 时还会多几段；bot 在群聊里的座位还会多一段 Group chat。可以填一条「第一条消息」看看它会匹配哪些 Playbook。
 
 ## 7. 技能（Skills）
 
