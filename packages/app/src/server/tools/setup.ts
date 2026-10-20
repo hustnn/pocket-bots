@@ -3,6 +3,7 @@ import { applyChanges, botDetails, changeFormat, checkChanges, ListedChangesSche
 import { proposalReply } from "../../shared/proposals";
 import { accounts, status } from "../composio";
 import type { PocketHost } from "../host";
+import { resolveBotFolders } from "../chats";
 import { createProposal } from "../proposals";
 import { defineTool, ownChat } from "./mcp";
 
@@ -60,7 +61,7 @@ export const proposeChanges = defineTool({
     const context = await hostContext(host);
     const resolved = resolveChanges(changes, context);
     // A dry run finds mistakes now, while they can still be fixed; the app applies the changes for real.
-    applyChanges(values, resolved, context);
+    await resolveBotFolders(values, applyChanges(values, resolved, context));
     const proposal = await createProposal({ botId: bot.id, agentId, kind: "changes", data: { summary: summary.trim(), changes: resolved, provider: context.provider } });
     return proposalReply(proposal.id, changes.length === 1 ? "the change" : `these ${changes.length} changes`);
   },

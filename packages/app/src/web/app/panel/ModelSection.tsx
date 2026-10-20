@@ -8,7 +8,9 @@ import { Section, useUpdateBot } from "./common";
 /** Managed, or a folder of the bot's own: picked from the folders other bots work in, or typed. */
 function WorkingFolder({ bot }: { bot: Bot }) {
   const update = useUpdateBot();
-  const custom = bot.cwd !== null;
+  // Custom can be chosen before a folder is: an empty folder is the managed one, so it can't be saved.
+  const [choosing, setChoosing] = useState(false);
+  const custom = choosing || !!bot.cwd?.trim();
   const workspaces = useWorkspaces(custom);
   const [pathError, setPathError] = useState<string | null>(null);
   const list = workspaces.data ?? [];
@@ -19,7 +21,8 @@ function WorkingFolder({ bot }: { bot: Bot }) {
         value={custom ? "custom" : "managed"}
         onChange={(value) => {
           setPathError(null);
-          void update(bot.id, { cwd: value === "managed" ? null : (bot.cwd ?? "") });
+          setChoosing(value === "custom");
+          if (value === "managed") void update(bot.id, { cwd: null });
         }}
         options={[
           { value: "managed", label: "Managed" },
@@ -59,7 +62,9 @@ function WorkingFolder({ bot }: { bot: Bot }) {
                   return;
                 }
                 setPathError(null);
-                void update(bot.id, { cwd });
+                // The server takes an empty folder as the managed one; the field stays on Custom to type in.
+                setChoosing(true);
+                void update(bot.id, { cwd: cwd || null });
               }}
             />
           </Field>
@@ -141,7 +146,7 @@ export function ModelSection({ bot }: { bot: Bot }) {
           />
         </Field>
       </Section>
-      <WorkingFolder bot={bot} />
+      <WorkingFolder key={bot.id} bot={bot} />
     </>
   );
 }

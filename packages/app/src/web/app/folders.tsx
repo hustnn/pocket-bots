@@ -1,10 +1,10 @@
 import { useId, useState } from "react";
+import { ABSOLUTE_PATH } from "../../shared/folder-path";
 import { Icon } from "../components/icons";
 import { Button, Field, Menu, Modal, type MenuItems } from "../components/ui";
 import { useWorkspaces } from "../lib/data";
 
-/** An absolute path: /…, ~/…, C:\… or a \\share. */
-export const ABSOLUTE_PATH = /^(\/|~(\/|$)|[A-Za-z]:[\\/]|\\\\)/;
+export { ABSOLUTE_PATH };
 
 /** A folder's last part, for a short label. */
 export function folderName(path: string): string {

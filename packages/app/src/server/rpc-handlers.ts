@@ -1,6 +1,6 @@
 import type { z } from "zod";
 import { applyChanges } from "../shared/changes";
-import { BOT_LABEL, EMPTY_LIBRARY, newRoutineId } from "../shared/bot";
+import { BOT_LABEL, EMPTY_LIBRARY, newRoutineId, StoreSchema } from "../shared/bot";
 import { setBotUses, updateSkill, upsertSkills } from "../shared/library";
 import type { RpcContract } from "../shared/rpc-core";
 import * as rpc from "../shared/rpc";
@@ -8,7 +8,7 @@ import { chatTranscript } from "../shared/transcript";
 import { POCKET_VERSION } from "../shared/version";
 import { dataPath, ensureBotHome } from "./bot-home";
 import type { ChatCards } from "./cards";
-import { listAllChats, listChats, sendToChat, startChat, workFolder } from "./chats";
+import { listAllChats, listChats, resolveBotFolders, sendToChat, startChat, workFolder } from "./chats";
 import type { CommandAllowlist, FolderGrants } from "./commands";
 import { accounts, appTools, catalog, connect, disconnect, removeKey, renameAccount, setKey, status as appsStatus } from "./composio";
 import { RequestError } from "./errors";
@@ -62,7 +62,11 @@ export function rpcHandlers(services: Services): Map<string, RpcRegistration> {
   // ------------------------------------------------------------ store and status
 
   handle(rpc.storeGetRpc, async () => store.read());
-  handle(rpc.storeSaveRpc, ({ values, revision }) => store.save(values, revision));
+  handle(rpc.storeSaveRpc, async ({ values, revision }) => {
+    // A document that doesn't parse is store.save's to report; a working folder that doesn't fit stops the save.
+    const parsed = StoreSchema.safeParse(values);
+    return store.save(parsed.success ? await resolveBotFolders(await store.values(), parsed.data) : values, revision);
+  });
   handle(rpc.storeResetRpc, () => store.reset());
   handle(rpc.statusRpc, () => ({ version: POCKET_VERSION, dataPath: dataPath(), scheduler: scheduler.running }));
   handle(rpc.providersRpc, ({ refresh }) => host.providers.snapshot(refresh ?? false));
@@ -246,7 +250,7 @@ export function rpcHandlers(services: Services): Map<string, RpcRegistration> {
     if (proposal.kind === "changes") {
       // Applied before the proposal counts as accepted: a change that no longer fits leaves it pending.
       const context = { now: new Date().toISOString(), provider: proposal.data.provider };
-      await store.update((current) => applyChanges(current, proposal.data.changes, context));
+      await store.update(async (current) => resolveBotFolders(current, applyChanges(current, proposal.data.changes, context)));
       return acceptProposal(id);
     }
     const accepted = await acceptProposal(id);

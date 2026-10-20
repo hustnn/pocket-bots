@@ -4,8 +4,9 @@ import { isAbsolute, join, resolve } from "node:path";
 import type { ProviderId } from "@pocket-bots/runtime";
 import type { WireAttachment } from "../shared/attachments";
 import { APPS_MCP_NAME } from "../shared/apps";
-import { BOT_LABEL, botMcpServers, botSkills, mcpServersRecord, POCKET_LABEL, type Bot, type Library } from "../shared/bot";
+import { BOT_LABEL, botMcpServers, botSkills, mcpServersRecord, POCKET_LABEL, type Bot, type BotSettingsValues, type Library } from "../shared/bot";
 import { QUIET_TOOLS, TOOLS_MCP_NAME } from "../shared/bot-tools";
+import { ABSOLUTE_PATH } from "../shared/folder-path";
 import { GROUP_LABEL, type GroupLead } from "../shared/group-chat";
 import { replyText } from "../shared/reply";
 import { expandLearn } from "../shared/skills";
@@ -33,9 +34,20 @@ export interface StartChatInput {
   cwd?: string;
 }
 
-/** Where a bot's chats run: its own folder of yours, or its folder in the data directory. */
+/** A path with a leading ~ or ~/ replaced by this computer's home folder. */
+function expandHome(path: string): string {
+  return path === "~" ? homedir() : path.startsWith("~/") ? join(homedir(), path.slice(2)) : path;
+}
+
+/**
+ * Where a bot's chats run: its own folder of yours, or its folder in the data directory. Bots
+ * saved before ~/ was expanded on save still hold it as typed, so it's expanded here too. A bot on
+ * another host keeps its path as it is: that host's home isn't ours.
+ */
 export function botWorkingFolder(bot: Bot): string {
-  return bot.cwd || botDataPath(bot.id);
+  const folder = bot.cwd?.trim();
+  if (!folder) return botDataPath(bot.id);
+  return bot.hostId ? folder : expandHome(folder);
 }
 
 /**
@@ -43,14 +55,42 @@ export function botWorkingFolder(bot: Bot): string {
  * and an existing folder on this computer.
  */
 export async function workFolder(raw: string): Promise<string> {
-  const given = raw.trim();
-  const expanded = given === "~" ? homedir() : given.startsWith("~/") ? join(homedir(), given.slice(2)) : given;
+  const expanded = expandHome(raw.trim());
   if (!isAbsolute(expanded)) throw new RequestError("The folder must be an absolute path, like /Users/me/projects/site.");
   const folder = resolve(expanded);
   const found = await stat(folder).catch(() => null);
   if (!found) throw new RequestError(`There's no folder at ${folder}.`);
   if (!found.isDirectory()) throw new RequestError(`${folder} is a file, not a folder.`);
   return folder;
+}
+
+/**
+ * The bots document about to be saved, with the working folder of every bot whose folder changed
+ * (or that is new) checked like a chat's and stored the way a chat would. Other bots are left
+ * alone: a folder deleted since they were saved must not block saving something else. A bot on
+ * another host is only checked for being an absolute path, and keeps it as typed, since this
+ * computer can't tell what's on that host. Throws a RequestError naming the bot.
+ */
+export async function resolveBotFolders(previous: BotSettingsValues, next: BotSettingsValues): Promise<BotSettingsValues> {
+  const before = new Map(previous.bots.map((bot) => [bot.id, bot.cwd]));
+  const bots = await Promise.all(
+    next.bots.map(async (bot) => {
+      if (before.has(bot.id) && before.get(bot.id) === bot.cwd) return bot;
+      const given = bot.cwd?.trim();
+      if (!given) return bot.cwd === null ? bot : { ...bot, cwd: null };
+      try {
+        if (bot.hostId) {
+          if (!ABSOLUTE_PATH.test(given)) throw new RequestError("The folder must be an absolute path, like /Users/me/projects/site.");
+          return { ...bot, cwd: given };
+        }
+        return { ...bot, cwd: await workFolder(given) };
+      } catch (error) {
+        if (error instanceof RequestError) throw new RequestError(`${bot.name}: ${error.message}`);
+        throw error;
+      }
+    }),
+  );
+  return { ...next, bots };
 }
 
 /**

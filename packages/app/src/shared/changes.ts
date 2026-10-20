@@ -16,6 +16,7 @@ import {
   type Library,
   type McpServerConfig,
 } from "./bot";
+import { ABSOLUTE_PATH } from "./folder-path";
 import { addMcpServers, forgetItem, mcpServerTested, setBotUses } from "./library";
 import { PALETTE_COUNT } from "./pixel";
 import { describeSchedule, ScheduleInput, scheduleFrom } from "./routines";
@@ -70,7 +71,7 @@ const BotFields = {
   thinking: z.string().max(100).nullable().optional().describe("Thinking option id from get_setup; null for the default."),
   contact_bots: z.enum(["ask", "allow", "off"]).optional().describe("Asking other bots for help: after the user approves each request (ask), freely (allow) or never (off)."),
   avatar: AvatarInput.optional(),
-  working_folder: z.string().max(1000).nullable().optional().describe("Absolute path of its working folder; null for its own folder in the Bots project."),
+  working_folder: z.string().max(1000).nullable().optional().describe("Absolute path of an existing folder on this computer (~/ works) as its working folder; null for its own folder in the Bots project."),
   pinned: z.boolean().optional(),
   hidden: z.boolean().optional().describe("Off the sidebar's main list (under Hidden bots); it keeps running its routines and taking chats."),
 };
@@ -327,7 +328,8 @@ function withFields(bot: Bot, fields: BotFieldValues, context: ApplyContext): Bo
   if (fields.contact_bots !== undefined) next.contactBots = fields.contact_bots;
   if (fields.working_folder !== undefined) {
     const folder = fields.working_folder?.trim() || null;
-    if (folder && !folder.startsWith("/") && !/^[A-Za-z]:[\\/]/.test(folder)) throw new Error("A working folder needs an absolute path.");
+    // ~/ is fine: the app expands it and checks the folder when the change is applied.
+    if (folder && !ABSOLUTE_PATH.test(folder)) throw new Error("A working folder needs an absolute path.");
     next.cwd = folder;
   }
   if (fields.pinned !== undefined) next.pinned = fields.pinned;
