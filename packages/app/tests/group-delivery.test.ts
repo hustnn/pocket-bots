@@ -535,6 +535,53 @@ describe("a failed turn on a led member's piece", () => {
     expect((await threadNote(group, piece)).text).toBe("⚠️ @Alpha: Beta's turn on this piece failed: Not logged in · Please run /login. Its runtime stopped on an error only the user can fix: tell the user, or hand the piece to another member.");
   });
 
+  it("tells the leader again once someone has spoken in the thread, and not while nobody has", async () => {
+    const group = await setup();
+    const piece = await handOut(group);
+    const notes = async () => (await group.groups.messages(group.id, { thread: piece })).messages.filter((message) => message.from.kind === "system").length;
+    await group.endTurn("beta", "failed", "429 Too Many Requests");
+    expect(await notes()).toBe(1);
+    // The leader has it carry on, and it fails the same way: the group's note isn't repeated
+    // within ten minutes, but the leader is told again.
+    const alpha = await group.bot("alpha");
+    await group.groups.read(alpha, group.id, { unread: true, thread: piece });
+    expect(await group.groups.send(alpha, group.id, { text: "@Beta carry on", thread: piece })).toMatch(/^Sent as #\d+ in thread #\d+\.$/);
+    await pass(RUNTIME_ERROR_BACKOFF_MAX_MS);
+    group.busy("beta");
+    const groupNotes = (await texts(group)).length;
+    await group.endTurn("beta", "failed", "429 Too Many Requests");
+    expect((await texts(group)).length).toBe(groupNotes);
+    expect(await notes()).toBe(2);
+    // A third time with nobody answering stops its runtime; the thread already says it's stuck.
+    group.busy("beta");
+    await group.endTurn("beta", "failed", "429 Too Many Requests");
+    expect((await texts(group)).at(-1)).toMatch(/^system: Beta stopped after 3 repeated runtime errors/);
+    expect(await notes()).toBe(2);
+  });
+
+  it("tells the leader when a member's seat stops trying to start on a new piece", async () => {
+    const group = await setup();
+    await handOut(group);
+    await group.endTurn("beta", "completed");
+    // The next piece needs a new seat, and it can't start.
+    group.failing.start = "fake isn't available here.";
+    const alpha = await group.bot("alpha");
+    await group.groups.read(alpha, group.id, { unread: true });
+    await group.groups.read(alpha, group.id, { topLevel: true });
+    const second = Number(/^Sent as #(\d+)\./.exec(await group.groups.send(alpha, group.id, { text: "@Beta now the signup page" }))?.[1]);
+    await pass();
+    const inThread = async () => (await group.groups.messages(group.id, { thread: second })).messages.filter((message) => message.from.kind === "system");
+    // Still retrying by itself: nothing for the leader yet.
+    expect(group.tries.beta).toBe(2);
+    expect(await inThread()).toEqual([]);
+    await pass(1_000 + 2_000 + 4_000 + 8_000);
+    expect(group.tries.beta).toBe(6);
+    const [note] = await inThread();
+    expect(note).toMatchObject({ mentions: ["alpha"] });
+    expect(note!.text).toBe("⚠️ @Alpha: Beta couldn't start on this piece after 5 tries: fake isn't available here. It won't try again by itself: @mention Beta here to retry, or hand the piece to another member.");
+    expect(group.store.pending(group.id, "alpha").map((entry) => [entry.message.seq, entry.reason])).toContainEqual([note!.seq, "mention"]);
+  });
+
   it("tells nobody about a failed turn that wasn't on a piece, or a leader's own", async () => {
     const group = await setup();
     await group.groups.update(group.id, { leaderId: "alpha" });

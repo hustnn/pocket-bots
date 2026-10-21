@@ -53,7 +53,7 @@ describe("delivery records", () => {
     expect(records(store.append(G, bot("ada"), { text: "@Cody can you check?", mentions: ["cody"] }).message.seq)[1]).toEqual(["cody", true, "handoff"]);
   });
 
-  it("writes no record for a muted member's ordinary messages, but does for an @mention", () => {
+  it("writes no record for a muted member's ordinary messages, but does for an @mention or a change of leader", () => {
     store.append(G, user, { text: "before the mute" });
     store.setMuted(G, "rex", true);
     const ordinary = store.append(G, user, { text: "after the mute" });
@@ -63,6 +63,9 @@ describe("delivery records", () => {
     const mention = store.append(G, user, { text: "@Rex you're up", mentions: ["rex"] });
     expect(records(mention.message.seq).find(([id]) => id === "rex")).toEqual(["rex", true, "mention"]);
     expect(pendingSeqs("rex")).toEqual([1, 4]);
+    // A change of leader changes its rules too, so that note gets past the mute.
+    const leader = store.append(G, system, { text: "👑 the user made @Ada the group's leader", everyone: true, mentions: ["ada"], subtype: "group.leader", causalActor: "user" });
+    expect(records(leader.message.seq).find(([id]) => id === "rex")).toEqual(["rex", true, "everyone"]);
     // Unmuted, ordinary messages reach it again.
     store.setMuted(G, "rex", false);
     expect(records(store.append(G, user, { text: "back" }).message.seq).map(([id]) => id)).toContain("rex");

@@ -371,8 +371,8 @@ export class GroupStore {
   /**
    * Who a message reaches. A top-level message reaches every member and the
    * user, its sender too (not unread for it); a muted member gets no record unless it's
-   * @mentioned. A thread message reaches its followers and, for the same send, its sender, the
-   * top message's author and whoever it @mentions; one who stopped following gets no record
+   * @mentioned or the leader changed. A thread message reaches its followers and, for the same
+   * send, its sender, the top message's author and whoever it @mentions; one who stopped following gets no record
    * unless @mentioned (which makes it follow again). Then the follows.
    * In a group with a leader, the other members are reached only by what the leader or the user
    * aims at them (fromLead): anything else reaches them as it would a muted bot (no record at the
@@ -421,13 +421,15 @@ export class GroupStore {
     // A reply to a member addresses that member, so it isn't a message for anyone who's around.
     const repliedMember = repliedBot && memberIds.has(repliedBot) ? repliedBot : null;
     const muted = new Map(members.map((member) => [member.bot_id, member.muted_from_seq]));
+    // A change of leader changes every member's rules, so it reaches a muted member as well.
+    const pastMute = row.system_subtype === "group.leader";
     const subject = { senderId, system: row.sender_kind === "system", subtype: row.system_subtype, causalActor: row.causal_actor_id };
     const woken: string[] = [];
     for (const [id, { suppressed }] of receivers) {
       const personal = mentioned.has(id);
       if (suppressed && !personal) continue;
       const mutedFrom = muted.get(id);
-      if (conv === 0 && !personal && mutedFrom !== null && mutedFrom !== undefined && row.seq >= mutedFrom) continue;
+      if (conv === 0 && !personal && !pastMute && mutedFrom !== null && mutedFrom !== undefined && row.seq >= mutedFrom) continue;
       // Work from the leader or the user aimed at a led member reaches it; nothing else wakes it.
       const asWork = !led(id) || (lead && (personal || repliedBot === id || message.everyone));
       if (conv === 0 && !asWork) continue;
@@ -844,6 +846,16 @@ export class GroupStore {
 
   followedThreads(groupId: string, followerId: string): number[] {
     return this.db.all<{ thread_seq: number }>("SELECT thread_seq FROM group_thread_follows WHERE group_id = ? AND follower_id = ? AND unfollowed_at IS NULL ORDER BY thread_seq", groupId, followerId).map((row) => Number(row.thread_seq));
+  }
+
+  /** A thread's latest message as stored: for a note, its subtype and who caused it. Null for a thread with no replies. */
+  threadTail(groupId: string, thread: number): { seq: number; subtype: string | null; causalActor: string | null } | null {
+    const row = this.db.get<{ seq: number; system_subtype: string | null; causal_actor_id: string | null }>(
+      "SELECT seq, system_subtype, causal_actor_id FROM group_messages WHERE group_id = ? AND thread_seq = ? ORDER BY seq DESC LIMIT 1",
+      groupId,
+      thread,
+    );
+    return row ? { seq: Number(row.seq), subtype: row.system_subtype, causalActor: row.causal_actor_id } : null;
   }
 
   /** A thread's latest `limit` replies before `seq`, oldest first, and how many earlier ones there are. */
