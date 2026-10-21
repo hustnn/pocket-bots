@@ -79,18 +79,54 @@ npm run service -- install     # 还有 status、uninstall、print
 
 ## 工作原理
 
-```
-浏览器 (React) ──HTTP RPC / SSE──▶ pocket-bots 后端 (Node) ──▶ packages/runtime ──▶ claude / codex / opencode / pi / grok
-                                       │                              │
-                                       │ SQLite：聊天、时间线、群聊      │ agent 通过 MCP 回调
-                                       └─ 127.0.0.1 relay ◀───────────┘
-                                          bots 工具 · Composio 代理 · webhook
+pocket-bots 是你电脑上的一个 Node 进程，夹在浏览器和 agent CLI 中间：你在页面上操作，它驱动 CLI 干活，再把 CLI 的输出存下来给你看。图里每个箭头有编号，下面按编号解释。
+
+```mermaid
+flowchart TB
+  W["浏览器<br/>React Web UI"]
+  subgraph P["pocket-bots 进程"]
+    S["后端<br/>ChatService、GroupChats、Scheduler…"]
+    DB[("SQLite<br/>聊天、时间线、群聊")]
+    RT["packages/runtime<br/>每个 CLI 一个适配器"]
+    R["Relay（127.0.0.1）<br/>bot 工具 · 应用代理 · webhook"]
+  end
+  A["agent CLI<br/>claude · codex · opencode · pi · grok"]
+
+  W -->|"① RPC"| S
+  S -->|"② 开会话、发消息"| RT
+  RT <-->|"③ CLI 自己的协议"| A
+  RT -->|"④ 时间线条目、审批请求"| S
+  S -->|"⑤ 先写库"| DB
+  S -.->|"⑥ SSE：什么变了"| W
+  A -->|"⑦ 调 bot 工具（MCP）"| R
+  R -->|"⑧ 交给对应组件"| S
 ```
 
-- **聊天**：每个聊天一行记录加一条时间线。发消息时打开（或用保存的会话 id 续接）这个 agent 的会话；会话空闲 15 分钟后关掉，下次再续接，每次打开都用 bot 最新的 prompt、记忆和工具。
-- **时间线**：runtime 把各 agent 的事件统一成同一种时间线条目（用户消息、回复、思考、工具调用及其详情），先写进 SQLite 再推给页面。
-- **审批**：所有 agent 的审批请求都回到后端：保存过的命令、bot 自己的工具直接放行，其余在聊天里弹卡片。
-- **群聊**：每个 bot 在群里有自己的座位（一个会话），只通过群聊工具说话；新消息只以「哪里有几条新消息」的提示叫醒它，由它自己读；发言前检查它有没有漏看新消息，先认领再动手。见 [docs/design.md](docs/design.md#6-群聊怎么工作) 和 [docs/group-chats.md](docs/group-chats.md)。
+图里的方框：
+
+- **后端**：bot、聊天、群聊、定时任务、记忆这些业务都在这里。
+- **packages/runtime**：只管驱动一个 agent 会话（打开、发消息、插话、打断、审批、续接），不知道 bot 和群的存在。
+- **SQLite**：数据目录里的 `pocket-bots.sqlite`。bot 的配置不在这里，在 `bots.json`。
+- **Relay**：只监听 127.0.0.1 的 HTTP 服务（默认端口 6881），让 agent 能反过来调用 pocket-bots。
+- **agent CLI**：本机装好、登录好的 CLI，在 pocket-bots 进程之外单独运行，用它自己的账号。
+
+发一条消息时（①–⑥）：
+
+- **① 浏览器 → 后端**：页面上的每个操作都是一次 RPC（`POST /api/rpc/<name>`），发消息、点审批卡片都是。
+- **② 后端 → runtime**：后端用 bot 当前的配置（system prompt、记忆、工具）打开这个聊天的会话；开过的就用存下的会话 id 续接。会话空闲 15 分钟后关掉，下次发消息再续接，每次打开都带上 bot 最新的配置；不过 Claude Code 和 Codex 续接时不认新的 system prompt，继续用会话开始时那份。
+- **③ runtime ↔ CLI**：每个适配器用这个 CLI 自己的协议发消息、收输出，见上面「五个 agent」的表。
+- **④ runtime → 后端**：五个 CLI 的输出被统一成同一种时间线条目：用户消息、回复、思考、工具调用及其详情。CLI 要审批时，免审批的工具（pocket-bots 自己的读取、提议和群聊工具，你在 **Access** 里勾上的 MCP 工具）在适配器里直接放行；其余的交给后端：命中命令白名单或信任的目录就放行，剩下的在聊天里弹卡片，你点了之后经 ① 回来。哪些操作需要审批由 CLI 自己的审批模式决定，pocket-bots 只决定怎么回答。
+- **⑤ 后端 → SQLite**：每个条目先写进 SQLite，再通知页面。进程随时被杀，重启后看过的内容都还在。
+- **⑥ 后端 → 浏览器**：SSE 只告诉页面「什么变了」，不带数据（所以是虚线），页面再经 ① 拉新内容。
+
+agent 反过来调用 pocket-bots 时（⑦–⑧）：
+
+- **⑦ CLI → Relay**：agent 调 pocket-bots 自己的工具（`ask_bot`、群聊工具、提议卡片……）或连接的应用（Gmail、Slack……）时，经 MCP 连到 relay。每个聊天的 MCP 配置里带一个 token，relay 凭它认出是哪个 bot 的哪个聊天。Codex 例外：pocket-bots 自己的工具由 Codex 适配器替它转发给 relay。
+- **⑧ Relay → 后端**：pocket-bots 自己的工具交给对应的组件执行，比如 `group_send` 交给群聊。连接的应用不进后端：relay 检查这个 bot 能用这个应用后，加上你的 Composio key 转发出去。
+
+Relay 方框里的 webhook 不是 agent 调的：别的程序 POST 到 `http://127.0.0.1:<relay 端口>/hooks/<routineId>/<secret>`，后端开一个新聊天跑这个定时任务，从 ② 开始走同样的流程。relay 只监听 127.0.0.1，所以调用方必须在同一台电脑上。
+
+群聊用的也是这几条通道。每个 bot 在群里有一个**座位**，就是一个普通聊天，走 ②–⑥。bot 只能用群聊工具（⑦⑧）读写群，它在座位里直接输出的文字不进群。有新消息时，后端经 ② 往座位发一条提示，只说哪里有几条新消息，由 bot 自己调 `group_read` 去读；bot 调 `group_send` 发言前，后端先检查它有没有漏看新消息；几个 bot 分工时，先用 `group_claim` 认领再动手。完整规则见 [docs/group-chats.md](docs/group-chats.md)，消息怎么流动见 [docs/group-protocol.md](docs/group-protocol.md)，组件和通信的细节见 [docs/design.md](docs/design.md)。
 
 ## 开发
 
