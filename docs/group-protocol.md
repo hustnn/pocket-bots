@@ -320,18 +320,29 @@ if 线程: 发送者、顶层作者、被 @ 的成员（@everyone 时全体）�
 - 对它不算未读的（§6.4）；
 - leader 群里不是派给它的（§6.3）。这时唤醒方式对它也不起作用。
 
-### 7.3 提示里的标记
+### 7.3 原因在提示里怎么显示
 
-原因会以一句英文标在提示行的末尾（§8.3），bot 靠它知道为什么找自己：
+提示里每个 conv 占一行（§8.3）。这一行固定写几条新消息、编号范围、最新一条是谁发的；有人特别找它时，行末再加一句英文说明。各个原因对应的情况和说明：
 
-| 原因 | 标记 |
-|---|---|
-| `mention` | you were @mentioned |
-| `handoff` | Ada handed you work with an @mention |
-| `assigned` | a task was assigned to you |
-| `reply` | Ada replied to your message |
-| `everyone` | for @everyone |
-| `open`、`group`、`thread` | 不标 |
+| 原因 | 什么情况 | 行末加的说明 |
+|---|---|---|
+| `mention` | 你 @ 了它；或者系统消息点名它（任务指派回执除外，比如换 leader、成员失败的提醒） | you were @mentioned |
+| `handoff` | 别的 bot @ 了它 | Ada handed you work with an @mention |
+| `assigned` | 任务指派回执点名它 | a task was assigned to you |
+| `reply` | 回复了它的消息 | Ada replied to your message |
+| `everyone` | @everyone | for @everyone |
+| `open` | 顶层，你发的，不找特定的人（没 @ 谁、不是 @everyone、没回复哪个成员） | 不加 |
+| `group` | 顶层，其他没找它的消息：bot 发的普通消息、找的是别人的消息、没点名它的系统消息。只在 Everyone 方式下才有 | 不加 |
+| `thread` | 线程里没找它的消息，相当于顶层的 `open` 和 `group` 合在一起 | 不加 |
+
+「不加」就是这一行只说有新消息，不说为什么找它。比如：
+
+```
+- top level: 1 new (#16) · latest from the user · you were @mentioned
+- thread #12: 2 new (#14 to #15) · latest from Ada (bot)
+```
+
+第一行有说明：有人 @ 了它。第二行没有：只是线程里有新消息，没人特别找它，要不要管由它读了以后自己判断。一行里的几条消息原因不同时，说明去重后都列出来；其中有任务时，行末还会多一个「a task」。
 
 ### 7.4 代码里的判断顺序
 
