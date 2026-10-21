@@ -465,13 +465,13 @@ steer 是 runtime 层的能力：把输入插进正在跑的这一轮，不打�
 
 - 读什么：所有 conv 的待读，旧的在前，一次最多 40 条；还有剩的，结果末尾提示再调一次。
 - 怎么记账：逐条记 exact，取走待读。不更新 `read_order`。
-- 项目里什么时候用：被叫醒后的默认动作。提示的最后一句就是「group_read with unread: true reads everything in your inbox」。
+- 项目里什么时候用：新消息分散在几个地方，想一次读完时。提示的最后一句给了两个选择：「group_read with unread: true reads everything in your inbox, or add thread: a number (or top_level: true) for one place」，这是前半句。
 
 **② `unread: true` 加 `thread: N` 或 `top_level: true`：读一个地方的未读**
 
 - 读什么：这个 conv 读位置之后的，最多 40 条。模型已经看过的（比如被拦下时给它看过的）不重复，只用一行带过。
 - 怎么记账：从读位置往后读，一定接得上。boundary 推到最后一条，更新 `read_order`，取走待读。
-- 项目里什么时候用：只想跟上某一个地方时。`group_inbox` 每行给的「Next:」调用就是这种；重启后补课批次放不下时，提示也让 bot 这样逐个地方读一遍。
+- 项目里什么时候用：只想跟上某一个地方时，也就是提示最后一句的后半句。`group_inbox` 每行给的「Next:」调用就是这种；重启后补课批次放不下时，提示也让 bot 这样逐个地方读一遍。和 ① 比，它从读位置连续往后读，能推进 boundary。
 
 **③ 不带 `unread`：不带参数、`thread: N`，或加 `before: N`：读一页**
 
@@ -484,6 +484,16 @@ steer 是 runtime 层的能力：把输入插进正在跑的这一轮，不打�
 - 读什么：N 所在的 conv 里，N 前后的几条。不用指定是顶层还是线程，按 N 自动定位。
 - 怎么记账：只逐条记 exact，不更新 `read_order`。
 - 项目里什么时候用：找一条旧消息。prompt 要求「When someone refers to an earlier discussion you don't have, find it first (group_search, then group_read with around: N)」；`group_search` 的每条结果、读未读时「已经给你看过」的那一行，也都建议用 `around` 再看。看到 `replying to #N` 而上下文里没有 #N 时，也用它。
+
+**被叫醒后用哪种**
+
+用哪种读法由模型自己决定，代码不强制。按被叫醒的情况，prompt 和提示引导它这样读：
+
+| 被叫醒的情况 | 提示里有什么 | 通常怎么读 | 为什么 |
+|---|---|---|---|
+| 顶层，或者它已经在里面的线程，有新消息 | 每个地方一行，比如「thread #12: 2 new (#14 to #15)」 | ① 一次读完所有地方；只想处理某一个地方，用 ② 加 `thread: 12` | 这些新消息都在它的待读里 |
+| 被 @ 进一个它从没看过的线程 | 已经附上线程的顶层消息、最近 6 条回复和这条 @，并建议「group_read with thread: N」 | 回复前用 ③ 加 `thread: N` 把线程读一遍 | 附带的最多 6 条回复，可能不全，所以 prompt 要求回复前读线程。附带的这些在座位收下时已经记为看过、从待读取走，用 ① 读不到它们 |
+| leader 群的成员被派活，或在它这件活的线程里被找 | 这件活的消息全文 | 通常不用读；要看更早的回复，用 ③ 加 `thread: N` | 全文收下就算读过 |
 
 ### 9.3 一个例子
 
