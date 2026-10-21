@@ -22,7 +22,7 @@ pocket-bots 是跑在用户自己电脑上的个人 bot 平台。一个 bot = �
 - **后端内部**：组件在 `server/main.ts` 装配，用进程内事件连接（ChatService 发 `agent.settled`、`turn.ended`、`input.accepted` 等，GroupChats、队列、活动记录订阅）。
 - **审批都由 pocket-bots 回答**：bot 自己的工具和白名单放行，其余在聊天里弹卡片。
 - **用 CLI 自己的登录**：不保存、不注入任何模型 API key。
-- **群聊**：每个 bot 在群里有自己的座位（一个普通聊天），只通过 `group_send` 等工具说话；叫醒只给提示，发言前检查它是否看过新消息。规则复杂，改群聊前先读 [docs/group-chats.md](docs/group-chats.md) 和 design.md §6。
+- **群聊**：每个 bot 在群里有自己的座位（一个普通聊天），只通过 `group_send` 等工具说话；叫醒只给提示，发言前检查它是否看过新消息。规则复杂，改群聊前先读 [docs/group-chats.md](docs/group-chats.md) 和 design.md §6；各种组合下谁收到、谁被叫醒，查 [docs/group-protocol.md](docs/group-protocol.md)。
 
 ## 源码目录
 
@@ -50,7 +50,7 @@ packages/
     ├── src/web/                 React SPA：app/ 页面，chat/ 聊天流纯逻辑，components/，lib/（RPC 客户端、SSE、路由）
     ├── tests/                   vitest；helpers.ts 有 makeBot 等工厂
     └── scripts/dev.mjs
-docs/                            features.md、USAGE.md、design.md、group-chats.md（中文）
+docs/                            features.md、USAGE.md、design.md、group-chats.md、group-protocol.md（中文）
 spikes/                          早期协议验证脚本，不参与构建和测试，一般不用改
 ```
 
@@ -112,4 +112,4 @@ gh pr create --base main
 ## 测试和文档
 
 - 新功能、修 bug 都要补测试：纯逻辑测 `shared/` 的函数；涉及会话、群聊、队列的用 fake runtime 写端到端测试（参考 `tests/chat-service.test.ts`、`tests/groups.test.ts`）。测试里不要调真的模型。
-- 用户能看到的行为变了，同一个 PR 里更新 `docs/`：功能清单 `features.md`，用法 `USAGE.md`，实现 `design.md`，群聊规则 `group-chats.md`。文档用中文。
+- 用户能看到的行为变了，同一个 PR 里更新 `docs/`：功能清单 `features.md`，用法 `USAGE.md`，实现 `design.md`，群聊规则 `group-chats.md`，群聊协议速查 `group-protocol.md`。文档用中文。

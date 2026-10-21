@@ -5,6 +5,7 @@
 - 有哪些功能：[features.md](features.md)
 - 每个功能怎么用：[USAGE.md](USAGE.md)
 - 群聊的完整规则和一个从头到尾的例子：[group-chats.md](group-chats.md)
+- 群聊的通信协议速查，各种组合下谁收到、谁被叫醒：[group-protocol.md](group-protocol.md)
 
 ---
 
