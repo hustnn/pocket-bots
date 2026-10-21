@@ -75,7 +75,7 @@ npm run test:live -- claude   # 合同测试跑真 CLI（会消耗用户额度�
 
 ## 开发流程
 
-每个改动单独一个分支、一个 PR，不直接往 `main` 提交：
+每次改动都从最新的 `main` 切出一个分支，改完提 PR，不直接往 `main` 提交：
 
 ```bash
 git fetch origin
