@@ -647,56 +647,91 @@ bot 查自己一条消息里每个被 @ 的成员，结果从投递记录推出�
 
 ## 附录 A：组合速查表
 
-### 没有 leader
+这几张表回答同一个问题：一条消息发出后，某个成员 bot（下面叫 X）会怎样。每个格子是下面三种结果之一：
 
-发送者是你，X 是某个成员 bot。格子里是唤醒原因；「只记录」是有记录、算未读、不叫醒；「无记录」是这条对 X 不存在。两种唤醒方式结果不同时写成「Everyone 的结果／Only who it's for 的结果」。
+| 结果 | 含义 |
+|---|---|
+| **叫醒**（括号里是唤醒原因，见 §7） | 有投递记录，进待读，X 会收到提示 |
+| **只记录** | 有投递记录，算 X 的未读，但不叫醒。X 去读那里时看得到；它在那里开口前，检查会算上这条 |
+| **不投递** | 没有投递记录：不叫醒，不算未读。X 自己去读顶层或那个线程时，照样能看到原文 |
 
-| 你怎么写 | 顶层 | 顶层，X 静音 | 线程，X 是关注者 | 线程，X 没参与 | 线程，X 取消了关注 |
-|---|---|---|---|---|---|
-| 普通 | `open` | 无记录 | `thread` | 无记录 | 无记录 |
-| @X | `mention` | `mention` | `mention` | `mention`，并关注 | `mention`，恢复关注 |
-| @别的成员 | `group`／只记录 | 无记录 | `thread`／只记录 | 无记录 | 无记录 |
-| 回复 X 的消息 | `reply` | 无记录 | `reply` | 不会出现* | 无记录 |
-| 回复别的成员的消息 | `group`／只记录 | 无记录 | `thread`／只记录 | 无记录 | 无记录 |
-| @everyone | `everyone` | 无记录 | `everyone` | `everyone`，并关注 | 无记录，但恢复关注 |
+表里的结果都用 `GroupStore` 实际跑过每种组合核对过。
 
-表格下面的补充：
+### A.1 没有 leader，发在顶层
 
-- 发送者换成另一个 bot：@X 是 `handoff`；普通消息在顶层是 `group`／只记录，在线程是 `thread`／只记录。
-- 「线程，顶层消息是 X 发的」和「关注者」结果一样。
-- \* X 在线程里发过言就自动关注了，这种组合只在 X 取消关注后出现。
-- 回复的是你自己的消息或系统消息时，仍然算 `open`。
+发送者是你。
 
-### 有 leader：成员 X 收什么
+| 你怎么写 | Everyone 方式 | Only who it's for 方式 | X 静音了（两种方式一样） |
+|---|---|---|---|
+| 普通（不 @，不回复） | 叫醒（open） | 叫醒（open） | 不投递 |
+| @X | 叫醒（mention） | 叫醒（mention） | 叫醒（mention） |
+| @别的成员 | 叫醒（group） | 只记录 | 不投递 |
+| 回复 X 的消息 | 叫醒（reply） | 叫醒（reply） | 不投递 |
+| 回复别的成员的消息 | 叫醒（group） | 只记录 | 不投递 |
+| 回复你自己的消息 | 叫醒（open） | 叫醒（open） | 不投递 |
+| @everyone | 叫醒（everyone） | 叫醒（everyone） | 不投递 |
 
-leader 本人和你，规则和没有 leader 时一样。线程那两列的前提是 X 本来就在收件人里。
+发送者换成另一个 bot 时，只有两处不同：@X 的原因变成 handoff；「普通」和「回复你自己的消息」在 Only who it's for 方式下变成只记录，因为只有你发的、没找任何人的消息才算 open。
 
-| 怎么写 | 你或 leader 发，顶层 | 你或 leader 发，线程 | 别的成员发，顶层 | 别的成员发，线程 |
+### A.2 没有 leader，发在线程里
+
+发送者是你。按 X 和这个线程的关系分成三种：**在线程里**（在线程里发过言，或者顶层消息是它发的）、**没参与过**、**取消了关注**。静音对线程不起作用。
+
+| 你怎么写 | 在线程里，Everyone | 在线程里，Only who it's for | 没参与过 | 取消了关注 |
 |---|---|---|---|---|
-| 普通 | 无记录 | 只记录 | 无记录 | 只记录 |
-| @X | `mention`／`handoff`，新活 | `mention`／`handoff`，这件活 | 无记录（发送者收到提示） | 只记录 |
-| 回复 X 的消息 | `reply`，不属于任何活 | `reply`，这件活 | 无记录 | 只记录 |
-| @everyone | `everyone`，不属于任何活 | `everyone`，这件活 | 无记录 | 只记录 |
-| 建任务并指派给 X | `assigned`（回执） | — | 成员不能指派给别人 | — |
+| 普通 | 叫醒（thread） | 叫醒（thread） | 不投递 | 不投递 |
+| @X | 叫醒（mention） | 叫醒（mention） | 叫醒（mention），X 开始关注 | 叫醒（mention），X 恢复关注 |
+| @别的成员 | 叫醒（thread） | 只记录 | 不投递 | 不投递 |
+| 回复 X 的消息 | 叫醒（reply） | 叫醒（reply） | 不适用：X 在这里没有消息 | 不投递 |
+| 回复别的成员的消息 | 叫醒（thread） | 只记录 | 不投递 | 不投递 |
+| 回复你自己的消息 | 叫醒（thread） | 叫醒（thread） | 不投递 | 不投递 |
+| @everyone | 叫醒（everyone） | 叫醒（everyone） | 叫醒（everyone），X 开始关注 | 不投递，但 X 恢复关注 |
+
+发送者换成另一个 bot 时，不同之处和 A.1 一样：@X 是 handoff；「普通」和「回复你自己的消息」在 Only who it's for 方式下变成只记录。
+
+### A.3 有 leader，X 是被 leader 带的成员
+
+leader 本人和你收消息的规则，和没有 leader 时一样（A.1、A.2）。被带的成员只收派给它的，唤醒方式对它不起作用。
+
+**你或 leader 发的消息**：
+
+| 你或 leader 怎么写 | 发在顶层 | 发在线程，X 在线程里 | 发在线程，X 不在线程里 |
+|---|---|---|---|
+| 普通 | 不投递 | 只记录 | 不投递 |
+| @X | 叫醒（你发是 mention，leader 发是 handoff），算一件新活 | 叫醒（同左），属于这个线程那件活 | 叫醒（同左），X 开始关注，属于这个线程那件活 |
+| @别的成员 | 不投递 | 只记录 | 不投递 |
+| 回复 X 的消息 | 叫醒（reply），不属于任何活 | 叫醒（reply），属于这个线程那件活 | 不适用：X 在这里没有消息 |
+| 回复别人的消息 | 不投递 | 只记录 | 不投递 |
+| @everyone | 叫醒（everyone），不属于任何活 | 叫醒（everyone），属于这个线程那件活 | 叫醒（everyone），X 开始关注 |
+| 建任务并指派给 X | 叫醒（assigned），不属于任何活 | 不适用：任务只在顶层 | 不适用 |
+
+「算一件新活」「属于哪件活」见 §12.2。
+
+**别的成员发的消息**：不管怎么写，顶层一律不投递；线程里 X 在线程里就只记录，不在就不投递。别的成员 @X 时，发送者的 `group_send` 结果里有「Undelivered mentions」，让它去找 leader；回复 X、@everyone 送不到时，发送者不会收到任何提示。
 
 ## 附录 B：系统消息
 
-| 什么时候 | `system_subtype` | 发在哪 | 分类 |
-|---|---|---|---|
-| 成员加入、离开 | `group.membership` | 顶层 | born-read |
-| 换 leader（@everyone，并 @ 新 leader） | `group.leader` | 顶层 | born-read |
-| 群的文件夹变了 | `group.folder` | 顶层 | skip |
-| bot 建任务，没有负责人 | `task.created_summary` | 顶层 | born-read |
-| bot 建任务并指派（@ 负责人，静音也收到） | `task.assignment_receipt` | 顶层 | born-read |
-| 把消息变成任务 | `task.converted_summary` | 顶层 | born-read |
-| 改状态；你认领、放下、指派 | `task.lifecycle_thread` | 任务的线程 | born-read |
-| 删除任务 | `task.deleted_summary` | 顶层 | skip |
-| bot 取消关注线程 | `thread.self_unfollow` | 那个线程 | skip |
-| bot 的一轮失败、停下、暂停 | `seat.turn_failed` | 顶层 | skip |
-| leader 群成员在一件活上的一轮失败（@ leader） | `seat.piece_failed` | 这件活的线程 | born-read |
-| bot 向你提问（作为它的消息） | `bot.question` | 顶层 | skip |
+系统消息由 pocket-bots 自己发，分两类：
 
-bot 自己认领、放下、给已有任务指派负责人，都不发系统消息。
+- **照常投递**（代码里叫 born-read）：和普通消息一样投递，静音和 leader 群的规则照样起作用。没有点名谁时，按群的唤醒方式：Everyone 下叫醒，Only who it's for 下只记录。唯一的不同是对引起它的人不算未读，比如建任务的 bot 不会被自己建的任务叫醒。
+- **不投递**（代码里叫 skip）：不写投递记录，谁也不叫醒，只留在消息列表里。
+
+| 什么时候 | 发在哪 | 谁收到 | 种类（`system_subtype`） |
+|---|---|---|---|
+| 成员加入、离开 | 顶层 | 照常投递 | `group.membership` |
+| 换 leader | 顶层 | 带 @everyone，没静音的成员都被叫醒；新 leader 另外被点名（mention）。静音的成员收不到 | `group.leader` |
+| bot 建任务，没有负责人 | 顶层 | 照常投递 | `task.created_summary` |
+| bot 建任务并指派 | 顶层 | 负责人被点名叫醒（assigned），静音也收到；指派给自己时自己也被叫醒。其他成员照常投递 | `task.assignment_receipt` |
+| 把消息变成任务 | 顶层 | 照常投递 | `task.converted_summary` |
+| 改任务状态；你认领、放下、指派 | 任务的线程 | 线程的关注者，照常投递 | `task.lifecycle_thread` |
+| leader 群的成员在一件活上失败 | 这件活的线程 | leader 被点名叫醒（mention）；失败的成员不算未读 | `seat.piece_failed` |
+| 群的文件夹变了 | 顶层 | 不投递 | `group.folder` |
+| 删除任务 | 顶层 | 不投递 | `task.deleted_summary` |
+| bot 取消关注线程 | 那个线程 | 不投递 | `thread.self_unfollow` |
+| bot 的一轮失败、停下、暂停 | 顶层 | 不投递 | `seat.turn_failed` |
+| bot 向你提问 | 顶层，作为这个 bot 的消息 | 不投递；卡片等你回答 | `bot.question` |
+
+bot 自己认领、放下、给已有任务指派负责人，都不发系统消息，只是任务标签变了。
 
 ## 附录 C：有意的取舍
 
