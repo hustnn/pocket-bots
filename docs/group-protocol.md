@@ -368,12 +368,29 @@ steer 是 runtime 层的能力：把输入插进正在跑的这一轮，不打�
 
 ### 9.2 四种读法
 
-| 写法 | 读什么 | 怎么记账 | 项目里什么时候用 |
-|---|---|---|---|
-| `unread: true` | 所有 conv 的待读，旧的在前，一次最多 40 条，多了提示再调一次 | 逐条记 exact，取走待读 | 被叫醒后的默认动作：提示的最后一句就是「group_read with unread: true reads everything in your inbox」 |
-| `unread: true` + `thread: N` 或 `top_level: true` | 这个 conv 读位置之后的，最多 40 条；已经看过的只用一行带过 | 一定接得上：boundary 推到最后一条，更新 `read_order`，取走待读 | 只想跟上一个地方时。`group_inbox` 每行给的「Next:」调用就是这种；重启后放不下补课批次时，提示也让 bot 这样逐个地方读一遍 |
-| 不带 `unread`：不带参数、`thread: N`、`before: N` | 一个 conv 最新的一页（默认 20 条），或 N 之前的一页；读线程的第一页附带顶层消息 | 接得上就推 boundary 并更新 `read_order`，接不上就逐条记 exact | 回复线程前读整个线程：座位的 prompt 要求「Before answering an @mention in a thread you haven't read this turn, read the thread」；被拉进线程的提示建议「group_read with thread: N」；被拦下时提示「N more not shown: group_read with …, before: X」往前翻 |
-| `around: N` | N 所在的 conv 里，N 前后的几条（自动定位顶层或线程） | 只逐条记 exact，不更新 `read_order` | 找旧消息：prompt 要求「When someone refers to an earlier discussion you don't have, find it first (group_search, then group_read with around: N)」；`group_search` 的结果、读未读时「已经给你看过」的那一行，也都建议用 `around` 再看 |
+**① `unread: true`：读全部待读**
+
+- 读什么：所有 conv 的待读，旧的在前，一次最多 40 条；还有剩的，结果末尾提示再调一次。
+- 怎么记账：逐条记 exact，取走待读。不更新 `read_order`。
+- 项目里什么时候用：被叫醒后的默认动作。提示的最后一句就是「group_read with unread: true reads everything in your inbox」。
+
+**② `unread: true` 加 `thread: N` 或 `top_level: true`：读一个地方的未读**
+
+- 读什么：这个 conv 读位置之后的，最多 40 条。模型已经看过的（比如被拦下时给它看过的）不重复，只用一行带过。
+- 怎么记账：从读位置往后读，一定接得上。boundary 推到最后一条，更新 `read_order`，取走待读。
+- 项目里什么时候用：只想跟上某一个地方时。`group_inbox` 每行给的「Next:」调用就是这种；重启后补课批次放不下时，提示也让 bot 这样逐个地方读一遍。
+
+**③ 不带 `unread`：不带参数、`thread: N`，或加 `before: N`：读一页**
+
+- 读什么：一个 conv 最新的一页（默认 20 条），或 N 之前的一页。不带 `thread` 就是顶层。读线程的第一页附带它的顶层消息。
+- 怎么记账：接得上就推 boundary、更新 `read_order`；接不上就逐条记 exact。
+- 项目里什么时候用：回复线程前把线程读一遍，座位的 prompt 要求「Before answering an @mention in a thread you haven't read this turn, read the thread」；被拉进线程的提示也建议「group_read with thread: N」。被拦下时，返回文字提示用 `before` 往前翻没给它看的那些。
+
+**④ `around: N`：定位读**
+
+- 读什么：N 所在的 conv 里，N 前后的几条。不用指定是顶层还是线程，按 N 自动定位。
+- 怎么记账：只逐条记 exact，不更新 `read_order`。
+- 项目里什么时候用：找一条旧消息。prompt 要求「When someone refers to an earlier discussion you don't have, find it first (group_search, then group_read with around: N)」；`group_search` 的每条结果、读未读时「已经给你看过」的那一行，也都建议用 `around` 再看。看到 `replying to #N` 而上下文里没有 #N 时，也用它。
 
 ### 9.3 一个例子
 
