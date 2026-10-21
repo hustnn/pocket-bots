@@ -1,89 +1,444 @@
 # 群聊通信协议
 
-这篇把群聊的通信规则按「一条消息的一生」排成速查：谁收到、谁被叫醒、什么时候送到、怎么读、开口前查什么。有没有 leader、发在顶层还是线程、用 @ 还是回复，各种组合都单独列出来。规则为什么这样定、完整的例子见[群聊](group-chats.md)，组件和整体架构见[设计](design.md#6-群聊怎么工作)。文中「你」指用户，也就是群主。
+写给要改群聊代码的开发者：消息怎么在用户、群和各个 bot 之间流动，每一步读写什么状态，由哪段代码负责。规则为什么这样定、一个从头到尾的例子见[群聊](group-chats.md)；组件和整体架构见[设计](design.md#6-群聊怎么工作)。
 
-## 一条消息的一生
+## 1. 先认识几个词
 
-1. **定位置**：带 `thread` 发进线程；带 `reply_to` 发到被回复那条所在的地方；都不带就是顶层。
-2. **写投递记录**：同一个事务里写消息本身、每个收件人的投递记录（算不算未读、唤醒原因）、线程关注、发送者的读位置。
-3. **决定叫醒谁**：投递记录带唤醒原因的，进那个 bot 的待读；没有原因的只是记录，不叫醒。
-4. **送到座位**：一条通常不带正文的提示。座位空闲就开新的一轮；正忙就等 3 秒合并，再 steer 进当前这一轮；还没座位就先建。
-5. **bot 自己读**：用 `group_read` 读。读到的记为「模型看过」，读位置前进，消息从待读里取走。
-6. **bot 开口**：只能用 `group_send`，座位里写的字不进群。
-7. **开口前检查**：这个地方还有它的模型没看过的新消息，就不发：存成草稿，给它看最新的 3 条。
-8. **通过**：成为一条新消息，回到第 1 步。
+一个 bot 在群里的存在分四层，从外到内：
 
-背后的几条原则：
+```
+bot          一份配置（身份、模型、技能……），可以加入多个群
+└─ 座位      这个 bot 在这个群里专用的聊天：每个群一个
+   └─ CLI 会话  座位背后的对话历史，由 agent CLI 存在磁盘上，按 id 续接
+      └─ 进程   会话正在用时才有的 CLI 子进程，空闲 15 分钟就关掉
+```
 
-- **成员即投递**：收到 = 有一条投递记录。@ 和回复只是在记录上标「这条是找你的」。
-- **提示不带内容**：叫醒只说哪里有几条新消息、为什么找你，消息由 bot 自己读。
-- **按地方记账**：顶层和每个线程各有一套读位置、看过的记录、草稿和开口前检查。
-- **开口前必须跟上**：没看过这个地方的新消息，话就发不出去。
-- **认领是锁**：一件事谁先认领谁做，被拒绝的人不做同样的事。
-
-## 术语
-
-| 术语 | 含义 | 存在哪 |
+| 词 | 代码里 | 是什么 |
 |---|---|---|
-| 地方（会话） | 顶层，或者某个线程。线程用它顶层消息的编号表示：线程 #12 挂在 #12 上。线程不嵌套 | `conv`：0 是顶层 |
-| 座位 | 每个成员 bot 在每个群里的一个聊天，背后是一个 agent CLI 的会话。群第一次叫醒它时才建 | `group_members.seat_chat_id` |
-| 投递记录 | 一条消息 × 一个收件人一行：算不算未读、唤醒原因、是不是 @ 它、读走没有、进过哪条提示、座位收下没有、为什么没送到 | `group_inbox` |
-| 待读 | 带唤醒原因、还没被读走的投递记录。只有待读才会叫醒 bot | `wake_reason`、`drained_at` |
-| 未读 | 算未读的投递记录里，编号在读位置之后的。界面上的未读点、`group_inbox` 都按它算 | `unread_eligible` |
-| 读位置 | 每个收件人（你也是）在每个地方读到第几条 | `group_read_cursors` |
-| 看过的记录 | bot 的模型在每个地方确实看过什么：boundary（到这条为止都看过）、之后零散看过的编号、最近一次读，以及「座位建起以来给它看到过哪」 | `group_seen` |
-| 关注 | 谁关注哪个线程、为什么、取消了没有，决定线程消息发给谁 | `group_thread_follows` |
-| 草稿 | 开口前检查没通过的话，每个 bot 每个地方一份，10 分钟过期 | `group_drafts` |
-| 活（piece） | 只用于 leader 群的成员：一件派给它的活，就是一条顶层派活消息加上它的线程。座位一次只做一件 | `group_members.seat_task` |
+| 座位（seat） | `chats` 里 `kind = seat` 的一行；`group_members.seat_chat_id` 指向它 | bot 在一个群里做的所有事都发生在这个聊天里：提示作为输入发进来，它在这里思考、调工具；群里只看得到它用 `group_send` 发的话。标题是「Group · 群名」 |
+| conv | `group_inbox.conv` 等列；0 表示顶层，N 表示线程 #N | 一条消息所在的位置：顶层，或者挂在顶层消息 #N 上的线程。线程不嵌套。读位置、看过的记录、草稿、开口前检查都按 conv 分开记 |
+| 投递记录 | `group_inbox` 的一行 | 一条消息 × 一个收件人。有记录才算「收到」 |
+| 唤醒原因 | `group_inbox.wake_reason` | 记录上为什么要叫醒这个 bot；为空就只是记录，不叫醒 |
+| 待读（inbox） | `wake_reason` 不为空、`drained_at` 为空的记录 | 该告诉 bot、bot 还没读走的消息 |
+| 未读 | `unread_eligible = 1` 且在读位置之后的记录 | 界面的未读点、`group_inbox` 工具按它算。你（用户）也有未读 |
+| 读位置 | `group_read_cursors.last_read_seq` | 每个收件人在每个 conv 读到第几条 |
+| 看过的记录（seen） | `group_seen`：`boundary_seq`、`exact_seqs`、`read_order`、`visible_boundary` | bot 的模型在每个 conv 确实看过什么，开口前检查靠它判断 bot 是否跟上了 |
+| 提示（notice） | `wakeText()` 生成的文字 | 叫醒 bot 时发进座位的一条输入，只说哪里有几条新消息、为什么找它，不带正文 |
+| 活（piece） | `group_members.seat_task` | 只用于 leader 群的成员：一条顶层派活消息加上它的线程。座位一次只做一件 |
 
-## 发在哪
+文中「你」指用户，也就是群主。
 
-`reply_to` 决定「对谁说」，`thread` 决定「在哪说」，两者互不相关。「在哪」决定谁收到、记到哪本账上；「对谁」只影响被回复的人收到时的唤醒原因、Only who it's for 方式下别人会不会被叫醒，以及 leader 群里这条算不算派给成员的。
+## 2. 全景：三条通道
 
-| 参数 | 发到 | 说明 |
+```mermaid
+flowchart LR
+  U["用户（Web UI）"] -- "RPC：groupSendRpc 等" --> G["GroupChats<br/>server/groups.ts"]
+  G <--> S[("GroupStore<br/>SQLite")]
+  G -- "提示：开新一轮 / steer / 建座位" --> C["ChatService"]
+  C --> A["座位里的 agent CLI"]
+  A -- "MCP 工具：group_send、group_read……" --> R["Relay"] --> G
+  C -- "事件：input.accepted、turn.ended……" --> G
+```
+
+1. **用户 → 群**：界面调 RPC（发消息是 `groupSendRpc` → `GroupChats.postFromUser()`）。
+2. **bot → 群**：bot 只能通过 MCP 工具（`group_send` 等，经 relay 到 `GroupChats`）读写群。它在座位里输出的文字不进群。
+3. **群 → bot**：`GroupChats` 往 bot 的座位发一条输入（`sendToChat()`，座位忙时用 steer；没有座位就 `startSeat()` 建一个）。这条输入通常只是**提示**，消息正文由 bot 自己用 `group_read` 读。
+
+`ChatService` 再把座位的运行情况以事件告诉 `GroupChats`（见 [§14.2](#142-groupchats-订阅的事件)），比如输入被 CLI 收下了、一轮结束了。
+
+## 3. 数据模型
+
+全部在 `pocket-bots.sqlite`，`server/group-store.ts` 负责读写。
+
+| 表 | 一行是什么 | 关键列 |
 |---|---|---|
-| 都不带 | 顶层 | |
-| `thread: N` | 线程 | N 是线程里的消息时，取它所在的线程。不能在系统消息上开线程 |
-| `reply_to: N`，N 在顶层 | 顶层 | 消息头写 `replying to #N` |
-| `reply_to: N`，N 在线程 T 里 | 线程 T | 回复线程里的消息，一定留在那个线程 |
-| 两个都带 | 按 `thread` | |
+| `group_messages` | 一条消息，群内编号 `seq` 递增 | `sender_kind`（user / bot / system）、`reply_to`、`thread_seq`（在哪个线程，顶层为空）、`mentions`、`everyone`、`system_subtype`、`causal_actor_id`（系统消息由谁引起）、`idempotency_key` |
+| `group_inbox` | 消息 × 收件人 | `conv`、`personal_mention`、`unread_eligible`、`wake_reason`、`reactivated`、`noticed`（进过提示）、`notice_id`、`notice_accepted`（座位收下）、`delivery_failure`、`drained_at`（被读走） |
+| `group_read_cursors` | 收件人 × conv | `last_read_seq` |
+| `group_seen` | bot × conv | `boundary_seq`、`exact_seqs`（boundary 之后零散看过的，最多 2,500 个）、`read_order`（最近一次读的顺序）、`visible_boundary`（座位建起以来给它看到过哪） |
+| `group_thread_follows` | 线程 × 关注者 | `reason`、`unfollowed_at` |
+| `group_drafts` | bot × conv | `text`、`reply_to`、`draft_key`、`hold_count`、`expires_at`、`files` |
+| `group_members` | 群 × bot | `seat_chat_id`、`muted_from_seq`、`seat_task`、`active` |
+| `group_tasks`、`group_task_events` | 任务和它只追加的历史 | |
+| `group_mentions`、`group_reminders` | @ 记录；提醒 | |
 
-代码：`server/groups.ts` 的 `venue()`。
+一条消息、它的全部投递记录、它引起的线程关注、发送者的读位置，在**同一个事务**里写完（`GroupStore.append()`）。带 `idempotency_key` 重发时返回已有的那条，不会发两次。
 
-界面上的按钮：
+## 4. 一条消息走完的流程
 
-- **Reply**：在顶层消息上点，消息留在顶层，带引用；在线程里的消息上点，发在那个线程里，带引用。
-- **Reply in thread**：只有顶层消息有。打开它的线程，发进去的消息不带 `reply_to`。
-- **As task**：发出的消息直接成为任务（todo、没人负责），只能用在顶层。
+以「你在顶层发一条消息，bot B 正在忙」为例：
 
-谁能在群里说话：
+```mermaid
+sequenceDiagram
+  participant U as 用户
+  participant G as GroupChats
+  participant S as GroupStore
+  participant C as ChatService
+  participant B as bot B 的座位
+  U->>G: postFromUser()
+  G->>S: append() 写消息和投递记录
+  S-->>G: 要叫醒的 bot
+  G->>G: wake() 然后 pump()，B 正忙，等 3 秒
+  G->>C: sendToChat(提示, steer)
+  C->>B: 插进正在跑的这一轮
+  C-->>G: input.accepted，记座位收下
+  B->>G: group_read
+  G->>S: 记看过、推读位置、取走待读
+  B->>G: group_send
+  G->>G: preflight() 开口前检查
+  G->>S: append() 新消息，回到第二步
+```
 
-- **bot**：只能用 `group_send`（和发草稿的 `group_send_draft`），它在座位里输出的文字不进群。
-- **你**：群的输入框。你在某个 bot 的座位里打字，只对那个 bot 说，不进群。
-- **pocket-bots**：系统消息，见下面的分类表。
-- **bot 之间私下说话**：`ask_bot`，不经过群。leader 群的成员不列出这个工具。
+| 步骤 | 做什么 | 详见 |
+|---|---|---|
+| 1. 定位置 | 由 `thread` 和 `reply_to` 算出 conv | [§5](#5-定位置) |
+| 2. 写投递记录 | 算收件人；每人一条记录，带未读标志和唤醒原因 | [§6](#6-投递谁收到) [§7](#7-唤醒原因) |
+| 3. 送提示 | 按座位状态决定怎么送、什么时候送 | [§8](#8-送达提示怎么进座位) |
+| 4. bot 读 | 推进看过的记录和读位置，取走待读 | [§9](#9-读和看过的记录) |
+| 5. bot 开口 | 先过开口前检查，没跟上就存草稿 | [§10](#10-开口前检查) |
 
-## 谁收到
+## 5. 定位置
 
-### 顶层
+`GroupChats.venue(thread, replyTo)`：
 
-- 每个成员 bot 和你各一条投递记录，发送者自己也有一条（不算未读，不叫醒）。
-- **静音**：从静音那条起，静音的 bot 收不到普通顶层消息的记录，回复它、@everyone 也收不到。只有 @ 它（包括 @ 它的任务回执）才穿透。
-- **leader 群的成员**：见下面的 leader 群规则。
+| 参数 | conv |
+|---|---|
+| 都不带 | 0（顶层） |
+| `thread: N` | N 所在的线程（N 本身在线程里时取那个线程）。不能在系统消息上开线程 |
+| `reply_to: N`，N 在顶层 | 0；消息头写 `replying to #N` |
+| `reply_to: N`，N 在线程 T 里 | T |
+| 两个都带 | 按 `thread` |
 
-### 线程
+`reply_to` 决定「对谁说」，`thread` 决定「在哪说」。conv 决定谁收到、记到哪本账；`reply_to` 只影响被回复的人的唤醒原因、Only who it's for 方式下别人会不会被叫醒，以及 leader 群里这条算不算派给成员的。
 
-- 收件人 = **关注者** + 发送者 + **顶层作者**（没取消关注时）+ **被 @ 的成员** + @everyone 时的每个成员。
-- **取消了关注**的成员：没有记录，除非这条 @ 了它（同时恢复关注）。线程里的 @everyone 不写它的记录，但会让它重新关注。
-- **静音对线程无效**。
-- **`reply_to` 不会加人**：只给已经在收件人里的成员打上 reply。
-- **自动关注**：在线程里发言的人（取消过也会恢复）、顶层作者（取消过不会恢复）、在线程里被 @ 的人（会恢复）、@everyone 时的全体（会恢复）。你也算：你发过的顶层消息和你回复过的线程，有新回复时算你的未读。
+界面上的按钮：**Reply** 设 `reply_to`（对线程里的消息点，就发在那个线程）；**Reply in thread** 只在顶层消息上有，设 `thread`；**As task** 让顶层消息直接成为任务。
 
-代码：`server/group-store.ts` 的 `deliver()`。
+## 6. 投递：谁收到
 
-### 没有 leader：X 有没有记录、为什么被叫醒
+`GroupStore.deliver()`，按下面的顺序：
 
-发送者是你，X 是某个成员 bot。格子里写的是唤醒原因；「只记录」是有记录、算未读、不叫醒；「无记录」是这条对 X 不存在。两种唤醒方式结果不同时写成「Everyone 的结果／Only who it's for 的结果」。
+```
+if 消息是 skip 类系统消息: 不写任何记录，结束
+
+收件人 =
+  conv == 0: 每个成员 + 用户
+  conv != 0: 线程关注者 + 发送者（系统消息除外）+ 顶层作者（没取消关注时）
+             + 被 @ 的成员 + @everyone 时的每个成员
+             取消了关注的成员标记为「压下」
+
+for 每个收件人 r:
+  personal = r 被 @（系统消息：r 是它点名的人）
+  if 压下 and not personal: 跳过
+  if conv == 0 and r 静音 and not personal: 跳过           # 静音只管顶层
+  asWork = r 不是被 leader 带的成员
+           or (消息来自你或 leader and (personal or 回复的是 r 的消息 or @everyone))
+  if conv == 0 and not asWork: 跳过                         # leader 群成员只收派给它的
+  unread = unreadEligible(消息, r, personal)
+  reason = (r 是用户 or not asWork) ? 空 : deliveryReason(...)
+  写 group_inbox(r, conv, personal, unread, reason)
+
+if conv != 0: 发送者、顶层作者、被 @ 的成员（@everyone 时全体）关注这个线程
+```
+
+要点：
+
+- **发送者自己也有一条记录**，不算未读、不叫醒，只为了读位置和看过的记录统一处理。
+- **`reply_to` 不会把人加进线程的收件人**。被回复的成员通常在线程里发过言，已经自动关注；取消了关注的就收不到。
+- **静音只管顶层**，回复和 @everyone 都穿不透，只有 @ 穿透。
+- **leader 群里，成员之间的 @ 不算数**：别的成员 @X 不会把 X 加进收件人，也不让 X 关注。
+- **自动关注**：在线程里发言的人（取消过也恢复）、顶层作者（取消过不恢复）、被 @ 的人（恢复）、@everyone 时的全体（恢复）。
+
+组合下的具体结果见[附录 A](#附录-a组合速查表)。
+
+### 未读
+
+`unreadEligible()`：不是它自己发的、不是它自己引起的系统消息、不是 skip 类系统消息，就算未读。例外：被 @ 的总算未读，即使是自己引起的（「📌 @Ada started task #3」会叫醒 Ada）。
+
+### 系统消息
+
+每种系统消息在 `SYSTEM_SUBTYPES` 里声明分类：**born-read** 照常投递，但对引起它的人不算未读；**skip** 不写任何记录。完整列表见[附录 B](#附录-b系统消息)。
+
+## 7. 唤醒原因
+
+`deliveryReason()`，第一条成立的就是结果：
+
+```
+if not unread or 是它自己发的: 空
+if personal:
+  系统消息: 任务指派回执 ? assigned : mention
+  bot 发的: handoff
+  你发的:   mention
+if 回复的是它的消息: reply
+if @everyone: everyone
+open = 你发的 and 没 @ 谁 and 不是 @everyone and 不是回复某个成员
+if conv != 0: (Everyone 方式 or open) ? thread : 空
+if conv == 0: open ? open : (Everyone 方式 ? group : 空)
+```
+
+| 原因 | 提示里的标记 |
+|---|---|
+| `mention` | you were @mentioned |
+| `handoff` | Ada handed you work with an @mention |
+| `assigned` | a task was assigned to you |
+| `reply` | Ada replied to your message |
+| `everyone` | for @everyone |
+| `open`、`group`、`thread` | 无 |
+
+- **唤醒方式**是群的设置：Everyone（默认）叫醒每个收到的 bot；Only who it's for 只叫醒被找的，其余只写记录。
+- **leader 群的成员**：不是派给它的不进待读（上面 `asWork` 已经挡掉），唤醒方式对它不起作用。
+- **@ 和回复没有紧急程度之分**：两者走完全相同的送达流程（§8），区别只在标记文字、能穿透什么，以及 @ 能追踪去向（§13）。
+
+## 8. 送达：提示怎么进座位
+
+`GroupChats.wake()` 对每个要叫醒的 bot 调 `pump()`。`pump()` 按顺序判断：
+
+| 情况 | 怎么做 |
+|---|---|
+| 待读和到点的提醒都没有 | 什么都不做 |
+| leader 群成员，要送的活不是座位正在做的那件，且座位正忙 | 等这一轮结束 |
+| 待读里没有还没提示过的消息 | 什么都不做（每条消息只进一次提示） |
+| 运行时被停下，或座位建不起来已经停止重试 | 记投递失败，等下一次叫醒 |
+| 出错后的等待中 | 记投递失败（@ 的去向显示 LOST），等到期 |
+| 座位正忙 | 从第一条进来起等 3 秒，到时把这期间的合成一条提示；后来的不会把时间往后推 |
+| leader 群成员换活（座位空闲） | 归档旧座位，开新的，不带简报 |
+| 座位空闲 1 小时以上且上下文 ≥ 128k token；工作目录变了；Pi 压缩连续失败 | 归档旧座位，开新的，第一条输入带约 8k token 的简报 |
+| 还没有座位 | `startSeat()` 建座位（全局启动队列，同时最多 6 个，间隔半秒），提示是第一条输入 |
+| 座位存在 | `sendToChat(…, steer)`：空闲就开新的一轮，正忙就插进当前这一轮。插不进去：正忙的 15 秒后再试，空闲的（比如正在压缩）等这一轮结束 |
+
+提示发出前，投递记录先记上 `notice_id`；`ChatService` 发来 `input.accepted` 时记 `notice_accepted`。一轮结束、座位空下来（`agent.settled`）时会再 `pump()` 一次，补上之前等着的。
+
+### 提示长什么样
+
+```
+[Group inbox notice: 3 new messages for you to read.
+- top level: 1 new (#16) · latest from the user · the user replied to your message
+- thread #12: 2 new (#14 to #15) · latest from Ada (bot) · you were @mentioned
+]
+They haven't been read. Read them when it suits you: group_read with unread: true …
+```
+
+每个 conv 一行，最近有动静的在前。座位的 prompt 写的是「Read them when it suits your current work」，什么时候读由模型决定。
+
+### 什么时候带正文
+
+| 情况 | 带什么 | 怎么记看过 |
+|---|---|---|
+| 被拉进一个从没看过的线程（`visible_boundary` 为空）：`mention`、`handoff`；leader 群成员的 `reply` 也算 | 顶层消息、这条之前最近 6 条回复、这条本身，以及其中别人的附件 | 收下后线程的 boundary 推到附带的最后一条，顶层消息记为零散看过 |
+| leader 群成员这件活的消息 | 全文，最多 8 条 | 收下即算读过，从待读取走 |
+| 新座位 | 成员名单；不是被 leader 带的成员时，再加上分给它、没完成的任务 | — |
+| 座位换新 | 简报：最近看过的 25 条消息、重新读过的正在用的文件、最近 12 次操作 | 不算看过 |
+| 重启后补课 | 未读消息本身：最多 8 个 conv、每个 5 条、共 20 条，@ 它的在前 | 逐条记为看过 |
+| 提醒到点 | 提醒的文字 | — |
+
+### steer 什么时候生效
+
+steer 是 runtime 层的能力：把输入插进正在跑的这一轮，不打断它。
+
+| CLI | 模型什么时候看到 |
+|---|---|
+| Claude Code、OpenCode、Pi | 正在执行的工具调用返回之后 |
+| Codex | 下一步 |
+| Grok Build | 正在执行的工具调用返回之后；只报「已排进这一轮」 |
+
+## 9. 读和看过的记录
+
+只有 bot 自己调 `group_read` 才会读。看过的记录由 `GroupStore.recordSeen()` 维护：`boundary` 表示「到这条为止都看过」，`exact` 是 boundary 之后零散看过的编号。
+
+| `group_read` 的参数 | 读什么 | 怎么记看过 |
+|---|---|---|
+| `unread: true` | 所有 conv 的待读，旧的在前，最多 40 条 | 逐条记 exact，取走待读 |
+| `unread: true` + `thread` 或 `top_level` | 这个 conv 读位置之后的 | boundary 推到最后一条；已经看过的只用一行带过 |
+| 不带参数、`thread`、`before` | 一个 conv 最新的一页，或某条之前的一页；读线程时附带顶层消息 | 接得上就推 boundary，接不上就逐条记 exact |
+| `around: N` | N 所在 conv 里 N 前后的几条 | 逐条记 exact |
+
+- **接得上**：这一页从这个 conv 的开头开始，或者最早一条不晚于读位置。接得上的读才更新 `read_order`。
+- **读位置跟着看过走**：从读位置往后，模型都看过的就前进；碰到第一条没看过、又算它未读的就停。
+- 读线程不推进顶层；读线程时附带的顶层消息在顶层记 exact。
+- `group_search`（预览）和 `group_inbox`（列哪里有未读）都不改任何状态。
+
+看过的记录只在一个模型上下文里有效：
+
+| 事件 | boundary / exact / read_order | visible_boundary |
+|---|---|---|
+| 新座位（含 leader 群成员换活） | 清空 | 清空 |
+| 座位换新；CLI 报来压缩（`compaction` 事件） | 清空 | 保留 |
+| 续接同一个 CLI 会话 | 保留 | 保留 |
+| 续接 Grok（从不报压缩） | 清空 | 保留 |
+
+清空时读位置和待读不动；之后 bot 第一次在某个 conv 开口，会被拦一次。
+
+## 10. 开口前检查
+
+`GroupChats.preflight(bot, conv, action)`，用于 `group_send`、`group_send_draft`（`anyway` 时跳过）、`group_claim` 和 `group_task` 改状态。后两个只做前两步，而且 conv 固定为 0。
+
+```
+1. 待读：这个 conv 里投递给它、还没读走的
+   有模型没看过的 → 拦下，给它看最新 3 条
+2. 第一次碰这个 conv（没有待读，也没有 boundary；leader 群成员在顶层跳过）
+   最近 3 条有没看过的 → 拦下，给它看
+3. 只对发言：从 boundary 往后数，去掉 exact、它自己的、它引起的豁免类系统消息
+   顶层数它的投递记录；线程数线程里的全部消息
+   还有 → 拦下，给它看最新 3 条，告诉它一共几条
+拦下时给它看的都记 exact；发言被拦下的话存成这个 conv 的草稿
+```
+
+- 豁免类系统消息：成员变化、换 leader、建任务、指派回执、把消息变成任务（内容都在它自己的请求或回执里）。
+- 检查按 conv 分开：顶层的新消息不挡它在线程里说话。
+- **发顶层前确认**（`send()`）：bot 最近一次读的是某个线程，却不带 `reply_to` 往顶层发，就先存成草稿并提示「你最近读的是线程 #N」，用 `group_send_draft` 才发出。带 `reply_to` 指向顶层消息时不确认。
+- **草稿**：每个 bot 每个 conv 一份，10 分钟过期，带固定的 `draft_key`（重发不会出两条）。同一内容被拦 3 次后，提示才告诉它可以用 `anyway`。
+
+## 11. 任务和认领
+
+任务就是一条被标成任务的顶层消息：task #12 是消息 #12，它的线程是线程 #12。状态 `todo → in_progress → done`，`closed` 表示不做了，最多一个负责人，每次变化 `revision` 加一。
+
+| 动作 | 没有 leader 的 bot | leader | leader 群的成员 | 你 |
+|---|---|---|---|---|
+| `group_claim` 认领 | 先到先得，被拒就是锁 | 同左 | 只能认领派给它的：指派给它的任务，或你、leader @ 它的、还没指派的消息（`notHandedTo()`） | 界面上随时接手 |
+| `group_task` 改状态 | 按允许的转换 | 同左 | 拒绝（`statusSettable()`） | 任何状态 |
+| `assign` 指派 | 带 `expected_revision` 防覆盖；不通知被指派的人 | 同左 | 不能指派给别的成员（`assignable()`） | 可以 |
+| `create` 建任务 | 带负责人时发一条 @ 它的回执 | 同左 | 不能把负责人设成别的成员 | As task |
+| `unclaim` 放下 | 只去掉负责人 | 同左 | 同左 | 可以 |
+| `amend` 改卡片 | 任何成员，不过检查，不发系统消息 | 同左 | 同左 | 接口有，界面还没有 |
+| `delete` 删除 | 只有建任务的 bot | 同左 | 同左 | 可以 |
+
+## 12. leader 模式
+
+群可以指定一个成员当 leader（`groups.leader_id`）。leader 计划、派活、核对结果；其他成员只做你和 leader 派给它的活。投递上的差别已经在 §6 的 `asWork` 里；这一节讲成员的座位怎么按「活」运转。
+
+**一条消息属于哪件活**（`workOf()`）：
+
+| 消息 | 属于 |
+|---|---|
+| 线程里的任何消息 | 这个线程那件活 |
+| 你或 leader 在顶层 @ 这个成员 | 一件新活，就是这条消息自己（回复了别的消息也一样） |
+| 顶层的回复（不 @）、@everyone、系统消息、任务回执 | 不属于任何活，跟着当前那件一起送 |
+
+**一次一件活**（`pieceFor()`）：当前这件有新消息就送它，否则送最早的那件；其他活的消息留在待读里先不提示。要送的不是座位正在做的那件时，正忙就等这一轮结束，空闲就换一个新座位。换活的依据是「这一轮结束了」，不是任务状态；被换下的座位归档后不再续接。
+
+**成员的一轮失败了**：这件活的消息已经被座位收下，不会再提示，而「X's turn failed」是 skip 类系统消息。所以 `notePieceFailed()` 在这件活的线程里另记一条 `seat.piece_failed`，@ leader。leader 在线程里 @ 成员，它就续用同一个座位接着做；或者把活交给别人。
+
+**prompt 和工具**：
+
+- leader：新活是一条新的顶层消息，@ 一个成员并写完整的说明；迭代在同一个线程里 @ 成员；核对后自己把任务标成 done；你的请求全部做完后，用 `reply_to` 回复你的请求告诉你结果。
+- 成员：只做派给它的活；做完在线程里 @ leader 汇报一次就停；不发确认和进度；卡住了在线程里问 leader。
+- 成员只列出 `group_send`、`group_send_draft`、`group_read`、`group_claim`、`group_react`、`group_members`、`search_chats`。工具列表在会话开始时取一次。
+- 重启后成员不补课，只把座位还没收下的、派给它的消息重新告诉它。
+
+## 13. @ 的解析和去向
+
+**解析**（`mentionSpans()`、`parseMentions()`）：
+
+- 按成员名字匹配，不分大小写，长名字优先（`@Ann Lee` 优先于 `@Ann`）。
+- 名字以字母或数字结尾时，后面不能紧跟字母或数字；后面紧跟中文可以（`@Cody请看`）。
+- `@` 前面紧挨着字母、数字或 `._%+-` 时不算（邮箱）。
+- 反引号里的 `@名字`（行内代码、代码块）是字面的。
+- 界面的高亮用同一个函数。
+
+**发出时**：@ 了群外的 bot、不存在的名字、leader 群里别的成员，`group_send` 的结果在「Sent as #N.」后列出「Undelivered mentions」，说明这一下没通知任何人、怎么补救。
+
+**`group_mention_delivery`**：查自己一条消息里每个被 @ 的成员，结果从投递记录推出：
+
+| 结果 | 依据 |
+|---|---|
+| delivered | 已被读走，或读位置、看过的记录已经过了这条 |
+| still in flight | 还在待读里：还没提示 / 提示发了没收下 / 收下了还没读 |
+| LOST · quota、runtime_error、not_launched、unclassified | `delivery_failure`：限流、别的运行时错误、座位起不来、读之前离开了群 |
+| UNKNOWN | 没有投递记录 |
+
+**你的 @ 是手动启动**：`postFromUser()` 对你 @ 的每个 bot 调 `restart()`，清掉停下状态、断路器和错误计数。bot 的 @ 只是一次普通叫醒，断路器开着时会被拒绝。
+
+## 14. 接口
+
+### 14.1 bot 的群聊工具
+
+定义在 `server/tools/groups.ts`，都在 `bots` MCP 服务器上，免审批。「成员」列表示 leader 群的成员是否列出。
+
+| 工具 | 主要参数 | 读写什么 | 成员 |
+|---|---|---|---|
+| `group_send` | `text`、`thread`、`reply_to`、`files`、`idempotency_key` | 开口前检查；通过则 `append()`，否则存草稿 | ✓ |
+| `group_send_draft` | `thread`、`anyway`、`discard` | 草稿；再检查一次 | ✓ |
+| `group_read` | `unread`、`thread`、`top_level`、`before`、`around`、`limit` | 看过的记录、读位置、待读 | ✓ |
+| `group_inbox` | `mentions` | 只读 | |
+| `group_search` | `query` | 只读 | |
+| `group_claim` | `task` | 任务；检查前两步 | ✓ |
+| `group_task` | `action` 等 | 任务和历史；改状态时检查前两步 | |
+| `group_react` | `message`、`emoji` | 表情，不叫醒任何人 | ✓ |
+| `group_follow` | `thread`、`follow`、`reason`、`list` | 关注 | |
+| `group_mute` | `muted` | `muted_from_seq` | |
+| `group_reminder` | `action` 等 | 提醒；到点只叫醒自己 | |
+| `group_mention_delivery` | `message` | 只读 | |
+| `group_members` | — | 只读 | ✓ |
+
+成员调用没列出的工具时照样执行，限制在服务端判断。
+
+### 14.2 GroupChats 订阅的事件
+
+在 `server/main.ts` 里接线：
+
+| ChatService 事件 | 处理 | 做什么 |
+|---|---|---|
+| `input.accepted` | `onInputAccepted()` | 记提示被座位收下；附带的线程上下文和全文记为看过 |
+| `session.opened` | `onSessionOpened()` | 新会话或 Grok 续接时，看过的记录作废 |
+| `compaction` | `onCompaction()` | 看过的记录作废 |
+| `turn.ended` | `onTurnEnded()` | 失败时：记投递失败、出错后的等待、同错三次停下、断路器、`seat.piece_failed` |
+| `agent.settled` | `onAgent()` | 座位空下来，再 `pump()` 一次 |
+| `start.failed`、`start.ready` | `onStartFailed()`、`onStartReady()` | 座位建不起来的重试；建好后清零 |
+| `session.reset` | `onSessionReset()` | 会话不能续接，下次开新的 |
+| `permission.requested`、`permission.resolved` | `onPermission()`、`onPermissionResolved()` | bot 的提问作为群消息显示和收尾 |
+| `agent.removed` | `onRemoved()` | 座位的聊天被删：清掉座位和它的等待，下次叫醒时新建 |
+
+### 14.3 用户这边
+
+界面通过 RPC（`shared/rpc.ts`）：`groupSendRpc` 发消息（`postFromUser()`，可带 `asTask`）、`groupReadRpc` 记读到哪、`groupTaskRpc` 改任务、`groupAnswerRpc` 回答 bot 的提问、`groupMuteRpc` 静音某个 bot、`groupUpdateRpc` 改成员、唤醒方式、leader 和文件夹。群里的变化通过 SSE 推送（`changed()`），页面收到后重新拉取。
+
+## 15. 座位和 CLI 会话的生命周期
+
+| 情况 | 座位 | CLI 会话 |
+|---|---|---|
+| 第一次被叫醒 | 新建 | 新会话 |
+| 空闲，进程还在 | 不变 | 同一个，开新的一轮 |
+| 空闲超过 15 分钟 | 不变 | 进程被关；下次 resume 同一个会话 |
+| 空闲 ≥ 1 小时且上下文 ≥ 128k token | 下次叫醒时归档、换新，带简报 | 新会话 |
+| 群或 bot 的工作目录变了 | 空闲时换新，带简报 | 新会话 |
+| 额外文件夹变了 | 不变 | 空闲的会话关掉，下次 resume 时带上新列表（Codex 就地换） |
+| Pi 连续 3 次压缩失败 | 换新，带简报 | 新会话 |
+| leader 群成员换活 | 换新，不带简报 | 新会话 |
+| pocket-bots 重启 | 不变 | resume；Claude Code、Codex 沿用旧 system prompt，prompt 变了就在第一条输入前补发 |
+
+## 16. 出错和恢复
+
+座位的一轮失败后（`onTurnEnded()`，分类在 `server/runtime-errors.ts`，断路器在 `server/breakers.ts`）：
+
+| 情况 | 处理 |
+|---|---|
+| 限流、服务端错、连不上、流断了、用量上限、模型找不到 | 等 10 秒起，连续失败翻倍，最多 5 分钟（加 0–10% 随机量）；期间不发提示 |
+| 同样的错（同指纹）连续 3 次 | 停下运行时 |
+| 没登录、余额、模型不支持、套餐、输入太大 | 马上停下 |
+| 停下以后 | 下一条进它待读的消息（谁发的都行）或它的提醒让它重新开始，除非断路器拒绝 |
+| 反复停下 | 暂停自动启动 1 小时 → 4 小时 → 24 小时；启动后 1 分钟内退出连续 3 次，只能手动启动 |
+| 座位建不起来 | 1、2、4、8 秒后各试一次；之后暂停 5 分钟起翻倍，最长 6 小时 |
+| 启动 2 分钟没事件 | 算启动失败，按建不起来处理 |
+| 15 分钟没事件且进程没了 | 结束进程，resume，没收下的输入再发一次；不算出错 |
+| leader 群成员在一件活上失败 | 另记一条 `seat.piece_failed`，@ leader |
+
+一轮失败后不会自动重试：已经提示过的消息不再提示，要等下一次叫醒。这些等待和断路器只在内存里，重启后从头算；待读在 SQLite 里，不会丢。
+
+## 17. 不变式
+
+改群聊代码时要守住的几条：
+
+1. 一条消息和它的投递记录、线程关注、发送者读位置在同一个事务里写完。
+2. 每条消息只进一次提示（`noticed`），bot 推迟不读也不会被反复催。
+3. bot 在一个 conv 开口前，它的模型必须看过这个 conv 里新的、投递给它的消息（`anyway` 除外）。
+4. 看过的记录只在一个模型上下文里有效：新会话、换新、压缩都让它作废。
+5. 同一时刻，一个 bot 在一个群里只有一个座位；leader 群的成员同一时刻只做一件活。
+6. 消息、投递记录、读位置在 SQLite 里；等待、断路器、计时器在内存里。重启不丢消息，只重置调度状态。
+
+## 附录 A：组合速查表
+
+### 没有 leader
+
+发送者是你，X 是某个成员 bot。格子里是唤醒原因；「只记录」是有记录、算未读、不叫醒；「无记录」是这条对 X 不存在。两种唤醒方式结果不同时写成「Everyone 的结果／Only who it's for 的结果」。
 
 | 你怎么写 | 顶层 | 顶层，X 静音 | 线程，X 是关注者 | 线程，X 没参与 | 线程，X 取消了关注 |
 |---|---|---|---|---|---|
@@ -94,331 +449,58 @@
 | 回复别的成员的消息 | `group`／只记录 | 无记录 | `thread`／只记录 | 无记录 | 无记录 |
 | @everyone | `everyone` | 无记录 | `everyone` | `everyone`，并关注 | 无记录，但恢复关注 |
 
-- 发送者换成**另一个 bot** 时：@X 的原因是 `handoff`（交接）；普通消息在顶层是 `group`／只记录，在线程是 `thread`／只记录，因为只有你发的消息才算 open。
-- 「线程，顶层消息是 X 发的」和「关注者」结果一样：顶层作者自动关注自己消息的线程。
-- \* X 在线程里发过言就自动关注了，所以「回复 X、X 却没参与」只在 X 取消关注后才出现，结果是无记录。
-- 回复别的成员，就是在找那个成员，所以对 X 不算「没找任何人」。回复的是你自己的消息或系统消息时，仍然算 `open`。
+- 发送者换成另一个 bot：@X 是 `handoff`；普通消息在顶层是 `group`／只记录，在线程是 `thread`／只记录。
+- 「线程，顶层消息是 X 发的」和「关注者」结果一样。
+- \* X 在线程里发过言就自动关注了，这种组合只在 X 取消关注后出现。
+- 回复的是你自己的消息或系统消息时，仍然算 `open`。
 
 ### 有 leader：成员 X 收什么
 
-leader 本人和你，规则和没有 leader 时一样。被 leader 带的成员只收**派给它的**：消息来自你、leader，或者你、leader、pocket-bots 自己引起的系统消息（`fromLead`），并且是 @ 它、回复它的消息、@everyone，或者给它的任务回执。
+leader 本人和你，规则和没有 leader 时一样。
 
 | 怎么写 | 你或 leader 发，顶层 | 你或 leader 发，线程 | 别的成员发，顶层 | 别的成员发，线程 |
 |---|---|---|---|---|
 | 普通 | 无记录 | 只记录 | 无记录 | 只记录 |
-| @X | `mention`／`handoff`，新的一件活 | `mention`／`handoff`，这件活 | 无记录（发送者收到提示） | 只记录（不把 X 加进来） |
+| @X | `mention`／`handoff`，新活 | `mention`／`handoff`，这件活 | 无记录（发送者收到提示） | 只记录 |
 | 回复 X 的消息 | `reply`，不属于任何活 | `reply`，这件活 | 无记录 | 只记录 |
 | @everyone | `everyone`，不属于任何活 | `everyone`，这件活 | 无记录 | 只记录 |
-| 建任务并指派给 X | `assigned`（回执），不属于任何活 | — | 成员不能指派给别人 | — |
+| 建任务并指派给 X | `assigned`（回执） | — | 成员不能指派给别人 | — |
 
-- 线程那两列的前提是 X 本来就在收件人里（关注者、顶层作者）。别的成员 @X，不会把 X 加进收件人，也不让它关注。
-- 顶层「无记录」的效果和静音一样：X 看不到，也不会因为这些消息被开口前检查拦住。
-- 线程里「只记录」的消息不叫醒 X，但 X 读线程时看得到；它在这个线程开口时，检查会把这些消息也算上。
-- 别的成员 @X 时，发送者的 `group_send` 结果里有一段「Undelivered mentions」，告诉它要找 leader。别的成员回复 X、@everyone 送不到时，没有任何提示。
-- 唤醒方式（Everyone / Only who it's for）对成员不起作用，只看是不是派给它的。
+线程那两列的前提是 X 本来就在收件人里。
 
-### 系统消息
+## 附录 B：系统消息
 
-每种系统消息都声明了分类：**born-read** 照常投递，但对引起它的人不算未读；**skip** 不写任何投递记录，不叫醒谁。
-
-| 什么时候 | 种类 | 发在哪 | 分类 |
+| 什么时候 | `system_subtype` | 发在哪 | 分类 |
 |---|---|---|---|
 | 成员加入、离开 | `group.membership` | 顶层 | born-read |
 | 换 leader（@everyone，并 @ 新 leader） | `group.leader` | 顶层 | born-read |
 | 群的文件夹变了 | `group.folder` | 顶层 | skip |
 | bot 建任务，没有负责人 | `task.created_summary` | 顶层 | born-read |
-| bot 建任务并指派（@ 负责人，静音也收到） | `task.assignment_receipt` | 顶层 | born-read；被 @ 的总算未读，所以指派给自己时也叫醒自己 |
+| bot 建任务并指派（@ 负责人，静音也收到） | `task.assignment_receipt` | 顶层 | born-read |
 | 把消息变成任务 | `task.converted_summary` | 顶层 | born-read |
-| 改状态；你认领、放下、指派 | `task.lifecycle_thread` | 任务自己的线程 | born-read，发给线程的关注者 |
+| 改状态；你认领、放下、指派 | `task.lifecycle_thread` | 任务的线程 | born-read |
 | 删除任务 | `task.deleted_summary` | 顶层 | skip |
 | bot 取消关注线程 | `thread.self_unfollow` | 那个线程 | skip |
 | bot 的一轮失败、停下、暂停 | `seat.turn_failed` | 顶层 | skip |
-| leader 群的成员在一件活上的一轮失败了（@ leader） | `seat.piece_failed` | 这件活的线程 | born-read；叫醒 leader，不算成员的未读 |
+| leader 群成员在一件活上的一轮失败（@ leader） | `seat.piece_failed` | 这件活的线程 | born-read |
 | bot 向你提问（作为它的消息） | `bot.question` | 顶层 | skip |
 
-bot 自己认领、放下、给已有任务指派负责人，都不发系统消息，只是任务标签变了。给已有任务指派负责人不通知被指派的人，要它开工得 @ 它。
+bot 自己认领、放下、给已有任务指派负责人，都不发系统消息。
 
-代码：`shared/group-chat.ts` 的 `SYSTEM_SUBTYPES`。
+## 附录 C：有意的取舍
 
-## 未读
+- **`replying to #N` 不写回复的是谁**：别的 bot 要判断「这是不是在回别人」，得记得 #N 是谁发的。
+- **被拉进线程时，没附带的更早回复也算看过**：线程上下文只附最近 6 条回复，但 boundary 直接推到附带的最后一条，开口前检查不会逼它回头读更早的。
 
-一条消息对一个收件人算未读，当且仅当：
-
-1. 不是它自己发的；
-2. 不是它自己引起的系统消息；
-3. 不是 skip 类的系统消息。
-
-例外：**@ 了它的消息总算未读**，即使是它自己引起的（「📌 @Ada started task #3」会叫醒 Ada）。
-
-代码：`shared/group-chat.ts` 的 `unreadEligible()`。
-
-## 唤醒原因
-
-算未读的记录再判断一次：带唤醒原因就进待读、叫醒 bot；不带就只是记录。按顺序判断，第一条成立的就是原因：
-
-| 顺序 | 条件 | 原因 | 提示里的标记 |
-|---|---|---|---|
-| 1 | 不算未读，或者是它自己发的 | 不进待读 | |
-| 2 | @ 了它 | 你发：`mention`；bot 发：`handoff`；任务指派回执：`assigned`；其他系统消息（换 leader、成员失败的提醒）：`mention` | you were @mentioned；Ada handed you work with an @mention；a task was assigned to you |
-| 3 | 回复的是它的消息 | `reply` | Ada replied to your message |
-| 4 | @everyone | `everyone` | for @everyone |
-| 5 | 在线程里 | Everyone：`thread`；Only who it's for：只有你发的、没找任何人的才是 `thread`，其余不进 | 无 |
-| 6 | 在顶层 | 你发的、没找任何人：`open`；其余：Everyone 下 `group`，Only who it's for 下不进 | 无 |
-
-- 「没找任何人」：没 @ 谁、不是 @everyone，也不是回复某个成员的消息。
-- leader 群的成员：不是派给它的，一律不进待读，不看唤醒方式。
-- 消息里有任务时，提示行末尾多一个「a task」。
-- **@ 和回复没有紧急程度之分**：叫醒方式完全一样（见下一节），区别只在标记文字、能不能穿透（静音、取消关注、leader 群的限制），以及能不能追踪去向。
-
-代码：`shared/group-chat.ts` 的 `deliveryReason()`、`flagText()`。
-
-## 送到座位
-
-### 提示长什么样
-
-每个地方一行，最近有动静的在前，不带正文：
-
-```
-[Group inbox notice: 3 new messages for you to read.
-- top level: 1 new (#16) · latest from the user · the user replied to your message
-- thread #12: 2 new (#14 to #15) · latest from Ada (bot) · you were @mentioned
-]
-They haven't been read. Read them when it suits you: group_read with unread: true …
-```
-
-每条消息只进一次提示，bot 推迟不读也不会被反复催。座位的 prompt 写的是「Read them when it suits your current work: a notice needn't interrupt it」，什么时候读由模型决定。
-
-### 什么时候带正文
-
-| 情况 | 带什么 | 算不算看过 |
-|---|---|---|
-| 被拉进一个座位从没看过的线程：@（`mention`／`handoff`）；leader 群的成员被回复（`reply`）也算 | 顶层消息、这条之前最近 6 条回复、这条本身，以及其中别人的附件 | 线程的 boundary 推到附带的最后一条（更早没附带的也算），顶层消息记为零散看过 |
-| leader 群的成员：这件活的消息 | 全文，最多 8 条（`[For you, in full (already read):]`） | 座位收下即算读过，从待读取走 |
-| 新座位 | 成员名单 + 提示；不是被 leader 带的成员时，再加上分给它、没完成的任务 | 不算 |
-| 座位换新 | 约 8k token 的简报：最近看过的 25 条消息、重新读过的正在用的文件、最近 12 次操作 | 不算，只是参考 |
-| pocket-bots 重启后的补课 | 未读消息本身：最多 8 个地方、每处 5 条、共 20 条，@ 它的在前；放不下就退回一条受限的提示 | 逐条记为看过 |
-| 它的提醒响了 | 提醒的文字，和待读提示一起发 | — |
-| 开口被拦下 | 最新的 3 条（作为工具的返回） | 记为看过 |
-
-### 按座位的状态
-
-| 座位的状态 | 怎么送 |
-|---|---|
-| 还没有座位 | 建座位（经过全局启动队列：同时最多 6 个，间隔半秒），提示作为第一条输入。建好之前又进来的群消息，等第一条输入写进去后，再按「正忙」处理 |
-| 空闲 | 马上开新的一轮，提示是这一轮的输入。进程空闲超过 15 分钟会被关掉，这时先续接同一个会话 |
-| 正忙 | 从第一条进来算起等 3 秒（后来的不会往后推），这期间的合成一条提示，**steer** 进当前这一轮。3 秒内这一轮先结束了，就马上开新的一轮。插不进去，15 秒后再试 |
-| 空闲但收不了（比如正在压缩） | 这一轮结束后再发 |
-| 出错后的等待中 | 不发提示，等完了一起说。等待期间的 @ 在去向里算 LOST |
-| 运行时被停下 | 不发提示，消息攒在待读里。下一条进它待读的消息（谁发的都行）或它的提醒，会让它重新开始，除非断路器拒绝 |
-| leader 群成员，消息属于另一件活 | 正忙：**不 steer**，等这一轮结束。空闲：归档旧会话，开新会话 |
-
-代码：`server/groups.ts` 的 `pump()`。
-
-### steer 什么时候生效
-
-steer 是 runtime 层的能力：把输入插进正在跑的这一轮，不打断它，也不等它结束。群聊里所有发给忙着的座位的提示都用 steer，有没有 leader 都一样。你和 bot 单聊时，输入框默认也是 steer，还可以选 interrupt（打断）或 queue（排队）。
-
-| CLI | 模型什么时候看到 |
-|---|---|
-| Claude Code | 正在执行的工具调用返回之后 |
-| Codex | 下一步 |
-| OpenCode | 正在执行的工具调用返回之后 |
-| Pi | 正在执行的工具调用返回之后 |
-| Grok Build | 正在执行的工具调用返回之后；只报「已排进这一轮」，不报模型什么时候真正收到 |
-
-## 读
-
-只有 bot 自己调工具才会读。群聊工具都从 SQLite 读，群消息全部持久化。
-
-| `group_read` 的参数 | 读什么 | 怎么记看过 |
-|---|---|---|
-| `unread: true` | 所有地方的待读，旧的在前，一次最多 40 条 | 逐条记为零散看过，从待读取走 |
-| `unread: true` + `thread` 或 `top_level` | 这个地方读位置之后的 | 一定接得上：boundary 推到最后一条；已经给它看过的只用一行带过 |
-| 不带参数、`thread`、`before` | 一个地方最新的一页，或某条之前的一页；读线程时附带它的顶层消息 | 接得上就推 boundary，接不上就逐条记 |
-| `around: N` | N 所在的地方，N 前后的几条（自动定位顶层或线程） | 只逐条记 |
-
-- 「接得上」：这一页从这个地方的开头开始，或者这一页最早的一条不晚于读位置。
-- boundary 只往前走。读线程不推进顶层，读线程时顺带显示的顶层消息在顶层记为零散看过。
-- 读位置跟着看过走：从读位置往后，只要模型都看过就前进；碰到第一条没看过、又算它未读的就停。它自己的消息和它没收到的消息不算断点。
-- `group_search` 只给预览（匹配处前 80 字、后 120 字），不算看过。`group_inbox` 只列哪里有未读，什么都不改。
-- bot 读到的每条消息长这样：`#16 · the user · 2026-10-21 10:02Z · in thread #12 (on …) · replying to #5 · @mentions you`，下面是正文、附件、表情和任务卡片。
-
-看过的记录只在一个模型上下文里算数：
-
-| 什么时候 | 看过的记录 | 给它看到过哪 |
-|---|---|---|
-| 新座位；leader 群成员换活 | 全清 | 全清 |
-| 座位换新（带简报）；CLI 压缩了上下文 | 作废 | 保留 |
-| 续接同一个会话（空闲关掉后、重启后） | 保留 | 保留 |
-| 续接 Grok 的会话（它从不报告压缩） | 作废 | 保留 |
-
-作废时读位置和待读不动。作废后它第一次在某个地方开口，会被拦一次，先看最新的几条。「给它看到过哪」只用来决定被拉进线程时附不附线程上下文。
-
-## 开口前检查
-
-适用于 `group_send`、`group_send_draft`（除非 `anyway`），以及 `group_claim` 和 `group_task` 改状态（这两个只做前两步，而且总是查顶层）。对要发往的地方依次看：
-
-1. **待读**：这个地方有投递给它、还没读走的消息。其中有它的模型没看过的 → 拦下，给它看最新 3 条。
-2. **第一次碰这个地方**（没有待读，也没有 boundary）：取这个地方最近 3 条，有没看过的 → 拦下。leader 群的成员在顶层跳过这一步。
-3. **只对发言**：从 boundary 往后数，去掉零散看过的、它自己发的、它自己引起的豁免类系统消息（成员变化、换 leader、建任务、指派回执、把消息变成任务）。顶层数**它的投递记录**，所以静音时、leader 群里没收到的不算；线程数**线程里的全部消息**，从没读过的线程从顶层消息往后数。还有 → 拦下，给它看最新 3 条，并告诉它一共几条。
-
-- 拦下时给它看的都记为看过。它不读就再发，会轮到更早的 3 条；返回文字会建议它用 `group_read` 读完。
-- 检查按地方分开：顶层的新消息不挡它在线程里说话，反过来也一样。
-
-**发顶层前确认一次**：bot 最近一次读的是某个线程（比最近一次读顶层更晚），却用 `group_send` 往顶层发：不发，存成顶层草稿，提示它「你最近读的是线程 #N」。确实要发顶层，就用 `group_send_draft`，这一步不再拦。回复一条顶层消息（`reply_to` 指向它）不用确认：回复本身说明了要发在顶层，比如 leader 读完汇报后回复你的请求告诉你结果。
-
-**草稿**：
-
-- 每个 bot 每个地方一份，10 分钟过期，带一个固定的发送 key（同一份草稿发两次只出一条）和附件路径。
-- 可以改了再发（`group_send`，替换草稿）、原样发（`group_send_draft`，再检查一次）、丢掉（`discard`），或者什么都不发。
-- 同一份内容被拦 3 次以后，提示才告诉它可以用 `anyway: true` 跳过检查。
-
-代码：`server/groups.ts` 的 `preflight()`、`send()`。
-
-## 任务和认领
-
-任务就是一条被标成任务的顶层消息：task #12 就是消息 #12，它的线程是线程 #12。状态 `todo → in_progress → done`，`closed` 表示不做了，最多一个负责人，每次变化版本号加一。
-
-| 动作 | 没有 leader 的 bot | leader | leader 群的成员 | 你 |
-|---|---|---|---|---|
-| 认领 `group_claim` | 先到先得，被拒就是锁 | 同左 | 只能认领派给它的：指派给它的任务，或你、leader @ 它的、还没指派的消息 | 界面上随时接手 |
-| 改状态 | 按允许的转换 | 同左 | 不能改，做完在线程里 @ leader | 任何状态 |
-| 指派 `assign` | 可以，带 `expected_revision` 防覆盖；不通知被指派的人 | 同左 | 不能指派给别的成员 | 可以 |
-| 建任务 `create` | 可以，带负责人时发一条 @ 它的回执 | 同左 | 不能把负责人设成别的成员 | As task |
-| 放下 `unclaim` | 只去掉负责人，状态不变 | 同左 | 同左 | 可以 |
-| 改卡片 `amend` | 任何成员，不过检查，不发系统消息 | 同左 | 同左 | 接口有，界面还没有 |
-| 删除 `delete` | 只有建任务的 bot | 同左 | 同左 | 可以 |
-
-认领和改状态要过开口前检查的前两步（查顶层）。成员的工具列表里没有 `group_task`，但调用照样执行，上面的限制在服务端判断。
-
-代码：`server/groups.ts` 的 `claim()`、`task()`、`notHandedTo()`。
-
-## leader 群
-
-群可以指定一个成员当 leader。leader 计划、派活、检查结果；其他成员只做你和 leader 派给它的活，做完在线程里向 leader 汇报一次。
-
-### 一条消息属于哪件活
-
-| 消息 | 属于 |
-|---|---|
-| 线程里的任何消息 | 这个线程那件活 |
-| 你或 leader 在顶层 @ 这个成员 | **一件新活**，就是这条消息自己。回复了别的消息也一样，`reply_to` 不参与判断 |
-| 顶层的回复（不 @）、@everyone、系统消息、任务回执 | 不属于任何活，跟着当前那件一起送 |
-
-代码：`shared/group-chat.ts` 的 `workOf()`。
-
-### 一次一件活
-
-- 叫醒时先选一件活：当前这件有新消息就选它，否则选最早的那件。其他活的消息留在待读里，先不提示。
-- 选中的不是座位正在做的那件：正忙就等这一轮结束；空闲就归档旧会话，开一个新会话。**不带简报**，看过的记录全清，这件活的消息全文放进第一条输入；回到老活时再附上线程上下文。
-- **换活的依据是「这一轮结束了」，不是任务状态。**成员中途停下（问 leader、一轮失败、模型提前结束）时如果有别的活在排队，就会被切走，切回来时也是新会话。
-- 旧会话归档后不会再续接，系统不记「哪件活对应哪个会话」。
-
-代码：`shared/group-chat.ts` 的 `pieceFor()`。
-
-### 成员的一轮失败了
-
-成员在一件活上的一轮失败（被限流、出错、停下），这件活的线程里记一条 @ leader 的系统消息（`seat.piece_failed`），叫醒 leader。这件活的消息座位已经收下，不会再提示，成员自己不会回来接着做。leader 在线程里 @ 成员，它就续用同一个会话接着做（出错后的等待照常）；也可以把这件活交给别的成员。只有你能处理的错误（没登录、余额、套餐……），提醒里让 leader 去告诉你。
-
-代码：`server/groups.ts` 的 `notePieceFailed()`。
-
-### prompt 和工具
-
-- **leader**：新活是一条新的顶层消息，@ 一个成员，写完整的说明；迭代在同一个线程里 @ 成员；不重复成员已经跑过的检查；核对后自己把任务标成 done；你的请求全部做完后，回复你那条请求告诉你结果（结论出现在你提问的地方，过程留在各件活的线程里）；成员一轮失败时，决定让它接着做还是换人。没有子 agent 那一段。
-- **成员**：只做派给它的活；认领后做完，在线程里 @ leader 汇报一次（结果、改了哪些文件、跑了哪些测试和检查）就停；不发确认和进度（要表示开工就用表情回应）；卡住了在线程里问 leader。
-- 成员只列出 `group_send`、`group_send_draft`、`group_read`、`group_claim`、`group_react`、`group_members`、`search_chats`。工具列表在会话开始时取一次，换 leader 后已经开着的会话还是旧列表。
-- 换 leader 时发一条 @everyone 的系统消息，已经开着的座位靠它知道新规则。leader 离开群，群就没有 leader 了。
-
-### 重启
-
-成员不补课：只把派给它、座位还没收下的消息重新告诉它，还是一次一件活。
-
-## 座位和会话
-
-座位背后是一个 agent CLI 的会话：pocket-bots 启动 CLI 子进程，对话历史由 CLI 自己存在磁盘上，pocket-bots 只记会话 id，续接时交给 CLI resume。pocket-bots 自己的时间线（含工具调用）也存在 SQLite 里，供界面、简报和 `search_chats` 使用。
-
-| 情况 | 会话 |
-|---|---|
-| 第一次被叫醒 | 建座位，新会话 |
-| 空闲，进程还在 | 同一个会话，开新的一轮 |
-| 空闲超过 15 分钟 | 进程被关；下次续接同一个会话（resume） |
-| 空闲 ≥ 1 小时且上下文 ≥ 128k token | 下次叫醒时归档，新会话从简报开始（缓存冷了，续接太贵） |
-| 群或 bot 的工作目录变了 | 空闲时归档，新会话从简报开始，说明换了目录 |
-| 额外文件夹变了 | 不换新：空闲的会话关掉，下次续接时带上新列表；Codex 就地换 |
-| Pi 连续 3 次压缩失败 | 归档，新会话从简报开始 |
-| leader 群成员换活 | 归档，新会话，不带简报 |
-| pocket-bots 重启 | 续接同一个会话；Claude Code 和 Codex 续接时沿用旧 system prompt，prompt 变了就在第一条输入前补发 |
-
-## @ 的去向
-
-**怎么解析**：
-
-- 按成员名字匹配，不分大小写，长名字优先（`@Ann Lee` 优先于 `@Ann`）。
-- 名字以字母或数字结尾时，后面不能紧跟字母或数字（`@Ann` 不匹配 `@Anna`）；后面紧跟中文可以（`@Cody请看`）。
-- `@` 前面紧挨着字母、数字或 `._%+-` 时不算（邮箱地址）。
-- `@everyone` 投给每个没静音的成员。
-- 反引号里的 `@名字`（行内代码、代码块）是字面的：不通知谁，也不报「没有这个名字」；界面上也不高亮。
-
-**发出时**：消息照常发出，`group_send` 的结果在「Sent as #N.」后面列出「Undelivered mentions」，每个没送到的 @ 一行：群外的 bot（只有你能把它加进群，要马上找它就用 `ask_bot`）、没有这个名字（只发一条改正后的 @，不要重发原消息）、leader 群里成员 @ 别的成员（让它告诉 leader）。
-
-**`group_mention_delivery`**：查自己一条消息里每个被 @ 的成员（别人的消息查不了）：
-
-| 结果 | 什么时候 |
-|---|---|
-| delivered | 它的模型读到了 |
-| still in flight | 还在它的待读里：还没提示、提示发了座位没收下，或座位收下了还没读。不要下结论 |
-| LOST · quota | 告诉它的那一轮被限流或额度用完；换人或晚点再试 |
-| LOST · runtime_error | 那一轮因为别的错误失败；换人 |
-| LOST · not_launched | 座位建不起来，或 bot 被归档 |
-| LOST · unclassified | 读之前离开了群 |
-| UNKNOWN | 没有投递记录 |
-
-后面还列出这条消息送到了谁、读了没有，以及当时在群里却没收到的人。回复没有这种追踪。
-
-**你的 @ 是手动启动**：你 @ 一个 bot，会清掉它的停下状态、两个断路器和错误计数，建不起来的座位也从头试。别的 bot 的 @ 只是一次普通叫醒，断路器开着时会被拒绝。只在等待中的 bot，你 @ 它也不会提前叫醒。
-
-## 其他动作
-
-| 动作 | 对投递的影响 |
-|---|---|
-| `group_react` | 表情回应，不发消息，不叫醒任何人。用来代替「收到」「好的」 |
-| `group_mute` | 从下一条消息起静音或取消静音自己，只影响顶层 |
-| `group_follow` | 关注、取消关注（带理由，线程里记一条 skip 类系统消息）、列出关注的线程 |
-| `group_reminder` | 给自己定提醒，挂在一条消息上。到点只叫醒它自己，和待读提示一起发；群里不发消息。重启后补响停机期间错过的 |
-| bot 向你提问 | CLI 的提问工具（如 Claude 的 `AskUserQuestion`）变成群里一张问题卡片，作为这个 bot 的消息；skip 类，不进任何人的待读，答案回到它的座位 |
-| 附件 | `group_send` 的 `files`，最多 6 个，必须有文字；发出时复制到群的文件夹。投递规则不变 |
-| 审批、密钥、登录 | 不进群，留在座位里；群顶上显示「X needs your approval」 |
-
-## 出错
-
-| 情况 | 怎么处理 |
-|---|---|
-| 限流、服务端错、连不上、流断了、用量上限、模型找不到 | 不叫醒它，10 秒起，连着失败就翻倍，最多 5 分钟（加 0–10% 随机量）。期间消息进待读，不发提示；等完了有没提示过的才一起说 |
-| 同样的错（同指纹）连着 3 次 | 停下运行时，群里记一行 |
-| 没登录、余额用完、模型不支持、套餐不含、输入太大 | 马上停下，不等也不计数 |
-| 停下以后 | 待读照样攒着。下一条进它待读的消息（谁发的都行）或它的提醒，让它重新开始 |
-| 反复停下 | 终止性失败的断路器：暂停自动启动 1 小时 → 4 小时 → 24 小时，到期后只试探一次。启动后不到 1 分钟退出连着 3 次：只能手动启动 |
-| 座位建不起来 | 1、2、4、8 秒后各试一次，第 5 次停；之后暂停 5 分钟起翻倍，最长 6 小时 |
-| 启动 2 分钟没任何事件 | 算启动失败，按建不起来处理 |
-| 15 分钟没事件，进程也没了 | 算卡住：结束进程，续接同一个会话，没收下的输入再发一次。不算出错 |
-| leader 群的成员在一件活上失败 | 这件活的线程里记一条 @ leader 的提醒，leader 决定让它接着做（在线程里 @ 它）还是换人 |
-
-一轮失败后不会自动重试：已经提示过的消息不再提示，要等下一条消息叫醒它。这些等待和断路器都只在内存里，重启后从头算。
-
-## 有意的取舍
-
-- **`replying to #N` 不写回复的是谁**：别的 bot 要判断「这是不是在回别人」，得记得 #N 是谁发的；上下文压缩或换新以后就得再去读。
-- **被拉进线程时，没附带的更早回复也算看过**：线程上下文只附最近 6 条回复，但 boundary 直接推到附带的最后一条，开口前检查不会逼它回头读更早的。线程很长时可能漏看前面的关键信息。
-
-## 代码在哪
+## 代码索引
 
 | 文件 | 内容 |
 |---|---|
-| `packages/app/src/shared/group-chat.ts` | 系统消息分类、未读规则、唤醒原因、@ 解析、活的划分、提示和拦下时的文字、座位的 prompt |
-| `packages/app/src/server/group-store.ts` | SQLite：消息和投递记录、读位置、看过的记录、草稿、任务、关注、静音、提醒 |
-| `packages/app/src/server/groups.ts` | 流程：发送、读、开口前检查、提示的投递和时机、leader 规则、出错后的等待和停下、座位换新、重启补课 |
-| `packages/app/src/server/tools/groups.ts` | bot 的群聊工具；标 `led` 的是成员也列出的 |
-| `packages/app/src/server/chat-service.ts` | 会话的打开、续接、steer、空闲关闭、启动队列、卡住和压缩的看护 |
+| `packages/app/src/shared/group-chat.ts` | 纯逻辑：`SYSTEM_SUBTYPES`、`unreadEligible()`、`deliveryReason()`、`workOf()`、`pieceFor()`、`mentionSpans()`、提示和拦下时的文字（`wakeText()`、`heldText()`）、座位的 prompt（`groupPrompt()`） |
+| `packages/app/src/server/group-store.ts` | SQLite：`append()`、`deliver()`、`pending()`、`recordSeen()`、读位置、草稿、任务、关注、提醒 |
+| `packages/app/src/server/groups.ts` | 流程：`postFromUser()`、`send()`、`venue()`、`preflight()`、`read()`、`wake()`、`pump()`、事件处理、leader 规则、出错后的等待和停下、重启补课 |
+| `packages/app/src/server/tools/groups.ts` | bot 的群聊工具；`led: true` 的成员也列出 |
+| `packages/app/src/server/chat-service.ts` | 会话的打开、resume、steer、空闲关闭、启动队列、看护；发出 §14.2 的事件 |
 | `packages/app/src/server/briefing.ts` | 座位换新的简报 |
 | `packages/app/src/server/breakers.ts`、`runtime-errors.ts` | 断路器；错误分类和指纹 |
-| `packages/runtime/src/adapters/*.ts` | 每个 CLI 怎么启动、续接、steer |
+| `packages/runtime/src/adapters/*.ts` | 每个 CLI 怎么启动、resume、steer |
