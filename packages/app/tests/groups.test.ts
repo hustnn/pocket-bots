@@ -360,6 +360,10 @@ describe("group chats", () => {
     expect(await group.groups.sendDraft(alpha, group.id, {})).toBe("Sent as #4.");
     await group.groups.read(alpha, group.id, {});
     expect(await group.groups.send(alpha, group.id, { text: "Also Y." })).toBe("Sent as #5.");
+    // A reply to a top-level message names the top level, so it isn't asked about.
+    await group.groups.read(alpha, group.id, { thread: 1 });
+    expect(await group.groups.send(alpha, group.id, { text: "Outcome: done.", replyTo: 1 })).toBe("Sent as #6.");
+    expect((await group.groups.messages(group.id)).messages.at(-1)).toMatchObject({ seq: 6, thread: null, replyTo: 1 });
   });
 
   it("starts a stale seat over with a briefing of what it had seen, and a notice of what's new", async () => {

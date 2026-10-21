@@ -77,6 +77,14 @@ describe("group mentions", () => {
   it("lets Chinese text follow a name without a space", () => {
     expect(parseMentions("@Writer请写初稿，@小明看一下", members).botIds).toEqual(["w", "x"]);
   });
+
+  it("takes an @word inside code literally", () => {
+    expect(parseMentions("the field is `@Writer`, not @Researcher; `@nobody` either", members)).toEqual({ botIds: ["r"], everyone: false, unknown: [], handles: { r: "@Researcher" }, outside: [] });
+    expect(parseMentions("```\nping @everyone and @Writer\n```\nthen @Writer", members)).toMatchObject({ botIds: ["w"], everyone: false, handles: { w: "@Writer" } });
+    expect(parseMentions("``a ` @Writer``", members).botIds).toEqual([]);
+    // An unmatched backtick is just a character.
+    expect(parseMentions("it's a ` then @Writer", members).botIds).toEqual(["w"]);
+  });
 });
 
 describe("unread and delivery", () => {
@@ -99,8 +107,12 @@ describe("unread and delivery", () => {
     expect(reason({ message: { mentions: ["r"] } })).toBe("group");
     expect(reason({ personal: true, message: { mentions: ["w"] } })).toBe("mention");
     expect(reason({ personal: true, message: { senderId: "r", kind: "bot", mentions: ["w"] } })).toBe("handoff");
-    expect(reason({ personal: true, message: { senderId: "system", kind: "system", mentions: ["w"] } })).toBe("assigned");
+    expect(reason({ personal: true, message: { senderId: "system", kind: "system", mentions: ["w"], subtype: "task.assignment_receipt" } })).toBe("assigned");
+    // A note that names the bot for anything else (the leader's appointment) is an @mention, not a task.
+    expect(reason({ personal: true, message: { senderId: "system", kind: "system", mentions: ["w"], subtype: "group.leader" } })).toBe("mention");
     expect(reason({ repliedTo: true, message: { senderId: "r", kind: "bot" } })).toBe("reply");
+    // The user's reply to another member addresses that member: for the rest it's ordinary group talk.
+    expect(reason({ message: { repliesTo: "r" } })).toBe("group");
     expect(reason({ message: { everyone: true } })).toBe("everyone");
     expect(reason({ conv: 3, message: { senderId: "r", kind: "bot" } })).toBe("thread");
     expect(reason({ message: { senderId: "system", kind: "system" } })).toBe("group");
@@ -116,6 +128,10 @@ describe("unread and delivery", () => {
     expect(reason({ mode: "addressed", conv: 3, message: { senderId: "r", kind: "bot" } })).toBeNull();
     expect(reason({ mode: "addressed", conv: 3 })).toBe("thread");
     expect(reason({ mode: "addressed", message: { senderId: "system", kind: "system" } })).toBeNull();
+    // The user's reply to another member isn't for this bot, at the top level or in a thread.
+    expect(reason({ mode: "addressed", message: { repliesTo: "r" } })).toBeNull();
+    expect(reason({ mode: "addressed", conv: 3, message: { repliesTo: "r" } })).toBeNull();
+    expect(reason({ mode: "addressed", repliedTo: true, message: { repliesTo: "w" } })).toBe("reply");
   });
 });
 
@@ -487,6 +503,10 @@ describe("the group composer's @mentions", () => {
       { text: " and ", mention: false },
       { text: "@Ann Lee", mention: true },
       { text: ", not me@Ann or @WriterX", mention: false },
+    ]);
+    expect(mentionRuns("`@writer` or @writer", members)).toEqual([
+      { text: "`@writer` or ", mention: false },
+      { text: "@writer", mention: true },
     ]);
   });
 });

@@ -77,7 +77,14 @@ describe("delivery records", () => {
     expect(records(store.append(G, user, { text: "anyone?" }).message.seq)[1]).toEqual(["cody", true, "open"]);
     const reply = store.append(G, bot("cody"), { text: "on it", replyTo: 2 });
     expect(records(reply.message.seq)[0]).toEqual(["ada", true, null]);
-    expect(records(store.append(G, user, { text: "thanks", replyTo: 3 }).message.seq)[1]).toEqual(["cody", true, "reply"]);
+    // The user's reply to Cody is for Cody: the others get the record, not a wake.
+    expect(records(store.append(G, user, { text: "thanks", replyTo: 3 }).message.seq).slice(0, 3)).toEqual([
+      ["ada", true, null],
+      ["cody", true, "reply"],
+      ["rex", true, null],
+    ]);
+    // A reply to the user's own message still addresses nobody.
+    expect(records(store.append(G, user, { text: "anyone else?", replyTo: 2 }).message.seq)[1]).toEqual(["cody", true, "open"]);
   });
 
   it("sends a thread's messages to its followers and, for the same send, its top message's author and whoever it @mentions", () => {
