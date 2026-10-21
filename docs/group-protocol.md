@@ -6,12 +6,10 @@
 
 一个 bot 在群里的存在分四层，从外到内：
 
-```
-bot          一份配置（身份、模型、技能……），可以加入多个群
-└─ 座位      这个 bot 在这个群里专用的聊天：每个群一个
-   └─ CLI 会话  座位背后的对话历史，由 agent CLI 存在磁盘上，按 id 续接
-      └─ 进程   会话正在用时才有的 CLI 子进程，空闲 15 分钟就关掉
-```
+- **bot**：一份配置（身份、模型、技能……），可以加入多个群。
+  - **座位**：这个 bot 在这个群里专用的聊天，每个群一个。
+    - **CLI 会话**：座位背后的对话历史，由 agent CLI 存在磁盘上，按 id 续接。
+      - **进程**：会话正在用时才有的 CLI 子进程，空闲 15 分钟就关掉。
 
 | 词 | 代码里 | 是什么 |
 |---|---|---|
@@ -31,13 +29,22 @@ bot          一份配置（身份、模型、技能……），可以加入多�
 ## 2. 全景：三条通道
 
 ```mermaid
-flowchart LR
-  U["用户（Web UI）"] -- "RPC：groupSendRpc 等" --> G["GroupChats<br/>server/groups.ts"]
-  G <--> S[("GroupStore<br/>SQLite")]
-  G -- "提示：开新一轮 / steer / 建座位" --> C["ChatService"]
-  C --> A["座位里的 agent CLI"]
-  A -- "MCP 工具：group_send、group_read……" --> R["Relay"] --> G
-  C -- "事件：input.accepted、turn.ended……" --> G
+flowchart TB
+  U["用户（Web UI）"]
+  A["座位里的 agent CLI"]
+  subgraph app["pocket-bots 进程"]
+    R["Relay（MCP）"]
+    G["GroupChats"]
+    S[("GroupStore（SQLite）")]
+    C["ChatService"]
+  end
+  U -->|"① RPC"| G
+  A -->|"② 群聊工具"| R
+  R --> G
+  G <--> S
+  G -->|"③ 提示"| C
+  C --> A
+  C -.->|"事件"| G
 ```
 
 1. **用户 → 群**：界面调 RPC（发消息是 `groupSendRpc` → `GroupChats.postFromUser()`）。
