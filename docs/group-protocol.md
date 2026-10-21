@@ -416,7 +416,7 @@ if 顶层: open ? open : (Everyone 方式 ? group : 空)
 They haven't been read. Read them when it suits you: group_read with unread: true …
 ```
 
-每个 conv 一行，最近有动静的在前，行末是 §7.3 的标记。座位的 prompt 写的是「Read them when it suits your current work」，什么时候读由模型决定。
+每个 conv 一行，最近有动静的在前；有人特别找它时，行末加一句说明（§7.3）。座位的 prompt 写的是「Read them when it suits your current work」，什么时候读由模型决定。
 
 ### 8.4 什么时候带正文
 
