@@ -8,6 +8,7 @@ pocket-bots 直接驱动五个编码 agent 的 CLI：**Claude Code、Codex、Ope
 - 每个功能怎么用：**[使用指南](docs/USAGE.md)**
 - 怎么实现的（组件、通信、agent、bot、群聊）：[docs/design.md](docs/design.md)
 - 群聊里几个 bot 怎么协作（完整规则和例子）：[docs/group-chats.md](docs/group-chats.md)
+- 群聊的通信协议（给开发者：消息怎么流动、每一步读写什么、各种组合下谁收到）：[docs/group-protocol.md](docs/group-protocol.md)
 
 > **关于 Claude**：Claude 通过 Claude Agent SDK 驱动你本机装好的 `claude`，用的是你自己的 claude.ai 登录。Anthropic 不允许第三方产品向别人提供 claude.ai 登录，所以这部分只供你个人使用。
 
@@ -111,7 +112,7 @@ node packages/runtime/test/live-directories.ts      # Codex 在额外目录里�
 ```
 pocket-bots/
 ├── package.json                 workspaces 根：build / start / dev / typecheck / test 脚本
-├── docs/                        功能、使用指南、设计、群聊规则
+├── docs/                        功能、使用指南、设计、群聊规则和通信协议
 ├── packages/
 │   ├── runtime/                 运行时层（@pocket-bots/runtime）
 │   │   ├── src/
