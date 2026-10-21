@@ -418,6 +418,8 @@ export class GroupStore {
 
     const replied = message.replyTo ? this.messageAt(groupId, message.replyTo) : null;
     const repliedBot = replied?.from.kind === "bot" ? replied.from.botId : null;
+    // A reply to a member addresses that member, so it isn't a message for anyone who's around.
+    const repliedMember = repliedBot && memberIds.has(repliedBot) ? repliedBot : null;
     const muted = new Map(members.map((member) => [member.bot_id, member.muted_from_seq]));
     const subject = { senderId, system: row.sender_kind === "system", subtype: row.system_subtype, causalActor: row.causal_actor_id };
     const woken: string[] = [];
@@ -435,7 +437,15 @@ export class GroupStore {
       const reason =
         id === GROUP_USER_ID || !asWork
           ? null
-          : deliveryReason({ mode: group.wake_mode, receiverId: id, conv, message: { senderId, kind: row.sender_kind, everyone: message.everyone, mentions: message.mentions }, personal, repliedTo: repliedBot === id, eligible });
+          : deliveryReason({
+              mode: group.wake_mode,
+              receiverId: id,
+              conv,
+              message: { senderId, kind: row.sender_kind, everyone: message.everyone, mentions: message.mentions, repliesTo: repliedMember, subtype: row.system_subtype },
+              personal,
+              repliedTo: repliedBot === id,
+              eligible,
+            });
       this.db.run(
         "INSERT OR IGNORE INTO group_inbox (group_id, receiver_id, seq, conv, personal_mention, unread_eligible, wake_reason, reactivated, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         groupId,

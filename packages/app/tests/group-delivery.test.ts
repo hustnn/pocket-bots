@@ -487,6 +487,66 @@ describe("an error only the user can fix", () => {
   });
 });
 
+describe("a failed turn on a led member's piece", () => {
+  /** Alpha leads; it hands Beta a piece. Returns the piece's number. */
+  const handOut = async (group: Awaited<ReturnType<typeof setup>>) => {
+    await group.groups.update(group.id, { leaderId: "alpha" });
+    await pass();
+    await group.endTurn("alpha", "completed");
+    await group.endTurn("beta", "completed");
+    const alpha = await group.bot("alpha");
+    await group.groups.read(alpha, group.id, { unread: true });
+    await group.groups.read(alpha, group.id, { topLevel: true });
+    const piece = Number(/^Sent as #(\d+)\./.exec(await group.groups.send(alpha, group.id, { text: "@Beta fix the login page" }))?.[1]);
+    await pass();
+    expect(group.store.member(group.id, "beta")?.seat_task).toBe(piece);
+    group.busy("beta");
+    return piece;
+  };
+  const threadNote = async (group: Awaited<ReturnType<typeof setup>>, piece: number) => (await group.groups.messages(group.id, { thread: piece })).messages.at(-1)!;
+
+  it("tells the leader in the piece's thread, which wakes it, and not the member", async () => {
+    const group = await setup();
+    const piece = await handOut(group);
+    await group.endTurn("beta", "failed", "429 Too Many Requests");
+    const note = await threadNote(group, piece);
+    expect(note).toMatchObject({ thread: piece, from: { kind: "system" }, mentions: ["alpha"] });
+    expect(note.text).toBe("⚠️ @Alpha: Beta's turn on this piece failed: 429 Too Many Requests. Beta won't pick it up again by itself. @mention Beta here to have it carry on, or hand the piece to another member.");
+    expect(group.store.pending(group.id, "alpha").map((entry) => [entry.message.seq, entry.reason])).toContainEqual([note.seq, "mention"]);
+    expect(group.store.pending(group.id, "beta").map((entry) => entry.message.seq)).not.toContain(note.seq);
+    // The top level still has its record of the failure, for nobody's inbox.
+    expect((await texts(group)).at(-1)).toBe("system: Beta's turn failed: 429 Too Many Requests");
+
+    // The leader's @mention in the thread brings the member back to the piece, in the same session, once its wait is over.
+    const seat = group.seatOf("beta");
+    const sent = group.sentTo("beta").length;
+    const alpha = await group.bot("alpha");
+    await group.groups.read(alpha, group.id, { unread: true, thread: piece });
+    expect(await group.groups.send(alpha, group.id, { text: "@Beta carry on", thread: piece })).toMatch(/^Sent as #\d+ in thread #\d+\.$/);
+    await pass(RUNTIME_ERROR_BACKOFF_BASE_MS);
+    expect(group.seatOf("beta")).toBe(seat);
+    expect(group.sentTo("beta")).toHaveLength(sent + 1);
+  });
+
+  it("says when only the user can fix what stopped the member", async () => {
+    const group = await setup();
+    const piece = await handOut(group);
+    await group.endTurn("beta", "failed", "Not logged in · Please run /login");
+    expect((await threadNote(group, piece)).text).toBe("⚠️ @Alpha: Beta's turn on this piece failed: Not logged in · Please run /login. Its runtime stopped on an error only the user can fix: tell the user, or hand the piece to another member.");
+  });
+
+  it("tells nobody about a failed turn that wasn't on a piece, or a leader's own", async () => {
+    const group = await setup();
+    await group.groups.update(group.id, { leaderId: "alpha" });
+    await pass();
+    // Beta's wake for the leader note belongs to no piece.
+    await group.endTurn("beta", "failed", "429 Too Many Requests");
+    await group.endTurn("alpha", "failed", "503 Service Unavailable");
+    const notes = (await group.groups.messages(group.id)).messages.filter((message) => message.from.kind === "system");
+    expect(notes.map((message) => message.text)).toEqual([expect.stringContaining("made @Alpha the group's leader"), "Beta's turn failed: 429 Too Many Requests", "Alpha's turn failed: 503 Service Unavailable"]);
+  });
+});
+
 describe("the spawn-fail backoff", () => {
   it("tries a seat that couldn't start again after 1, 2, 4 and 8 s, then at its next message under the spawn-error backoff", async () => {
     const group = await setup();

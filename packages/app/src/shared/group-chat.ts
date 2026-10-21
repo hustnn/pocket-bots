@@ -258,16 +258,37 @@ export interface MentionSpan {
 }
 
 /**
+ * The parts of a text that are code, as [start, end) ranges: a run of backticks up to the next run
+ * of the same length, so `inline code` and ``` fenced blocks alike. A run with no match is
+ * literal backticks, as in Markdown.
+ */
+function codeRanges(text: string): [number, number][] {
+  const runs = [...text.matchAll(/`+/g)].map((match) => ({ start: match.index ?? 0, length: match[0].length }));
+  const ranges: [number, number][] = [];
+  for (let i = 0; i < runs.length; i++) {
+    const open = runs[i]!;
+    const close = runs.findIndex((run, j) => j > i && run.length === open.length);
+    if (close < 0) continue;
+    ranges.push([open.start, runs[close]!.start + open.length]);
+    i = close;
+  }
+  return ranges;
+}
+
+/**
  * Where a text @mentions members by name (longest names first, so "@Ann Lee"
  * beats "@Ann") or @everyone, and the @words that name nobody in the group.
+ * An @word inside code is literal, so a name can be written without mentioning it.
  * The web UI highlights with the same spans the server wakes bots by.
  */
 export function mentionSpans(text: string, members: readonly Member[]): { spans: MentionSpan[]; unknown: string[] } {
   const byLength = members.filter((member) => member.name.trim()).sort((a, b) => b.name.trim().length - a.name.trim().length);
+  const code = codeRanges(text);
   const spans: MentionSpan[] = [];
   const unknown: string[] = [];
   for (let at = text.indexOf("@"); at >= 0; at = text.indexOf("@", at + 1)) {
     if (at > 0 && BEFORE_MENTION.test(text[at - 1]!)) continue;
+    if (code.some(([start, end]) => at > start && at < end)) continue;
     const member = byLength.find((candidate) => matchAt(text, at, candidate.name.trim()) > 0);
     if (member) {
       spans.push({ start: at, end: at + 1 + member.name.trim().length, botId: member.id });
@@ -342,6 +363,11 @@ export const SYSTEM_SUBTYPES = {
   /** A bot's failed turn: a note for the record that reaches no inbox. */
   "seat.turn_failed": "skip",
   /**
+   * A member the leader leads failed a turn on its piece of work: told in the piece's thread,
+   * @mentioning the leader, who decides whether the member carries on or someone else does.
+   */
+  "seat.piece_failed": "born-read",
+  /**
    * A bot's question to the user, sent as the bot. It's for the user, who answers
    * it in place, so it reaches no inbox: no bot is woken or held by it, and it's in the group's
    * history for whoever reads there.
@@ -384,7 +410,16 @@ export interface DeliveryInput {
   receiverId: string;
   /** The conversation: 0 for the top level, else the thread's top message. */
   conv: number;
-  message: { senderId: string; kind: GroupSender["kind"]; everyone: boolean; mentions: readonly string[] };
+  message: {
+    senderId: string;
+    kind: GroupSender["kind"];
+    everyone: boolean;
+    mentions: readonly string[];
+    /** The member whose message this one replies to: a reply addresses that member. */
+    repliesTo?: string | null;
+    /** A note's subtype. */
+    subtype?: string | null;
+  };
   /** The receiver is @mentioned (or, for a note, is the task's assignee). */
   personal: boolean;
   /** The receiver wrote the message this one replies to. */
@@ -396,16 +431,21 @@ export interface DeliveryInput {
  * Whether a delivery record also goes into the bot's inbox and wakes it, and why. A muted bot
  * has no record for ordinary top-level messages in the first place (see group-store.ts), so mute isn't
  * decided here. Everyone mode delivers every unread message; addressed mode only what's aimed at
- * the bot, and the user's messages that address nobody. There's no cap on how often bots wake
- * each other.
+ * the bot, and the user's messages that address nobody (no @mention, no @everyone, no reply to a
+ * member). A note that names the bot is a task assigned to it only when it's an assignment
+ * receipt; any other (the leader's appointment) is an @mention. There's no cap on how often bots
+ * wake each other.
  */
 export function deliveryReason(input: DeliveryInput): WakeReason | null {
   const { message } = input;
   if (!input.eligible || (message.kind === "bot" && message.senderId === input.receiverId)) return null;
-  if (input.personal) return message.kind === "system" ? "assigned" : message.kind === "bot" ? "handoff" : "mention";
+  if (input.personal) {
+    if (message.kind === "system") return message.subtype === "task.assignment_receipt" ? "assigned" : "mention";
+    return message.kind === "bot" ? "handoff" : "mention";
+  }
   if (input.repliedTo) return "reply";
   if (message.everyone) return "everyone";
-  const open = message.kind === "user" && message.mentions.length === 0 && !message.everyone;
+  const open = message.kind === "user" && message.mentions.length === 0 && !message.everyone && !message.repliesTo;
   if (input.conv !== 0) return input.mode === "everyone" || open ? "thread" : null;
   if (input.mode === "everyone") return open ? "open" : "group";
   return open ? "open" : null;
@@ -1127,8 +1167,10 @@ export function leadSection(lead: GroupLead, subAgents = false): string {
       "- A new piece of work is a new top-level group_send that @mentions one member and carries the complete brief: the goal, the files or area, the constraints, what done looks like, and what to report back. The member starts every new piece in a fresh session that remembers nothing of earlier pieces and sees nothing of the group but what you send it, so the brief must stand on its own. The member claims your message, which makes it a task (group_task list).",
       "- The member answers in your message's thread. To iterate on that piece, reply in the same thread and @mention the member: the thread is the piece's context, and the member carries on from it. Keep each piece in its own thread: no new top-level message for a follow-up, and no new piece in an old thread.",
       "- Pieces that don't depend on each other can go to different members at once; keep dependent steps in order. A member works on one piece at a time; another piece for it waits until it's done.",
-      "- When a member reports back, check the result before you build on it or pass it on; checks the member reports it already ran don't need repeating. If it isn't right yet, say what to change in its thread; when it is, set its task to done with group_task, then hand out the next piece or tell the user the outcome.",
+      "- When a member reports back, check the result before you build on it or pass it on; checks the member reports it already ran don't need repeating. If it isn't right yet, say what to change in its thread; when it is, set its task to done with group_task, then hand out the next piece.",
+      "- When the user's request is done, tell the user the outcome as a reply to their request (group_send with reply_to: its number), so it shows where they asked rather than in a thread they may not open: what was done, what was checked and anything left open. The plan, hand-offs and reports stay in the pieces' threads.",
       "- When a member is stuck or asks you something, answer in its thread promptly: you're the one who unblocks them. If only the user can decide, ask the user.",
+      "- When a member's turn on a piece fails, pocket-bots tells you in the piece's thread; the member won't pick it up again by itself. @mention the member there to have it carry on, or hand the piece to another member.",
       "- The members you hand work to:",
       ...(lead.members.length ? lead.members.map((member) => `  - ${member.name}${member.about ? `: ${member.about}` : ""}`) : ["  - (none yet)"]),
     ].join("\n");

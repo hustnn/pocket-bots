@@ -83,7 +83,7 @@ import {
   type Recurrence,
   type ReminderStatus,
 } from "./reminders";
-import { isSeen, type AppendInput, type GroupRow, type GroupStore, type TaskAmendment } from "./group-store";
+import { isSeen, type AppendInput, type GroupRow, type GroupStore, type MemberRow, type TaskAmendment } from "./group-store";
 import {
   claimAutomaticStart,
   freshBreaker,
@@ -624,7 +624,7 @@ export class GroupChats {
   /**
    * group_send: posts at the top level or in a thread, after the check (see preflight). A reply
    * to a message in a thread goes in that thread. A top-level post right after reading a thread
-   * is asked about once.
+   * is asked about once, unless it replies to a top-level message.
    */
   async send(bot: Bot, groupId: string, input: { text: string; replyTo?: number | null; thread?: number | null; idempotencyKey?: string | null; files?: readonly string[] }): Promise<string> {
     this.requireMember(groupId, bot.id);
@@ -635,7 +635,8 @@ export class GroupChats {
     const replyTo = input.replyTo ?? null;
     const conv = this.venue(groupId, input.thread ?? null, replyTo) ?? 0;
     const members = await this.liveMembers(groupId);
-    if (conv === 0) {
+    // A reply to a top-level message names the top level itself, so only a bare post is asked about.
+    if (conv === 0 && !replyTo) {
       const thread = this.store.latestReadThread(groupId, bot.id);
       if (thread) {
         this.store.saveDraft(groupId, bot.id, 0, { text, replyTo, held: false, files });
@@ -1450,6 +1451,7 @@ export class GroupChats {
         member.bot_id,
       );
       if (noteTerminalFailure(this.breaker(key), { kind: "fingerprint_fence", fingerprint: policy.fingerprint }, now)) this.notePaused(member.group_id, member.bot_id, name);
+      await this.notePieceFailed(member, name, error, "fenced");
       return;
     }
     if (policy.sticky) {
@@ -1463,6 +1465,7 @@ export class GroupChats {
     if (!last || last.error !== error || now - last.at >= FAILURE_NOTE_MS) {
       this.failures.set(key, { error, at: now });
       this.note(member.group_id, `${name}'s turn failed${error ? `: ${error}` : "."}`, "seat.turn_failed", member.bot_id);
+      await this.notePieceFailed(member, name, error, policy.sticky ? "needs_user" : "failed");
     }
     if (!policy.sticky) return;
     if (policy.actionRequired) {
@@ -1472,6 +1475,31 @@ export class GroupChats {
     } else if (noteTerminalFailure(this.breaker(key), { kind: "sticky_runtime_error", fingerprint: policy.fingerprint }, now)) {
       this.notePaused(member.group_id, member.bot_id, name);
     }
+  }
+
+  /**
+   * A member the leader leads failed a turn on its piece of work: its leader is told in the
+   * piece's thread. Nothing else would tell anyone: the piece's messages were taken in, so no
+   * notice brings the member back to it, and the failure notes reach no inbox. The leader decides
+   * whether the member carries on (an @mention there) or another member takes the piece.
+   */
+  private async notePieceFailed(member: MemberRow, name: string, error: string, how: "failed" | "fenced" | "needs_user"): Promise<void> {
+    const leaderId = this.store.leader(member.group_id);
+    const piece = member.seat_task;
+    if (!leaderId || leaderId === member.bot_id || piece === null) return;
+    const leader = (await this.allBots()).get(leaderId)?.name ?? "the leader";
+    const next =
+      how === "needs_user"
+        ? `Its runtime stopped on an error only the user can fix: tell the user, or hand the piece to another member.`
+        : `${name} won't pick it up again by itself.${how === "fenced" ? ` Its runtime stopped after the same error repeated; an @mention starts it again unless its automatic wakes are paused, which only the user can lift.` : ""} @mention ${name} here to have it carry on, or hand the piece to another member.`;
+    this.note(
+      member.group_id,
+      `⚠️ @${leader}: ${name}'s turn on this piece failed${error ? `: ${error.replace(/[.\s]+$/, "")}` : ""}. ${next}`,
+      "seat.piece_failed",
+      member.bot_id,
+      piece,
+      [leaderId],
+    );
   }
 
   /**
