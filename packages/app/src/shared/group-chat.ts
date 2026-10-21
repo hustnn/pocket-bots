@@ -1170,7 +1170,7 @@ export function leadSection(lead: GroupLead, subAgents = false): string {
       "- When a member reports back, check the result before you build on it or pass it on; checks the member reports it already ran don't need repeating. If it isn't right yet, say what to change in its thread; when it is, set its task to done with group_task, then hand out the next piece.",
       "- When the user's request is done, tell the user the outcome as a reply to their request (group_send with reply_to: its number), so it shows where they asked rather than in a thread they may not open: what was done, what was checked and anything left open. The plan, hand-offs and reports stay in the pieces' threads.",
       "- When a member is stuck or asks you something, answer in its thread promptly: you're the one who unblocks them. If only the user can decide, ask the user.",
-      "- When a member's turn on a piece fails, pocket-bots tells you in the piece's thread; the member won't pick it up again by itself. @mention the member there to have it carry on, or hand the piece to another member.",
+      "- When a member's turn on a piece fails, or its session for the piece can't start, pocket-bots tells you in the piece's thread; the member won't pick it up again by itself. @mention the member there to have it carry on or retry, or hand the piece to another member.",
       "- The members you hand work to:",
       ...(lead.members.length ? lead.members.map((member) => `  - ${member.name}${member.about ? `: ${member.about}` : ""}`) : ["  - (none yet)"]),
     ].join("\n");

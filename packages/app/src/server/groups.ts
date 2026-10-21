@@ -213,6 +213,11 @@ function safeName(name: string): string {
   return name.replace(/[^A-Za-z0-9._ -]+/g, "_").replace(/^\.+/, "").slice(0, 120) || "file";
 }
 
+/** An error's text after a colon, without the period it may end on (the sentence adds its own). */
+function said(error: string): string {
+  return error ? `: ${error.replace(/[.\s]+$/, "")}` : "";
+}
+
 /** How a question settles: the user answered or dismissed it, or it stopped waiting without them. */
 function settledQuestion(question: GroupQuestion, decision: ApprovalDecision, reason: "answered" | "ended" | "closed"): Pick<GroupQuestion, "status" | "answers"> {
   if (reason !== "answered") return { status: "closed", answers: null };
@@ -1465,8 +1470,10 @@ export class GroupChats {
     if (!last || last.error !== error || now - last.at >= FAILURE_NOTE_MS) {
       this.failures.set(key, { error, at: now });
       this.note(member.group_id, `${name}'s turn failed${error ? `: ${error}` : "."}`, "seat.turn_failed", member.bot_id);
-      await this.notePieceFailed(member, name, error, policy.sticky ? "needs_user" : "failed");
     }
+    // Outside that once-per-ten-minutes rule: a member that fails the same way after its leader
+    // had it carry on is stuck again, and only the leader can act on it.
+    await this.notePieceFailed(member, name, error, policy.sticky ? "needs_user" : "failed");
     if (!policy.sticky) return;
     if (policy.actionRequired) {
       const loop = this.crashLoop(key);
@@ -1477,29 +1484,30 @@ export class GroupChats {
     }
   }
 
-  /**
-   * A member the leader leads failed a turn on its piece of work: its leader is told in the
-   * piece's thread. Nothing else would tell anyone: the piece's messages were taken in, so no
-   * notice brings the member back to it, and the failure notes reach no inbox. The leader decides
-   * whether the member carries on (an @mention there) or another member takes the piece.
-   */
+  /** A member the leader leads failed a turn on its piece of work: its leader is told (notePieceStuck). */
   private async notePieceFailed(member: MemberRow, name: string, error: string, how: "failed" | "fenced" | "needs_user"): Promise<void> {
-    const leaderId = this.store.leader(member.group_id);
-    const piece = member.seat_task;
-    if (!leaderId || leaderId === member.bot_id || piece === null) return;
-    const leader = (await this.allBots()).get(leaderId)?.name ?? "the leader";
     const next =
       how === "needs_user"
         ? `Its runtime stopped on an error only the user can fix: tell the user, or hand the piece to another member.`
         : `${name} won't pick it up again by itself.${how === "fenced" ? ` Its runtime stopped after the same error repeated; an @mention starts it again unless its automatic wakes are paused, which only the user can lift.` : ""} @mention ${name} here to have it carry on, or hand the piece to another member.`;
-    this.note(
-      member.group_id,
-      `⚠️ @${leader}: ${name}'s turn on this piece failed${error ? `: ${error.replace(/[.\s]+$/, "")}` : ""}. ${next}`,
-      "seat.piece_failed",
-      member.bot_id,
-      piece,
-      [leaderId],
-    );
+    await this.notePieceStuck(member.group_id, member.bot_id, member.seat_task, `${name}'s turn on this piece failed${said(error)}. ${next}`);
+  }
+
+  /**
+   * A member the leader leads is stuck on a piece of work (a failed turn, or a seat that stopped
+   * trying to start): its leader is told in the piece's thread. Nothing else would tell anyone: the
+   * piece's messages were taken in or are waiting on a seat that won't start, and the group's
+   * failure notes reach no inbox. The leader decides whether the member carries on (an @mention
+   * there) or another member takes the piece. Told once until someone speaks in the thread, so a
+   * member that keeps failing with nobody answering doesn't fill it.
+   */
+  private async notePieceStuck(groupId: string, botId: string, piece: number | null, text: string): Promise<void> {
+    const leaderId = this.store.leader(groupId);
+    if (!leaderId || leaderId === botId || piece === null) return;
+    const tail = this.store.threadTail(groupId, piece);
+    if (tail?.subtype === "seat.piece_failed" && tail.causalActor === botId) return;
+    const leader = (await this.allBots()).get(leaderId)?.name ?? "the leader";
+    this.note(groupId, `⚠️ @${leader}: ${text}`, "seat.piece_failed", botId, piece, [leaderId]);
   }
 
   /**
@@ -1535,7 +1543,7 @@ export class GroupChats {
     const told = this.store.retellUntaken(member.group_id, member.bot_id);
     // The backoff is in place before anything else looks at the seat; the note follows.
     const noted = this.startFailed(member.group_id, member.bot_id, event.error, told);
-    void this.host.bot(member.bot_id).then((bot) => this.noteStartFailure(member.group_id, member.bot_id, bot?.name ?? "A bot", event.error, noted, false));
+    void this.host.bot(member.bot_id).then((bot) => this.noteStartFailure(member.group_id, member.bot_id, bot?.name ?? "A bot", event.error, noted, false, member.seat_task));
     this.changed(member.group_id);
   }
 
@@ -1790,14 +1798,24 @@ export class GroupChats {
   }
 
   /** What startFailed did, in the group: a pause once, a seat's first failure and its last. */
-  private noteStartFailure(groupId: string, botId: string, name: string, detail: string, outcome: ReturnType<GroupChats["startFailed"]>, joining: boolean): void {
+  private noteStartFailure(groupId: string, botId: string, name: string, detail: string, outcome: ReturnType<GroupChats["startFailed"]>, joining: boolean, piece: number | null): void {
     const verb = joining ? "couldn't join" : "couldn't start";
-    if (outcome.paused) return this.notePaused(groupId, botId, name, `${name} ${verb}: ${detail}`);
+    // Once it stops trying by itself, a member the leader leads is stuck on its piece: the leader hears it there.
+    const stuck = (tries: string, next: string) => void this.notePieceStuck(groupId, botId, piece, `${name} couldn't start on this piece${tries}${said(detail)}. ${next}`);
+    if (outcome.paused) {
+      this.notePaused(groupId, botId, name, `${name} ${verb}: ${detail}`);
+      stuck("", "Its automatic starts are paused, and only the user can start it now: tell the user, or hand the piece to another member.");
+      return;
+    }
     const { attempts, stopped, blocked } = outcome;
     const tries = attempts > 1 ? ` after ${attempts} tries` : "";
-    if (blocked) this.note(groupId, `${name} ${verb}${tries}: ${detail} Fix that, then @mention ${name} to try again.`, "seat.turn_failed", botId);
-    else if (stopped) this.note(groupId, `${name} ${verb}${tries}: ${detail} Its next message or reminder tries again; @mention ${name} to try now.`, "seat.turn_failed", botId);
-    else if (attempts === 1) this.note(groupId, `${name} ${verb}: ${detail}`, "seat.turn_failed", botId);
+    if (blocked) {
+      this.note(groupId, `${name} ${verb}${tries}: ${detail} Fix that, then @mention ${name} to try again.`, "seat.turn_failed", botId);
+      stuck(tries, "Only the user can fix that and start it again: tell the user, or hand the piece to another member.");
+    } else if (stopped) {
+      this.note(groupId, `${name} ${verb}${tries}: ${detail} Its next message or reminder tries again; @mention ${name} to try now.`, "seat.turn_failed", botId);
+      stuck(tries, `It won't try again by itself: @mention ${name} here to retry, or hand the piece to another member.`);
+    } else if (attempts === 1) this.note(groupId, `${name} ${verb}: ${detail}`, "seat.turn_failed", botId);
   }
 
   /**
@@ -2104,7 +2122,7 @@ export class GroupChats {
       if (!seat) {
         // A new seat that couldn't start. (A seat that exists and couldn't start is told by
         // ChatService's start.failed: onStartFailed.)
-        this.noteStartFailure(groupId, botId, bot.name, detail, this.startFailed(groupId, botId, detail, told), true);
+        this.noteStartFailure(groupId, botId, bot.name, detail, this.startFailed(groupId, botId, detail, told), true, piece?.work ?? null);
       } else if (busy) {
         // A busy seat that didn't take its notice is tried again;
         // an idle one that couldn't take it now (compacting, say) gets it when its turn ends.
