@@ -1,6 +1,6 @@
 # AGENTS.md
 
-给 coding agent 看的代码库说明。面向用户的介绍见 [README.md](README.md)，完整设计见 [docs/design.md](docs/design.md)。
+给 coding agent 看的代码库说明。面向用户的介绍见 [README.md](README.md)（英文，默认）和 [README.zh-CN.md](README.zh-CN.md)（中文），完整设计见 [docs/design.md](docs/design.md)。
 
 ## 项目是什么
 
@@ -112,4 +112,4 @@ gh pr create --base main
 ## 测试和文档
 
 - 新功能、修 bug 都要补测试：纯逻辑测 `shared/` 的函数；涉及会话、群聊、队列的用 fake runtime 写端到端测试（参考 `tests/chat-service.test.ts`、`tests/groups.test.ts`）。测试里不要调真的模型。
-- 用户能看到的行为变了，同一个 PR 里更新 `docs/`：功能清单 `features.md`，用法 `USAGE.md`，实现 `design.md`，群聊规则 `group-chats.md`，群聊通信协议 `group-protocol.md`。文档用中文。
+- 用户能看到的行为变了，同一个 PR 里更新 `docs/`：功能清单 `features.md`，用法 `USAGE.md`，实现 `design.md`，群聊规则 `group-chats.md`，群聊通信协议 `group-protocol.md`。文档用中文。README 有英文（`README.md`）和中文（`README.zh-CN.md`）两份，改一份时同步改另一份。

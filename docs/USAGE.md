@@ -2,7 +2,7 @@
 
 这份指南按实际使用顺序把每个功能走一遍。示例里的 agent 大多是 Claude Code（`claude`），其他四个（Codex、OpenCode、Pi、Grok Build）用法一样。每个 CLI 用它自己登录的账号和订阅额度，pocket-bots 不碰任何 API key。
 
-> 安装、配置文件和数据目录见 [README](../README.md)。这里只讲怎么用。
+> 安装、配置文件和数据目录见 [README](../README.zh-CN.md)。这里只讲怎么用。
 
 ## 目录
 
