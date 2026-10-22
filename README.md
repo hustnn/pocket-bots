@@ -39,6 +39,30 @@ Where it is today:
 | Combining agents | Each bot picks one agent; in a group chat, bots on different agents can split the work |
 | Persistence | Chats, timelines and group messages are written to SQLite before they are shown; after a restart, sessions resume from their saved session ids. A turn that was running when interrupted is not re-run automatically |
 
+## Terms
+
+Words this README and the docs use often:
+
+| Term | Meaning |
+|---|---|
+| **Agent CLI** | A coding agent's command-line program installed on your machine: `claude`, `codex`, `opencode`, `pi`, `grok`. pocket-bots starts it as a child process and uses it as the bot's "brain" |
+| **Harness** | The layer around a model that runs the agent loop: the prompt, the tools, approvals and context management. Each agent CLI is one harness |
+| **Session / turn** | A session is one ongoing conversation with an agent CLI and has an id it can be resumed from. A turn is one round inside it: you send a message, the agent works (possibly calling many tools) until it replies |
+| **Steer** | Sending a new message into a turn that is still running, so the agent sees it right away instead of after the turn ends |
+| **Interrupt / resume** | Interrupt stops the running turn. Resume reopens a closed session from its saved id, keeping the earlier conversation |
+| **Approval** | The agent asks before an action such as running a command or editing a file. pocket-bots answers: it allows some automatically and shows a card in the chat for the rest |
+| **Timeline item** | One entry in a chat as pocket-bots stores and shows it: a user message, a reply, thinking, or a tool call with its details. All five CLIs' output is turned into this one format |
+| **MCP** | [Model Context Protocol](https://modelcontextprotocol.io): a standard way to give an agent extra tools. A bot's MCP servers, connected apps and pocket-bots' own tools all reach the agent through MCP |
+| **Relay** | A small HTTP server inside pocket-bots that listens only on 127.0.0.1 (port 6881 by default). Agents call pocket-bots' tools through it, and other local programs trigger webhooks on it |
+| **RPC** | Remote procedure call: calling a function that runs in another process. Here, every browser action is a `POST /api/rpc/<name>` to the backend |
+| **JSON-RPC / ACP** | Protocols that some CLIs speak over stdin/stdout. JSON-RPC is a generic request/response format in JSON (used by Codex and Pi); ACP, the [Agent Client Protocol](https://agentclientprotocol.com), is a JSON-RPC protocol made for driving coding agents (used by Grok Build) |
+| **SSE** | Server-Sent Events: a long-lived HTTP response through which the server keeps pushing short messages to the browser. pocket-bots uses it (`GET /api/events`) to tell the page "something changed" so it reloads that part |
+| **Routine** | A task a bot runs on its own, on a schedule or when a webhook arrives. Each run opens a new chat |
+| **Webhook** | A URL that another program POSTs to in order to start a routine |
+| **Seat** | A bot's place in a group chat. It is an ordinary chat between pocket-bots and that bot; the bot reads and writes the group through group chat tools |
+| **Composio** | A third-party service that connects apps such as Gmail and Slack. pocket-bots uses your Composio key to give bots access to those apps |
+| **Contract test** | One shared test suite that every agent adapter must pass (tools, approvals, steering, interrupting, resuming), so the five CLIs behave the same to the rest of pocket-bots |
+
 ## The five agents
 
 | Agent | How it is driven | Steering into a running turn | Bot tools | Approvals |
@@ -109,24 +133,29 @@ The data directory defaults to `~/.pocket-bots` and can be changed with the `POC
 pocket-bots is one Node process on your computer that sits between the browser and the agent CLIs: you act on the page, it drives the CLIs to do the work, then stores the CLIs' output for you to see. Each arrow in the diagram is numbered and explained below.
 
 ```mermaid
+%%{init: {"theme": "default"}}%%
 flowchart TB
-  W["Browser<br/>React Web UI"]
-  subgraph P["pocket-bots process"]
-    S["Backend<br/>ChatService, GroupChats, Scheduler…"]
-    DB[("SQLite<br/>chats, timelines, group chats")]
-    RT["packages/runtime<br/>one adapter per CLI"]
-    R["Relay (127.0.0.1)<br/>bot tools · app proxy · webhooks"]
-  end
-  A["agent CLI<br/>claude · codex · opencode · pi · grok"]
+  subgraph BG[" "]
+    direction TB
+    W["Browser<br/>React Web UI"]
+    subgraph P["pocket-bots process"]
+      S["Backend<br/>ChatService, GroupChats, Scheduler…"]
+      DB[("SQLite<br/>chats, timelines, group chats")]
+      RT["packages/runtime<br/>one adapter per CLI"]
+      R["Relay (127.0.0.1)<br/>bot tools · app proxy · webhooks"]
+    end
+    A["agent CLI<br/>claude · codex · opencode · pi · grok"]
 
-  W -->|"① RPC"| S
-  S -->|"② open session, send message"| RT
-  RT <-->|"③ the CLI's own protocol"| A
-  RT -->|"④ timeline items, approval requests"| S
-  S -->|"⑤ write to the database first"| DB
-  S -.->|"⑥ SSE: what changed"| W
-  A -->|"⑦ call bot tools (MCP)"| R
-  R -->|"⑧ hand off to the right component"| S
+    W -->|"① RPC"| S
+    S -->|"② open session, send message"| RT
+    RT <-->|"③ the CLI's own protocol"| A
+    RT -->|"④ timeline items, approval requests"| S
+    S -->|"⑤ write to the database first"| DB
+    S -.->|"⑥ SSE: what changed"| W
+    A -->|"⑦ call bot tools (MCP)"| R
+    R -->|"⑧ hand off to the right component"| S
+  end
+  style BG fill:#ffffff,stroke:#ffffff
 ```
 
 The boxes:
@@ -144,7 +173,7 @@ When you send a message (①–⑥):
 - **③ Runtime ↔ CLI**: each adapter sends messages and receives output using that CLI's own protocol; see the "five agents" table above.
 - **④ Runtime → backend**: the output of all five CLIs is turned into the same kind of timeline item: user messages, replies, thinking, tool calls and their details. When a CLI asks for approval, tools that need none (pocket-bots' own read, proposal and group chat tools, and MCP tools you ticked under **Access**) are allowed right in the adapter; the rest go to the backend: anything matching the command allowlist or a trusted folder is allowed, and the remainder shows a card in the chat, whose answer comes back through ①. Which actions need approval is decided by the CLI's own approval mode; pocket-bots only decides how to answer.
 - **⑤ Backend → SQLite**: every item is written to SQLite before the page is notified. The process can be killed at any time, and everything you saw is still there after a restart.
-- **⑥ Backend → browser**: SSE only tells the page "what changed" without carrying data (hence the dashed line); the page then fetches the new content through ①.
+- **⑥ Backend → browser**: SSE (Server-Sent Events, a connection the server keeps open to push messages; see [Terms](#terms)) only tells the page "what changed" without carrying data (hence the dashed line); the page then fetches the new content through ①.
 
 When an agent calls back into pocket-bots (⑦–⑧):
 

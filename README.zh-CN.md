@@ -37,6 +37,30 @@ pocket-bots 最终想做成这样的个人 bot：
 | 组合多种 agent | 每个 bot 选一个 agent；群聊里用不同 agent 的 bot 可以分工 |
 | 持久化 | 聊天、时间线、群聊消息先写 SQLite 再展示；重启后用存下的会话 id 续接。正在跑的一轮被打断后不会自动重跑 |
 
+## 名词解释
+
+README 和文档里常用的词：
+
+| 名词 | 意思 |
+|---|---|
+| **agent CLI** | 本机装好的编码 agent 命令行程序：`claude`、`codex`、`opencode`、`pi`、`grok`。pocket-bots 把它当子进程启动，用作 bot 的「大脑」 |
+| **harness** | 包在模型外面、负责跑 agent 循环的那一层：提示词、工具、审批、上下文管理。每个 agent CLI 就是一个 harness |
+| **会话 / 一轮** | 会话是和某个 agent CLI 的一段持续对话，有一个能拿来续接的 id。一轮是其中的一来一回：你发一条消息，agent 干活（中间可能调很多工具），直到它回复 |
+| **插话（steer）** | 往还在跑的一轮里再发一条消息，agent 马上就能看到，不用等这一轮结束 |
+| **打断 / 续接** | 打断是停掉正在跑的一轮。续接是用存下的 id 重新打开已经关掉的会话，之前的对话都还在 |
+| **审批** | agent 在执行命令、改文件这类操作前先问一声。由 pocket-bots 回答：有些自动放行，其余在聊天里弹卡片让你点 |
+| **时间线条目** | pocket-bots 存下并展示的聊天里的一条：用户消息、回复、思考，或者一次工具调用及其详情。五个 CLI 的输出都被统一成这一种格式 |
+| **MCP** | [Model Context Protocol](https://modelcontextprotocol.io)：给 agent 加工具的标准协议。bot 配的 MCP 服务器、连接的应用、pocket-bots 自己的工具，都通过 MCP 交给 agent |
+| **Relay** | pocket-bots 里一个只监听 127.0.0.1 的小 HTTP 服务（默认端口 6881）。agent 经它调用 pocket-bots 的工具，本机别的程序经它触发 webhook |
+| **RPC** | 远程过程调用：调用一个在别的进程里执行的函数。这里指浏览器的每个操作都是一次发给后端的 `POST /api/rpc/<name>` |
+| **JSON-RPC / ACP** | 一些 CLI 在标准输入输出上用的协议。JSON-RPC 是通用的 JSON 请求/响应格式（Codex、Pi 用）；ACP 即 [Agent Client Protocol](https://agentclientprotocol.com)，是专为驱动编码 agent 设计的、基于 JSON-RPC 的协议（Grok Build 用） |
+| **SSE** | Server-Sent Events（服务器推送事件）：一个一直不断开的 HTTP 响应，服务器通过它不停地给浏览器推短消息。pocket-bots 用它（`GET /api/events`）告诉页面「什么变了」，页面再重新拉那一块 |
+| **定时任务（routine）** | bot 自己跑的任务，按计划或收到 webhook 时触发。每次运行开一个新聊天 |
+| **webhook** | 一个 URL，别的程序往它 POST 就能启动一个定时任务 |
+| **座位** | bot 在群聊里的位置。它就是 pocket-bots 和这个 bot 之间的一个普通聊天，bot 通过群聊工具读写群 |
+| **Composio** | 连接 Gmail、Slack 等应用的第三方服务。pocket-bots 用你的 Composio key 让 bot 能用这些应用 |
+| **合同测试** | 每个 agent 适配器都必须通过的同一套测试（工具、审批、插话、打断、续接），保证五个 CLI 对 pocket-bots 其他部分表现一致 |
+
 ## 五个 agent
 
 | Agent | 怎么驱动 | 插话进正在跑的一轮 | bot 工具 | 审批 |
@@ -107,24 +131,29 @@ npm run service -- install     # 还有 status、uninstall、print
 pocket-bots 是你电脑上的一个 Node 进程，夹在浏览器和 agent CLI 中间：你在页面上操作，它驱动 CLI 干活，再把 CLI 的输出存下来给你看。图里每个箭头有编号，下面按编号解释。
 
 ```mermaid
+%%{init: {"theme": "default"}}%%
 flowchart TB
-  W["浏览器<br/>React Web UI"]
-  subgraph P["pocket-bots 进程"]
-    S["后端<br/>ChatService、GroupChats、Scheduler…"]
-    DB[("SQLite<br/>聊天、时间线、群聊")]
-    RT["packages/runtime<br/>每个 CLI 一个适配器"]
-    R["Relay（127.0.0.1）<br/>bot 工具 · 应用代理 · webhook"]
-  end
-  A["agent CLI<br/>claude · codex · opencode · pi · grok"]
+  subgraph BG[" "]
+    direction TB
+    W["浏览器<br/>React Web UI"]
+    subgraph P["pocket-bots 进程"]
+      S["后端<br/>ChatService、GroupChats、Scheduler…"]
+      DB[("SQLite<br/>聊天、时间线、群聊")]
+      RT["packages/runtime<br/>每个 CLI 一个适配器"]
+      R["Relay（127.0.0.1）<br/>bot 工具 · 应用代理 · webhook"]
+    end
+    A["agent CLI<br/>claude · codex · opencode · pi · grok"]
 
-  W -->|"① RPC"| S
-  S -->|"② 开会话、发消息"| RT
-  RT <-->|"③ CLI 自己的协议"| A
-  RT -->|"④ 时间线条目、审批请求"| S
-  S -->|"⑤ 先写库"| DB
-  S -.->|"⑥ SSE：什么变了"| W
-  A -->|"⑦ 调 bot 工具（MCP）"| R
-  R -->|"⑧ 交给对应组件"| S
+    W -->|"① RPC"| S
+    S -->|"② 开会话、发消息"| RT
+    RT <-->|"③ CLI 自己的协议"| A
+    RT -->|"④ 时间线条目、审批请求"| S
+    S -->|"⑤ 先写库"| DB
+    S -.->|"⑥ SSE：什么变了"| W
+    A -->|"⑦ 调 bot 工具（MCP）"| R
+    R -->|"⑧ 交给对应组件"| S
+  end
+  style BG fill:#ffffff,stroke:#ffffff
 ```
 
 图里的方框：
@@ -142,7 +171,7 @@ flowchart TB
 - **③ runtime ↔ CLI**：每个适配器用这个 CLI 自己的协议发消息、收输出，见上面「五个 agent」的表。
 - **④ runtime → 后端**：五个 CLI 的输出被统一成同一种时间线条目：用户消息、回复、思考、工具调用及其详情。CLI 要审批时，免审批的工具（pocket-bots 自己的读取、提议和群聊工具，你在 **Access** 里勾上的 MCP 工具）在适配器里直接放行；其余的交给后端：命中命令白名单或信任的目录就放行，剩下的在聊天里弹卡片，你点了之后经 ① 回来。哪些操作需要审批由 CLI 自己的审批模式决定，pocket-bots 只决定怎么回答。
 - **⑤ 后端 → SQLite**：每个条目先写进 SQLite，再通知页面。进程随时被杀，重启后看过的内容都还在。
-- **⑥ 后端 → 浏览器**：SSE 只告诉页面「什么变了」，不带数据（所以是虚线），页面再经 ① 拉新内容。
+- **⑥ 后端 → 浏览器**：SSE（服务器推送事件，服务器保持连接、不断往页面推消息，见[名词解释](#名词解释)）只告诉页面「什么变了」，不带数据（所以是虚线），页面再经 ① 拉新内容。
 
 agent 反过来调用 pocket-bots 时（⑦–⑧）：
 
