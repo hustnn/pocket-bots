@@ -24,6 +24,7 @@ What pocket-bots aims to become:
 - **Managed from your phone**: chat with bots, answer approvals and see what they are doing from a phone.
 - **Talks to other bots**: not only between pocket-bots' own bots, but also exchanging messages and working with outside bots (such as grok-bot or Muse bot).
 - **Several agents behind one bot**: Claude Code, Codex, Pi, OpenCode, Grok Build, DeepSeek harness… pick the best one for each task and combine the strengths of each harness.
+- **Fewer dependencies, native multi-agent support**: talk to each agent directly over its own native protocol instead of going through third-party SDKs and wrapper layers, so adding or upgrading an agent pulls in as little as possible.
 - **Interruptible and resumable**: all runtime state is persisted, so the process can be killed or the machine restarted at any time and work picks up where it left off.
 
 Where it is today:
@@ -34,6 +35,7 @@ Where it is today:
 | Phone control | No dedicated mobile app; you can open the Web UI in a phone browser over a trusted network (such as Tailscale) |
 | Talking to other bots | Only between pocket-bots' own bots: `ask_bot` and group chats |
 | Supported agents | Five: Claude Code, Codex, OpenCode, Pi, Grok Build; DeepSeek harness is not connected yet |
+| Dependencies | Codex, Pi and Grok Build are driven directly over their own protocols (JSON-RPC, RPC, ACP); Claude Code still goes through the Claude Agent SDK and OpenCode through `@opencode/client` |
 | Combining agents | Each bot picks one agent; in a group chat, bots on different agents can split the work |
 | Persistence | Chats, timelines and group messages are written to SQLite before they are shown; after a restart, sessions resume from their saved session ids. A turn that was running when interrupted is not re-run automatically |
 
