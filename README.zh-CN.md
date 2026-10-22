@@ -130,31 +130,7 @@ npm run service -- install     # 还有 status、uninstall、print
 
 pocket-bots 是你电脑上的一个 Node 进程，夹在浏览器和 agent CLI 中间：你在页面上操作，它驱动 CLI 干活，再把 CLI 的输出存下来给你看。图里每个箭头有编号，下面按编号解释。
 
-```mermaid
-%%{init: {"theme": "default"}}%%
-flowchart TB
-  subgraph BG[" "]
-    direction TB
-    W["浏览器<br/>React Web UI"]
-    subgraph P["pocket-bots 进程"]
-      S["后端<br/>ChatService、GroupChats、Scheduler…"]
-      DB[("SQLite<br/>聊天、时间线、群聊")]
-      RT["packages/runtime<br/>每个 CLI 一个适配器"]
-      R["Relay（127.0.0.1）<br/>bot 工具 · 应用代理 · webhook"]
-    end
-    A["agent CLI<br/>claude · codex · opencode · pi · grok"]
-
-    W -->|"① RPC"| S
-    S -->|"② 开会话、发消息"| RT
-    RT <-->|"③ CLI 自己的协议"| A
-    RT -->|"④ 时间线条目、审批请求"| S
-    S -->|"⑤ 先写库"| DB
-    S -.->|"⑥ SSE：什么变了"| W
-    A -->|"⑦ 调 bot 工具（MCP）"| R
-    R -->|"⑧ 交给对应组件"| S
-  end
-  style BG fill:#ffffff,stroke:#ffffff
-```
+<p align="center"><img src="docs/architecture.zh-CN.svg" alt="pocket-bots 架构：浏览器、后端、SQLite、runtime、Relay 和 agent CLI，箭头编号 ①–⑧" width="860"></p>
 
 图里的方框：
 

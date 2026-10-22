@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 660" width="960" height="660" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif">
+<style>.t{font-size:15px;font-weight:600;fill:#1e293b}.s{font-size:12.5px;fill:#475569}.l{font-size:13px;fill:#334155}.p{font-size:13px;font-weight:600;fill:#64748b}.e{fill:none;stroke:#64748b;stroke-width:1.5}</style>
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#64748b"/></marker></defs>
+<rect width="960" height="660" rx="16" fill="#ffffff"/>
+<rect x="30" y="136" width="900" height="364" rx="14" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="50" y="160" class="p">pocket-bots process</text>
+<rect x="380" y="24" width="200" height="60" rx="10" fill="#ecfdf5" stroke="#10b981" stroke-width="1.5"/>
+<text x="480.0" y="50.0" text-anchor="middle" class="t">Browser</text>
+<text x="480.0" y="69.0" text-anchor="middle" class="s">React Web UI</text>
+<rect x="310" y="176" width="340" height="64" rx="10" fill="#eef2ff" stroke="#6366f1" stroke-width="1.5"/>
+<text x="480.0" y="204.0" text-anchor="middle" class="t">Backend</text>
+<text x="480.0" y="223.0" text-anchor="middle" class="s">ChatService · GroupChats · Scheduler…</text>
+<rect x="390" y="356" width="180" height="64" rx="10" fill="#eef2ff" stroke="#6366f1" stroke-width="1.5"/>
+<text x="480.0" y="384.0" text-anchor="middle" class="t">packages/runtime</text>
+<text x="480.0" y="403.0" text-anchor="middle" class="s">one adapter per CLI</text>
+<rect x="680" y="356" width="230" height="64" rx="10" fill="#eef2ff" stroke="#6366f1" stroke-width="1.5"/>
+<text x="795.0" y="384.0" text-anchor="middle" class="t">Relay (127.0.0.1)</text>
+<text x="795.0" y="403.0" text-anchor="middle" class="s">bot tools · app proxy · webhooks</text>
+<rect x="310" y="570" width="340" height="64" rx="10" fill="#ecfdf5" stroke="#10b981" stroke-width="1.5"/>
+<text x="480.0" y="598.0" text-anchor="middle" class="t">agent CLI</text>
+<text x="480.0" y="617.0" text-anchor="middle" class="s">claude · codex · opencode · pi · grok</text>
+<path d="M80,358 v80 a85,14 0 0 0 170,0 v-80" fill="#eef2ff" stroke="#6366f1" stroke-width="1.5"/>
+<ellipse cx="165" cy="358" rx="85" ry="14" fill="#eef2ff" stroke="#6366f1" stroke-width="1.5"/>
+<text x="165" y="392" text-anchor="middle" class="t">SQLite</text>
+<text x="165" y="412" text-anchor="middle" class="s">chats, timelines,</text>
+<text x="165" y="429" text-anchor="middle" class="s">group chats</text>
+<path class="e" marker-end="url(#a)" d="M450,84 V174"/>
+<text x="440" y="124" text-anchor="end" class="l">① RPC</text>
+<path class="e" marker-end="url(#a)" stroke-dasharray="5 4" d="M510,176 V86"/>
+<text x="520" y="124" text-anchor="start" class="l">⑥ SSE: what changed</text>
+<path class="e" marker-end="url(#a)" d="M455,240 V354"/>
+<text x="445" y="294" text-anchor="end" class="l">② open session,</text>
+<text x="445" y="311" text-anchor="end" class="l">send message</text>
+<path class="e" marker-end="url(#a)" d="M505,356 V242"/>
+<text x="515" y="294" text-anchor="start" class="l">④ timeline items,</text>
+<text x="515" y="311" text-anchor="start" class="l">approval requests</text>
+<path class="e" marker-end="url(#a)" d="M310,208 H165 V342"/>
+<text x="177" y="282" text-anchor="start" class="l">⑤ write to the</text>
+<text x="177" y="299" text-anchor="start" class="l">database first</text>
+<path class="e" marker-end="url(#a)" d="M795,356 V208 H652"/>
+<text x="783" y="282" text-anchor="end" class="l">⑧ hand off to the</text>
+<text x="783" y="299" text-anchor="end" class="l">right component</text>
+<path class="e" marker-start="url(#a)" marker-end="url(#a)" d="M480,422 V568"/>
+<text x="468" y="540" text-anchor="end" class="l">③ the CLI's own protocol</text>
+<path class="e" marker-end="url(#a)" d="M650,602 H795 V422"/>
+<text x="783" y="540" text-anchor="end" class="l">⑦ call bot tools (MCP)</text>
+</svg>

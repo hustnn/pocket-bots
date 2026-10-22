@@ -132,31 +132,7 @@ The data directory defaults to `~/.pocket-bots` and can be changed with the `POC
 
 pocket-bots is one Node process on your computer that sits between the browser and the agent CLIs: you act on the page, it drives the CLIs to do the work, then stores the CLIs' output for you to see. Each arrow in the diagram is numbered and explained below.
 
-```mermaid
-%%{init: {"theme": "default"}}%%
-flowchart TB
-  subgraph BG[" "]
-    direction TB
-    W["Browser<br/>React Web UI"]
-    subgraph P["pocket-bots process"]
-      S["Backend<br/>ChatService, GroupChats, Scheduler…"]
-      DB[("SQLite<br/>chats, timelines, group chats")]
-      RT["packages/runtime<br/>one adapter per CLI"]
-      R["Relay (127.0.0.1)<br/>bot tools · app proxy · webhooks"]
-    end
-    A["agent CLI<br/>claude · codex · opencode · pi · grok"]
-
-    W -->|"① RPC"| S
-    S -->|"② open session, send message"| RT
-    RT <-->|"③ the CLI's own protocol"| A
-    RT -->|"④ timeline items, approval requests"| S
-    S -->|"⑤ write to the database first"| DB
-    S -.->|"⑥ SSE: what changed"| W
-    A -->|"⑦ call bot tools (MCP)"| R
-    R -->|"⑧ hand off to the right component"| S
-  end
-  style BG fill:#ffffff,stroke:#ffffff
-```
+<p align="center"><img src="docs/architecture.svg" alt="pocket-bots architecture: browser, backend, SQLite, runtime, relay and agent CLI, with numbered arrows ① to ⑧" width="860"></p>
 
 The boxes:
 
