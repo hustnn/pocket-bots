@@ -12,6 +12,27 @@ pocket-bots 直接驱动五个编码 agent 的 CLI：**Claude Code、Codex、Ope
 
 > **关于 Claude**：Claude 通过 Claude Agent SDK 驱动你本机装好的 `claude`，用的是你自己的 claude.ai 登录。Anthropic 不允许第三方产品向别人提供 claude.ai 登录，所以这部分只供你个人使用。
 
+## 目标和现状
+
+pocket-bots 最终想做成这样的个人 bot：
+
+- **哪里都能跑**：本机、自己的服务器、云端都行，bot 换个地方跑不用重新配。
+- **手机就能管**：在手机上和 bot 聊天、批审批、看它在干什么。
+- **能和别的 bot 说话**：不只是 pocket-bots 自己的 bot 之间，也能和外面的 bot（比如 grok-bot、Muse bot）互发消息、一起干活。
+- **一个 bot 背后可以是多种 agent**：Claude Code、Codex、Pi、OpenCode、Grok Build、DeepSeek harness……按任务挑最合适的那个，把各家 harness 的长处组合起来用。
+- **可中断、可恢复**：运行时状态全部持久化，进程随时被杀、机器随时重启，回来接着跑。
+
+现在做到了哪一步：
+
+| 方向 | 现在 |
+|---|---|
+| 运行位置 | 只在本机跑。Web UI 没有登录，放到服务器或云上要自己加一层认证 |
+| 手机控制 | 没有专门的手机端；可以在可信网络里（比如 Tailscale）用手机浏览器打开 Web UI |
+| 和别的 bot 通信 | 只在 pocket-bots 自己的 bot 之间：`ask_bot` 和群聊 |
+| 支持的 agent | Claude Code、Codex、OpenCode、Pi、Grok Build 五个；DeepSeek harness 还没接 |
+| 组合多种 agent | 每个 bot 选一个 agent；群聊里用不同 agent 的 bot 可以分工 |
+| 持久化 | 聊天、时间线、群聊消息先写 SQLite 再展示；重启后用存下的会话 id 续接。正在跑的一轮被打断后不会自动重跑 |
+
 ## 五个 agent
 
 | Agent | 怎么驱动 | 插话进正在跑的一轮 | bot 工具 | 审批 |
