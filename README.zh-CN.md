@@ -22,6 +22,7 @@ pocket-bots 最终想做成这样的个人 bot：
 - **手机就能管**：在手机上和 bot 聊天、批审批、看它在干什么。
 - **能和别的 bot 说话**：不只是 pocket-bots 自己的 bot 之间，也能和外面的 bot（比如 grok-bot、Muse bot）互发消息、一起干活。
 - **一个 bot 背后可以是多种 agent**：Claude Code、Codex、Pi、OpenCode、Grok Build、DeepSeek harness……按任务挑最合适的那个，把各家 harness 的长处组合起来用。
+- **少依赖，原生支持多种 agent**：直接用每个 agent 自己的原生协议接入，不经过第三方 SDK 和中间封装，接新 agent、升级 agent 时引入的东西尽量少。
 - **可中断、可恢复**：运行时状态全部持久化，进程随时被杀、机器随时重启，回来接着跑。
 
 现在做到了哪一步：
@@ -32,6 +33,7 @@ pocket-bots 最终想做成这样的个人 bot：
 | 手机控制 | 没有专门的手机端；可以在可信网络里（比如 Tailscale）用手机浏览器打开 Web UI |
 | 和别的 bot 通信 | 只在 pocket-bots 自己的 bot 之间：`ask_bot` 和群聊 |
 | 支持的 agent | Claude Code、Codex、OpenCode、Pi、Grok Build 五个；DeepSeek harness 还没接 |
+| 依赖 | Codex、Pi、Grok Build 直接走各自的协议（JSON-RPC、RPC、ACP）；Claude Code 还通过 Claude Agent SDK，OpenCode 还通过 `@opencode/client` |
 | 组合多种 agent | 每个 bot 选一个 agent；群聊里用不同 agent 的 bot 可以分工 |
 | 持久化 | 聊天、时间线、群聊消息先写 SQLite 再展示；重启后用存下的会话 id 续接。正在跑的一轮被打断后不会自动重跑 |
 
