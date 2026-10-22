@@ -1,85 +1,89 @@
 # Pocket Bots
 
-跑在你自己电脑上的个人 bot。每个 bot 有自己的指令、模型、长期记忆、技能、MCP 工具和连接的应用；你可以和它聊天，让它按计划或在收到 webhook 时自己干活，还能把几个 bot 拉进一个群聊，让它们分工协作。
+English | [简体中文](README.zh-CN.md)
 
-pocket-bots 直接驱动五个编码 agent 的 CLI：**Claude Code、Codex、OpenCode、Pi、Grok Build**。每个 CLI 用它**自己已经登录的账号和订阅额度**；pocket-bots 不保存、不注入任何 API key。
+Personal bots that run on your own computer. Each bot has its own instructions, model, long-term memory, skills, MCP tools and connected apps. You can chat with it, have it work on its own on a schedule or when a webhook arrives, and put several bots into one group chat to split up the work.
 
-- 有哪些功能：[docs/features.md](docs/features.md)
-- 每个功能怎么用：**[使用指南](docs/USAGE.md)**
-- 怎么实现的（组件、通信、agent、bot、群聊）：[docs/design.md](docs/design.md)
-- 群聊里几个 bot 怎么协作（完整规则和例子）：[docs/group-chats.md](docs/group-chats.md)
-- 群聊的通信协议（给开发者：消息怎么流动、每一步读写什么、各种组合下谁收到）：[docs/group-protocol.md](docs/group-protocol.md)
+pocket-bots drives the CLIs of five coding agents directly: **Claude Code, Codex, OpenCode, Pi and Grok Build**. Each CLI uses **the account and subscription you already logged in with**; pocket-bots never stores or injects any API key.
 
-> **关于 Claude**：Claude 通过 Claude Agent SDK 驱动你本机装好的 `claude`，用的是你自己的 claude.ai 登录。Anthropic 不允许第三方产品向别人提供 claude.ai 登录，所以这部分只供你个人使用。
+The docs below are written in Chinese:
 
-## 目标和现状
+- What it can do: [docs/features.md](docs/features.md)
+- How to use each feature: **[usage guide](docs/USAGE.md)**
+- How it is built (components, communication, agents, bots, group chats): [docs/design.md](docs/design.md)
+- How several bots work together in a group chat (full rules and examples): [docs/group-chats.md](docs/group-chats.md)
+- The group chat protocol (for developers: how messages flow, what each step reads and writes, who receives what in each combination): [docs/group-protocol.md](docs/group-protocol.md)
 
-pocket-bots 最终想做成这样的个人 bot：
+> **About Claude**: Claude is driven through the Claude Agent SDK, using the `claude` installed on your machine and your own claude.ai login. Anthropic does not allow third-party products to offer claude.ai login to other people, so this part is for your personal use only.
 
-- **哪里都能跑**：本机、自己的服务器、云端都行，bot 换个地方跑不用重新配。
-- **手机就能管**：在手机上和 bot 聊天、批审批、看它在干什么。
-- **能和别的 bot 说话**：不只是 pocket-bots 自己的 bot 之间，也能和外面的 bot（比如 grok-bot、Muse bot）互发消息、一起干活。
-- **一个 bot 背后可以是多种 agent**：Claude Code、Codex、Pi、OpenCode、Grok Build、DeepSeek harness……按任务挑最合适的那个，把各家 harness 的长处组合起来用。
-- **可中断、可恢复**：运行时状态全部持久化，进程随时被杀、机器随时重启，回来接着跑。
+## Goals and status
 
-现在做到了哪一步：
+What pocket-bots aims to become:
 
-| 方向 | 现在 |
+- **Runs anywhere**: on your machine, your own server or in the cloud, and a bot can move between them without being set up again.
+- **Managed from your phone**: chat with bots, answer approvals and see what they are doing from a phone.
+- **Talks to other bots**: not only between pocket-bots' own bots, but also exchanging messages and working with outside bots (such as grok-bot or Muse bot).
+- **Several agents behind one bot**: Claude Code, Codex, Pi, OpenCode, Grok Build, DeepSeek harness… pick the best one for each task and combine the strengths of each harness.
+- **Interruptible and resumable**: all runtime state is persisted, so the process can be killed or the machine restarted at any time and work picks up where it left off.
+
+Where it is today:
+
+| Goal | Today |
 |---|---|
-| 运行位置 | 只在本机跑。Web UI 没有登录，放到服务器或云上要自己加一层认证 |
-| 手机控制 | 没有专门的手机端；可以在可信网络里（比如 Tailscale）用手机浏览器打开 Web UI |
-| 和别的 bot 通信 | 只在 pocket-bots 自己的 bot 之间：`ask_bot` 和群聊 |
-| 支持的 agent | Claude Code、Codex、OpenCode、Pi、Grok Build 五个；DeepSeek harness 还没接 |
-| 组合多种 agent | 每个 bot 选一个 agent；群聊里用不同 agent 的 bot 可以分工 |
-| 持久化 | 聊天、时间线、群聊消息先写 SQLite 再展示；重启后用存下的会话 id 续接。正在跑的一轮被打断后不会自动重跑 |
+| Where it runs | Only on your own machine. The Web UI has no login, so putting it on a server or in the cloud needs your own auth layer |
+| Phone control | No dedicated mobile app; you can open the Web UI in a phone browser over a trusted network (such as Tailscale) |
+| Talking to other bots | Only between pocket-bots' own bots: `ask_bot` and group chats |
+| Supported agents | Five: Claude Code, Codex, OpenCode, Pi, Grok Build; DeepSeek harness is not connected yet |
+| Combining agents | Each bot picks one agent; in a group chat, bots on different agents can split the work |
+| Persistence | Chats, timelines and group messages are written to SQLite before they are shown; after a restart, sessions resume from their saved session ids. A turn that was running when interrupted is not re-run automatically |
 
-## 五个 agent
+## The five agents
 
-| Agent | 怎么驱动 | 插话进正在跑的一轮 | bot 工具 | 审批 |
+| Agent | How it is driven | Steering into a running turn | Bot tools | Approvals |
 |---|---|---|---|---|
-| Claude Code | Claude Agent SDK（本机 `claude`） | ✅ 当前工具调用结束后 | HTTP MCP（`bots`） | `canUseTool` |
-| Codex | `codex app-server`（JSON-RPC） | ✅ `turn/steer` | 动态工具（不经过 MCP 审批） | server request |
-| OpenCode | `opencode serve` + `@opencode/client` v2 | ✅ `delivery: "steer"` | HTTP MCP（每个会话一个 server） | 权限规则 + `permission.asked` |
-| Pi | `pi --mode rpc` + pocket-bots 的扩展 | ✅ RPC `steer` | 扩展注册的 MCP（Pi ≥ 1.0） | 扩展的 `tool_call` 钩子 |
-| Grok Build | ACP：`grok agent stdio` | ✅ `_x.ai/interject` | ACP 的 MCP 服务器 | `session/request_permission` |
+| Claude Code | Claude Agent SDK (local `claude`) | ✅ after the current tool call finishes | HTTP MCP (`bots`) | `canUseTool` |
+| Codex | `codex app-server` (JSON-RPC) | ✅ `turn/steer` | Dynamic tools (skip MCP approval) | server request |
+| OpenCode | `opencode serve` + `@opencode/client` v2 | ✅ `delivery: "steer"` | HTTP MCP (one server per session) | permission rules + `permission.asked` |
+| Pi | `pi --mode rpc` + pocket-bots' extension | ✅ RPC `steer` | MCP registered by the extension (Pi ≥ 1.0) | the extension's `tool_call` hook |
+| Grok Build | ACP: `grok agent stdio` | ✅ `_x.ai/interject` | ACP MCP servers | `session/request_permission` |
 
-所有审批都由 pocket-bots 自己回答：bot 自己的工具免审批，其余按 bot 的审批模式弹卡片。每个 agent 都通过同一套合同测试（调用工具、审批、插话被接收并执行、打断、换进程后续接），见 `packages/runtime/test/contract.ts`。
+pocket-bots answers every approval itself: the bot's own tools need no approval, and everything else shows a card according to the bot's approval mode. Every agent passes the same contract test (calling tools, approvals, a steered message being accepted and acted on, interrupting, resuming in a new process); see `packages/runtime/test/contract.ts`.
 
-## 安装
+## Install
 
-需要：
+You need:
 
-1. **Node.js 24 或更新**（用到内置的 `node:sqlite`）。
-2. **至少一个登录好的 agent CLI。** 比如在终端里运行一次 `claude` 并登录；其他的：`codex login`、`grok`（登录 grok.com）、`opencode`、`pi`（`/login`）。
+1. **Node.js 24 or newer** (it uses the built-in `node:sqlite`).
+2. **At least one logged-in agent CLI.** For example, run `claude` once in a terminal and log in; for the others: `codex login`, `grok` (log in to grok.com), `opencode`, `pi` (`/login`).
 
-然后：
+Then:
 
 ```bash
 git clone https://github.com/hustnn/pocket-bots.git
 cd pocket-bots
 npm install
-npm run build          # 构建 Web UI
+npm run build          # build the Web UI
 ```
 
-## 启动
+## Start
 
 ```bash
 npm start
 ```
 
-打开 <http://127.0.0.1:6880>。左上角列出已经就绪的 agent。点 **New bot** 建第一个 bot，见[使用指南](docs/USAGE.md)。
+Open <http://127.0.0.1:6880>. The top left lists the agents that are ready. Click **New bot** to create your first bot; see the [usage guide](docs/USAGE.md).
 
-后端要一直开着：聊天会话、群聊投递、每日日志、记忆改动记录、定时任务、webhook、排队消息都靠它。长期用的话，装成登录后自动启动的服务（macOS 用 launchd，Linux 用 systemd）：
+The backend has to stay running: chat sessions, group chat delivery, daily journals, memory change logs, scheduled routines, webhooks and queued messages all depend on it. For long-term use, install it as a service that starts when you log in (launchd on macOS, systemd on Linux):
 
 ```bash
-npm run service -- install     # 还有 status、uninstall、print
+npm run service -- install     # also status, uninstall, print
 ```
 
-见[使用指南](docs/USAGE.md#1-准备工作)。
+See the [usage guide](docs/USAGE.md#1-准备工作).
 
-## 配置
+## Configuration
 
-数据目录默认是 `~/.pocket-bots`，可以用环境变量 `POCKET_BOTS_HOME` 改。里面有 `bots.json`（bot 和库）、`pocket-bots.sqlite`（聊天、时间线、群聊）、`Bots/<botId>/`（每个 bot 的工作目录、记忆和技能）。可以放一个 `config.json`：
+The data directory defaults to `~/.pocket-bots` and can be changed with the `POCKET_BOTS_HOME` environment variable. It holds `bots.json` (bots and the library), `pocket-bots.sqlite` (chats, timelines, group chats) and `Bots/<botId>/` (each bot's working directory, memory and skills). You can add a `config.json`:
 
 ```json
 {
@@ -88,138 +92,138 @@ npm run service -- install     # 还有 status、uninstall、print
 }
 ```
 
-| 配置项 | 环境变量 | 默认值 | 说明 |
+| Setting | Environment variable | Default | Meaning |
 |---|---|---|---|
-| `web.host` | `POCKET_BOTS_HOST` | `127.0.0.1` | Web UI 监听的地址 |
-| `web.port` | `POCKET_BOTS_PORT` | `6880` | Web UI 端口 |
-| `web.hostnames` | `POCKET_BOTS_HOSTNAMES`（逗号分隔） | `[]` | 额外放行的域名（防 DNS rebinding） |
-| `relay.port` | `POCKET_BOTS_RELAY_PORT` | 第一次用 `6881`，之后一直沿用 | bot 工具、应用代理和 webhook 用的本机端口 |
+| `web.host` | `POCKET_BOTS_HOST` | `127.0.0.1` | Address the Web UI listens on |
+| `web.port` | `POCKET_BOTS_PORT` | `6880` | Web UI port |
+| `web.hostnames` | `POCKET_BOTS_HOSTNAMES` (comma-separated) | `[]` | Extra hostnames to allow (protection against DNS rebinding) |
+| `relay.port` | `POCKET_BOTS_RELAY_PORT` | `6881` the first time, then kept | Local port for bot tools, the app proxy and webhooks |
 
-- **同一个数据目录只能跑一个 pocket-bots。** 要同时跑两个，给第二个一个单独的 `POCKET_BOTS_HOME`。
-- **Web UI 没有登录。** 默认只监听 `127.0.0.1`。要从别的设备访问，只在可信网络里打开（比如 Tailscale），或放在带认证的反向代理后面。
+- **Only one pocket-bots can run per data directory.** To run two at once, give the second its own `POCKET_BOTS_HOME`.
+- **The Web UI has no login.** It listens only on `127.0.0.1` by default. To reach it from other devices, open it only on a trusted network (such as Tailscale) or put it behind a reverse proxy with authentication.
 
-## 工作原理
+## How it works
 
-pocket-bots 是你电脑上的一个 Node 进程，夹在浏览器和 agent CLI 中间：你在页面上操作，它驱动 CLI 干活，再把 CLI 的输出存下来给你看。图里每个箭头有编号，下面按编号解释。
+pocket-bots is one Node process on your computer that sits between the browser and the agent CLIs: you act on the page, it drives the CLIs to do the work, then stores the CLIs' output for you to see. Each arrow in the diagram is numbered and explained below.
 
 ```mermaid
 flowchart TB
-  W["浏览器<br/>React Web UI"]
-  subgraph P["pocket-bots 进程"]
-    S["后端<br/>ChatService、GroupChats、Scheduler…"]
-    DB[("SQLite<br/>聊天、时间线、群聊")]
-    RT["packages/runtime<br/>每个 CLI 一个适配器"]
-    R["Relay（127.0.0.1）<br/>bot 工具 · 应用代理 · webhook"]
+  W["Browser<br/>React Web UI"]
+  subgraph P["pocket-bots process"]
+    S["Backend<br/>ChatService, GroupChats, Scheduler…"]
+    DB[("SQLite<br/>chats, timelines, group chats")]
+    RT["packages/runtime<br/>one adapter per CLI"]
+    R["Relay (127.0.0.1)<br/>bot tools · app proxy · webhooks"]
   end
   A["agent CLI<br/>claude · codex · opencode · pi · grok"]
 
   W -->|"① RPC"| S
-  S -->|"② 开会话、发消息"| RT
-  RT <-->|"③ CLI 自己的协议"| A
-  RT -->|"④ 时间线条目、审批请求"| S
-  S -->|"⑤ 先写库"| DB
-  S -.->|"⑥ SSE：什么变了"| W
-  A -->|"⑦ 调 bot 工具（MCP）"| R
-  R -->|"⑧ 交给对应组件"| S
+  S -->|"② open session, send message"| RT
+  RT <-->|"③ the CLI's own protocol"| A
+  RT -->|"④ timeline items, approval requests"| S
+  S -->|"⑤ write to the database first"| DB
+  S -.->|"⑥ SSE: what changed"| W
+  A -->|"⑦ call bot tools (MCP)"| R
+  R -->|"⑧ hand off to the right component"| S
 ```
 
-图里的方框：
+The boxes:
 
-- **后端**：bot、聊天、群聊、定时任务、记忆这些业务都在这里。
-- **packages/runtime**：只管驱动一个 agent 会话（打开、发消息、插话、打断、审批、续接），不知道 bot 和群的存在。
-- **SQLite**：数据目录里的 `pocket-bots.sqlite`。bot 的配置不在这里，在 `bots.json`。
-- **Relay**：只监听 127.0.0.1 的 HTTP 服务（默认端口 6881），让 agent 能反过来调用 pocket-bots。
-- **agent CLI**：本机装好、登录好的 CLI，在 pocket-bots 进程之外单独运行，用它自己的账号。
+- **Backend**: where the product logic lives: bots, chats, group chats, scheduled routines, memory.
+- **packages/runtime**: only drives one agent session (open, send, steer, interrupt, approve, resume) and knows nothing about bots or groups.
+- **SQLite**: `pocket-bots.sqlite` in the data directory. Bot configuration is not here but in `bots.json`.
+- **Relay**: an HTTP server listening only on 127.0.0.1 (port 6881 by default) that lets agents call back into pocket-bots.
+- **agent CLI**: a CLI installed and logged in on your machine, running outside the pocket-bots process with its own account.
 
-发一条消息时（①–⑥）：
+When you send a message (①–⑥):
 
-- **① 浏览器 → 后端**：页面上的每个操作都是一次 RPC（`POST /api/rpc/<name>`），发消息、点审批卡片都是。
-- **② 后端 → runtime**：后端用 bot 当前的配置（system prompt、记忆、工具）打开这个聊天的会话；开过的就用存下的会话 id 续接。会话空闲 15 分钟后关掉，下次发消息再续接，每次打开都带上 bot 最新的配置；不过 Claude Code 和 Codex 续接时不认新的 system prompt，继续用会话开始时那份。
-- **③ runtime ↔ CLI**：每个适配器用这个 CLI 自己的协议发消息、收输出，见上面「五个 agent」的表。
-- **④ runtime → 后端**：五个 CLI 的输出被统一成同一种时间线条目：用户消息、回复、思考、工具调用及其详情。CLI 要审批时，免审批的工具（pocket-bots 自己的读取、提议和群聊工具，你在 **Access** 里勾上的 MCP 工具）在适配器里直接放行；其余的交给后端：命中命令白名单或信任的目录就放行，剩下的在聊天里弹卡片，你点了之后经 ① 回来。哪些操作需要审批由 CLI 自己的审批模式决定，pocket-bots 只决定怎么回答。
-- **⑤ 后端 → SQLite**：每个条目先写进 SQLite，再通知页面。进程随时被杀，重启后看过的内容都还在。
-- **⑥ 后端 → 浏览器**：SSE 只告诉页面「什么变了」，不带数据（所以是虚线），页面再经 ① 拉新内容。
+- **① Browser → backend**: every action on the page is one RPC (`POST /api/rpc/<name>`), whether sending a message or clicking an approval card.
+- **② Backend → runtime**: the backend opens this chat's session with the bot's current configuration (system prompt, memory, tools); a chat that was opened before resumes from its saved session id. A session closes after 15 idle minutes and resumes on the next message, and each open picks up the bot's latest configuration; however, Claude Code and Codex ignore a new system prompt on resume and keep the one the session started with.
+- **③ Runtime ↔ CLI**: each adapter sends messages and receives output using that CLI's own protocol; see the "five agents" table above.
+- **④ Runtime → backend**: the output of all five CLIs is turned into the same kind of timeline item: user messages, replies, thinking, tool calls and their details. When a CLI asks for approval, tools that need none (pocket-bots' own read, proposal and group chat tools, and MCP tools you ticked under **Access**) are allowed right in the adapter; the rest go to the backend: anything matching the command allowlist or a trusted folder is allowed, and the remainder shows a card in the chat, whose answer comes back through ①. Which actions need approval is decided by the CLI's own approval mode; pocket-bots only decides how to answer.
+- **⑤ Backend → SQLite**: every item is written to SQLite before the page is notified. The process can be killed at any time, and everything you saw is still there after a restart.
+- **⑥ Backend → browser**: SSE only tells the page "what changed" without carrying data (hence the dashed line); the page then fetches the new content through ①.
 
-agent 反过来调用 pocket-bots 时（⑦–⑧）：
+When an agent calls back into pocket-bots (⑦–⑧):
 
-- **⑦ CLI → Relay**：agent 调 pocket-bots 自己的工具（`ask_bot`、群聊工具、提议卡片……）或连接的应用（Gmail、Slack……）时，经 MCP 连到 relay。每个聊天的 MCP 配置里带一个 token，relay 凭它认出是哪个 bot 的哪个聊天。Codex 例外：pocket-bots 自己的工具由 Codex 适配器替它转发给 relay。
-- **⑧ Relay → 后端**：pocket-bots 自己的工具交给对应的组件执行，比如 `group_send` 交给群聊。连接的应用不进后端：relay 检查这个 bot 能用这个应用后，加上你的 Composio key 转发出去。
+- **⑦ CLI → relay**: when the agent calls pocket-bots' own tools (`ask_bot`, group chat tools, proposal cards…) or connected apps (Gmail, Slack…), it connects to the relay over MCP. Each chat's MCP configuration carries a token that tells the relay which chat of which bot is calling. Codex is the exception: its adapter forwards pocket-bots' own tools to the relay on its behalf.
+- **⑧ Relay → backend**: pocket-bots' own tools are handed to the matching component, for example `group_send` goes to group chats. Connected apps do not go through the backend: once the relay checks that this bot may use the app, it adds your Composio key and forwards the call.
 
-Relay 方框里的 webhook 不是 agent 调的：别的程序 POST 到 `http://127.0.0.1:<relay 端口>/hooks/<routineId>/<secret>`，后端开一个新聊天跑这个定时任务，从 ② 开始走同样的流程。relay 只监听 127.0.0.1，所以调用方必须在同一台电脑上。
+The webhooks in the Relay box are not called by agents: another program POSTs to `http://127.0.0.1:<relay port>/hooks/<routineId>/<secret>`, and the backend opens a new chat to run that routine, following the same flow from ②. The relay listens only on 127.0.0.1, so the caller must be on the same computer.
 
-群聊用的也是这几条通道。每个 bot 在群里有一个**座位**，就是一个普通聊天，走 ②–⑥。bot 只能用群聊工具（⑦⑧）读写群，它在座位里直接输出的文字不进群。有新消息时，后端经 ② 往座位发一条提示，只说哪里有几条新消息，由 bot 自己调 `group_read` 去读；bot 调 `group_send` 发言前，后端先检查它有没有漏看新消息；几个 bot 分工时，先用 `group_claim` 认领再动手。完整规则见 [docs/group-chats.md](docs/group-chats.md)，消息怎么流动见 [docs/group-protocol.md](docs/group-protocol.md)，组件和通信的细节见 [docs/design.md](docs/design.md)。
+Group chats use the same channels. Each bot has a **seat** in the group, which is an ordinary chat going through ②–⑥. A bot can read and write the group only through group chat tools (⑦⑧); text it outputs directly in its seat does not go into the group. When there are new messages, the backend sends a hint into the seat through ②, saying only where and how many new messages there are, and the bot calls `group_read` itself to read them. Before a bot's `group_send` goes through, the backend checks that it has not missed new messages; when several bots split the work, each claims a task with `group_claim` before starting. See [docs/group-chats.md](docs/group-chats.md) for the full rules, [docs/group-protocol.md](docs/group-protocol.md) for how messages flow, and [docs/design.md](docs/design.md) for details on components and communication.
 
-## 开发
+## Development
 
 ```bash
-npm run dev            # 后端 + Vite
+npm run dev            # backend + Vite
 npm run typecheck
-npm test               # 单元测试和端到端测试（用脚本化的假 agent，不调模型）
-npm run test:live -- claude      # 合同测试，跑真的 CLI：claude / codex / opencode / grok / pi / pi-fake
-node packages/runtime/test/live-commands.ts codex   # 列出这个 CLI 的斜杠命令，再跑一次 /compact
-node packages/runtime/test/live-directories.ts      # Codex 在额外目录里写文件不弹审批，中途换的列表下一轮生效
+npm test               # unit and end-to-end tests (with a scripted fake agent, no model calls)
+npm run test:live -- claude      # contract test against the real CLI: claude / codex / opencode / grok / pi / pi-fake
+node packages/runtime/test/live-commands.ts codex   # list this CLI's slash commands, then run /compact once
+node packages/runtime/test/live-directories.ts      # Codex writes in extra folders without approval; a list changed mid-turn applies next turn
 ```
 
-`npm run dev` 的页面在 <http://127.0.0.1:5180>，`/api` 转发给 6880 端口的后端。给 coding agent 看的开发说明见 [AGENTS.md](AGENTS.md)。
+The `npm run dev` page is at <http://127.0.0.1:5180>, with `/api` forwarded to the backend on port 6880. Development notes for coding agents are in [AGENTS.md](AGENTS.md).
 
-## 源码目录结构
+## Source layout
 
-代码分两个包（npm workspaces）：`packages/runtime` 直连五个 CLI，不知道 bot 和群的存在；`packages/app` 是 pocket-bots 本身。
+The code is split into two packages (npm workspaces): `packages/runtime` talks to the five CLIs and knows nothing about bots or groups; `packages/app` is pocket-bots itself.
 
 ```
 pocket-bots/
-├── package.json                 workspaces 根：build / start / dev / typecheck / test 脚本
-├── docs/                        功能、使用指南、设计、群聊规则和通信协议
+├── package.json                 workspaces root: build / start / dev / typecheck / test scripts
+├── docs/                        features, usage guide, design, group chat rules and protocol
 ├── packages/
-│   ├── runtime/                 运行时层（@pocket-bots/runtime）
+│   ├── runtime/                 runtime layer (@pocket-bots/runtime)
 │   │   ├── src/
-│   │   │   ├── types.ts             统一接口：RuntimeAdapter、RuntimeSession、RuntimeEvent、TimelineItem
-│   │   │   ├── adapters/            claude、codex、opencode、pi、grok 五个适配器，fake（脚本化，测试用）
-│   │   │   ├── session-base.ts      适配器共用的会话状态、监听器、本地队列
-│   │   │   ├── tool-detail.ts       工具调用 → 时间线里的结构化详情（命令、diff、读文件…）
-│   │   │   ├── questions.ts         各 CLI 的提问工具 → 统一的 question 审批
-│   │   │   ├── env.ts               启动 CLI 前清理子进程环境
-│   │   │   └── jsonrpc.ts、mcp-client.ts、util.ts
-│   │   └── test/                单元测试；contract.ts 合同测试；live*.ts 跑真 CLI
-│   └── app/                     pocket-bots 应用（@pocket-bots/app）
+│   │   │   ├── types.ts             unified interface: RuntimeAdapter, RuntimeSession, RuntimeEvent, TimelineItem
+│   │   │   ├── adapters/            claude, codex, opencode, pi, grok adapters; fake (scripted, for tests)
+│   │   │   ├── session-base.ts      session state, listeners and local queue shared by adapters
+│   │   │   ├── tool-detail.ts       tool calls → structured timeline details (commands, diffs, file reads…)
+│   │   │   ├── questions.ts         each CLI's question tool → one unified question approval
+│   │   │   ├── env.ts               cleans the child process environment before starting a CLI
+│   │   │   └── jsonrpc.ts, mcp-client.ts, util.ts
+│   │   └── test/                unit tests; contract.ts contract test; live*.ts run real CLIs
+│   └── app/                     the pocket-bots app (@pocket-bots/app)
 │       ├── src/
-│       │   ├── server/              后端（Node + Hono）
-│       │   │   ├── main.ts              启动与装配：建各组件、连事件、起 HTTP 和 relay
-│       │   │   ├── http.ts、rpc-handlers.ts、events.ts、hosts.ts    RPC 路由、SSE、Host 头检查
-│       │   │   ├── store.ts、db.ts      bots.json；SQLite 和版本化迁移
-│       │   │   ├── host.ts、providers.ts    给各功能用的门面；探测 CLI 装没装、登没登录
-│       │   │   ├── chat-service.ts、supervision.ts    每个聊天的 runtime 会话和看护
-│       │   │   ├── chats.ts、prompt.ts  由 bot 配置生成 SessionSpec 和 system prompt
-│       │   │   ├── groups.ts、group-store.ts、briefing.ts、reminders.ts    群聊
-│       │   │   ├── relay.ts、tools/     127.0.0.1 上的 MCP relay；bot 工具和群聊工具
-│       │   │   ├── scheduler.ts、queue.ts、answers.ts    定时任务和 webhook、排队消息、ask_bot
-│       │   │   ├── memory.ts、journal.ts、activity.ts    记忆、改动记录、每日日志
-│       │   │   ├── library.ts、mcp-probe.ts、composio.ts、search.ts    技能和 MCP 库、连接的应用、搜索
-│       │   │   └── config.ts、instance.ts、service.ts …    配置、单实例锁、launchd / systemd 服务
-│       │   ├── shared/              前后端共用：zod 模型（bot.ts、group-chat.ts）、RPC 定义（rpc.ts）、纯逻辑
-│       │   └── web/                 React 单页应用
-│       │       ├── app/                 页面：侧栏、聊天、群聊、bot 面板、库、设置
-│       │       ├── chat/                聊天流的纯逻辑：时间线 → 行、输入框、提问表单
-│       │       ├── components/          通用组件
-│       │       └── lib/                 RPC 客户端、React Query、SSE 订阅、路由、草稿
-│       ├── tests/               vitest：单元测试和端到端测试（用 fake runtime）
-│       └── scripts/dev.mjs      同时跑后端（tsx watch）和 Vite
-├── spikes/                      早期验证各 CLI 协议的脚本，不参与构建和测试
-└── third_party/                 改写来源的许可证
+│       │   ├── server/              backend (Node + Hono)
+│       │   │   ├── main.ts              startup and wiring: builds components, connects events, starts HTTP and the relay
+│       │   │   ├── http.ts, rpc-handlers.ts, events.ts, hosts.ts    RPC routes, SSE, Host header check
+│       │   │   ├── store.ts, db.ts      bots.json; SQLite and versioned migrations
+│       │   │   ├── host.ts, providers.ts    facade used by features; detects whether CLIs are installed and logged in
+│       │   │   ├── chat-service.ts, supervision.ts    each chat's runtime session and its supervision
+│       │   │   ├── chats.ts, prompt.ts  builds the SessionSpec and system prompt from bot config
+│       │   │   ├── groups.ts, group-store.ts, briefing.ts, reminders.ts    group chats
+│       │   │   ├── relay.ts, tools/     MCP relay on 127.0.0.1; bot tools and group chat tools
+│       │   │   ├── scheduler.ts, queue.ts, answers.ts    routines and webhooks, queued messages, ask_bot
+│       │   │   ├── memory.ts, journal.ts, activity.ts    memory, change log, daily journal
+│       │   │   ├── library.ts, mcp-probe.ts, composio.ts, search.ts    skill and MCP library, connected apps, search
+│       │   │   └── config.ts, instance.ts, service.ts …    config, single-instance lock, launchd / systemd service
+│       │   ├── shared/              shared by frontend and backend: zod models (bot.ts, group-chat.ts), RPC definitions (rpc.ts), pure logic
+│       │   └── web/                 React single-page app
+│       │       ├── app/                 pages: sidebar, chat, group chat, bot panel, library, settings
+│       │       ├── chat/                pure chat-stream logic: timeline → rows, composer, question forms
+│       │       ├── components/          shared components
+│       │       └── lib/                 RPC client, React Query, SSE subscription, routing, drafts
+│       ├── tests/               vitest: unit and end-to-end tests (with the fake runtime)
+│       └── scripts/dev.mjs      runs the backend (tsx watch) and Vite together
+├── spikes/                      early scripts that validated each CLI's protocol; not part of build or tests
+└── third_party/                 licenses of adapted sources
 ```
 
-每个组件负责什么、怎么通信，见 [docs/design.md](docs/design.md#2-组件)。
+For what each component does and how they communicate, see [docs/design.md](docs/design.md#2-组件).
 
-## 致谢
+## Acknowledgements
 
-pocket-bots 参考了这些项目，感谢它们的作者：
+pocket-bots draws on these projects; thanks to their authors:
 
-- **[Raft](https://github.com/botiverse/raft-source)**：多个 agent 在一个群里怎么协作而不乱，群聊的设计从它那里学到了很多。
-- **[Paseo](https://github.com/getpaseo/paseo)**：运行时层的 agent 适配器、时间线和工具调用的形状，以及聊天界面的很多细节，改写自 Paseo 的代码（Apache-2.0）。
-- **[paseo-bots](https://github.com/oliexe/paseo-bots)**：bot、记忆、技能、定时任务、提议卡片这些 bot 功能最早的实现（MIT）。
+- **[Raft](https://github.com/botiverse/raft-source)**: how several agents can work together in one group without chaos; the group chat design learned a lot from it.
+- **[Paseo](https://github.com/getpaseo/paseo)**: the runtime layer's agent adapters, the shape of timelines and tool calls, and many details of the chat UI are adapted from Paseo's code (Apache-2.0).
+- **[paseo-bots](https://github.com/oliexe/paseo-bots)**: the earliest implementation of bot features such as bots, memory, skills, routines and proposal cards (MIT).
 
-也参考了 [grok-bot](https://docs.x.ai/grok-bot/chat-and-collaboration)（群聊和 bot 的产品形态）、OpenMausBot（bot 功能的细节）和 [pi](https://github.com/earendil-works/pi)（SQLite 存储的做法）。
+It also drew on [grok-bot](https://docs.x.ai/grok-bot/chat-and-collaboration) (the product shape of group chats and bots), OpenMausBot (details of bot features) and [pi](https://github.com/earendil-works/pi) (how it stores data in SQLite).
 
-## 许可
+## License
 
-MIT，见 [LICENSE](LICENSE)。包含改写自其他项目的代码，许可和版权说明见 [NOTICE](NOTICE)。
+MIT, see [LICENSE](LICENSE). Includes code adapted from other projects; see [NOTICE](NOTICE) for their licenses and copyright notices.
