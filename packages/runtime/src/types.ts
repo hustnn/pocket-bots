@@ -1,10 +1,10 @@
-// The runtime layer's contract: drive one coding-agent CLI session (Claude Code, Codex, OpenCode,
-// Pi, Grok Build) on that CLI's own login. It knows nothing about bots or groups.
+// The runtime layer's contract: drive one coding-agent CLI session (Claude Code, Codex, DeepSeek
+// Harness, OpenCode, Pi, Grok Build) on that CLI's own login. It knows nothing about bots or groups.
 //
 // Every runtime's events become the same timeline items and tool-call details, which the store
 // keeps and the web UI renders. (Adapted from Apache-2.0 code; see NOTICE.)
 
-export type ProviderId = "claude" | "codex" | "opencode" | "pi" | "grok" | "fake";
+export type ProviderId = "claude" | "codex" | "dsh" | "opencode" | "pi" | "grok" | "fake";
 
 // ------------------------------------------------------------------ timeline
 

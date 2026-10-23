@@ -4,6 +4,7 @@ export { toolDetail } from "./tool-detail.ts";
 export { questionsOf, type QuestionSpec } from "./questions.ts";
 export { ClaudeAdapter } from "./adapters/claude.ts";
 export { CodexAdapter } from "./adapters/codex.ts";
+export { DshAdapter } from "./adapters/dsh.ts";
 export { GrokAdapter } from "./adapters/grok.ts";
 export { OpenCodeAdapter } from "./adapters/opencode.ts";
 export { PiAdapter } from "./adapters/pi.ts";

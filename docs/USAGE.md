@@ -1,6 +1,6 @@
 # Pocket Bots 使用指南
 
-这份指南按实际使用顺序把每个功能走一遍。示例里的 agent 大多是 Claude Code（`claude`），其他四个（Codex、OpenCode、Pi、Grok Build）用法一样。每个 CLI 用它自己登录的账号和订阅额度，pocket-bots 不碰任何 API key。
+这份指南按实际使用顺序把每个功能走一遍。示例里的 agent 大多是 Claude Code（`claude`），其他几个（Codex、DeepSeek Harness、OpenCode、Pi、Grok Build）用法一样。每个 CLI 用它自己登录的账号和订阅额度，pocket-bots 不碰任何 API key。
 
 > 安装、配置文件和数据目录见 [README](../README.zh-CN.md)。这里只讲怎么用。
 
@@ -28,7 +28,7 @@
 
 ## 1. 准备工作
 
-1. 装好并登录至少一个 agent CLI，比如在终端里运行一次 `claude` 并登录。其他几个：`codex login`、`grok`（登录 grok.com）、`opencode`、`pi`（`/login`）。
+1. 装好并登录至少一个 agent CLI，比如在终端里运行一次 `claude` 并登录。其他几个：`codex login`、`grok`（登录 grok.com）、`opencode`、`pi`（`/login`）；DeepSeek Harness 装桌面版就行，但要先给它的 `acp` profile 配一个模型，见下面。
 2. 启动 pocket-bots：
 
    ```bash
@@ -52,6 +52,44 @@
    - `npm run service -- status` 看是否在运行，`npm run service -- uninstall` 去掉，`npm run service -- print` 只打印要写的文件、不安装。
    - 装好以后不要再自己 `npm start`：一个数据目录只能跑一个 pocket-bots。
    - 更新代码后（`git pull`、`npm install`、`npm run build`），再运行一次 `install` 重启它。
+
+### 用 DeepSeek Harness
+
+DeepSeek Harness（DSH）从一个 profile 启动，pocket-bots 用的是它的 `acp` profile，所以要先把那个 profile 配好：
+
+1. **装 DSH。** 桌面版自带 CLI（macOS 上在 `/Applications/DeepSeek Harness.app` 里，pocket-bots 会自动找到），或者 `npm install -g @deepseek-ai/dsh`。装了多个、想指定用哪个，用环境变量 `POCKET_BOTS_DSH_BINARY`。
+2. **给 `acp` profile 配 provider 和模型。** 桌面版设置页写的是 `desktop` profile，两边不共享插件配置。先运行一次 `dsh --profile acp --dump-config` 生成 profile，然后在 `~/.dsh/profiles/acp/cordis.patch.yml` 里写：
+
+   ```yaml
+   - id: llm-pi-ai
+     name: '@deepseek-ai/dsh-llm-pi-ai'
+     config:
+       providers:
+         sophon:
+           apiKeyEnv: SOPHON_API_KEY
+           api: openai-completions
+           baseURL: https://sophon-ai.bytedance.net/gateway/openapi/model/chatCompletion
+           models:
+             - id: DeepSeek-V4.1-Flash-1017-merlin
+
+   - id: acp
+     name: '@deepseek-ai/dsh-acp'
+     config:
+       provider: sophon
+       model: DeepSeek-V4.1-Flash-1017-merlin
+   ```
+
+   第一次真正启动一个 profile（`dsh --profile acp`）时它会装插件，可能要几分钟；pocket-bots 的启动超时只有 2 分钟，所以先在终端里跑一次，之后再让 pocket-bots 用。profile 还没建好时 pocket-bots 会直接告诉你先跑哪条命令，不会让聊天卡两分钟。
+
+3. **key。** DSH 把它存在自己的凭据文件里（`~/.dsh/.credentials.yaml`），所有 profile 共用，所以桌面版里存过的 key 不用再存一次；也可以在启动 pocket-bots 的环境里设 `SOPHON_API_KEY` 之类的变量。
+4. 重启 pocket-bots，左上角出现 **DeepSeek Harness** 就说明就绪了。bot 的 **Model** 下拉里是 DSH 自己列出的模型（按 `provider/model` 显示），**Thinking** 是这个模型的推理档位。
+
+和别的 agent 不一样的地方：
+
+- **不插话**：DSH 一次只收一条 prompt。一轮还在跑的时候再发消息会**排队**，等这一轮结束立刻发，界面上显示成「排队中」，不是报错。
+- **审批模式是 DSH 自己的沙箱**：**Read only**、**Workspace write**（默认）、**Full access**。前两档下越界的工具调用（改工作目录外的文件、跑要联网的命令…）会弹卡片，pocket-bots 照你的回答放行或拒绝；**Full access** 下 DSH 什么都不问。
+- 没有斜杠命令，也没有向你提问的工具。
+- bot 的指令是每个会话单独传给 DSH 的 system prompt 的，续接一个老会话时也一样生效。
 
 ## 2. 新建 bot
 
@@ -109,7 +147,7 @@ bot 还在干活时，回车发出的消息怎么处理，在 **设置 → Chats
 | Interrupts | 打断当前这一轮，从这条消息重新开始 |
 | Queues | 排队，等 bot 这一轮做完再自动发 |
 
-**⌘↵**（Windows 上是 Ctrl+Enter）做另一种：默认设置下是排队，选了 Queues 时是打断。排队的消息显示在输入框上方，可以编辑、立即发送或删掉。排队靠后端发送，关掉网页也会照发。
+**⌘↵**（Windows 上是 Ctrl+Enter）做另一种：默认设置下是排队，选了 Queues 时是打断。用 DeepSeek Harness 的 bot 没有插话这一说，选了 **Steers** 也按 **Queues** 处理：这一轮跑完再发。排队的消息显示在输入框上方，可以编辑、立即发送或删掉。排队靠后端发送，关掉网页也会照发。
 
 ### Stop
 
@@ -166,13 +204,13 @@ bot 一次给了好几个结果，想说清楚你指的是哪一个：鼠标移�
 
 默认每个 bot 有一个自己的工作目录 `~/.pocket-bots/Bots/<botId>/`，里面放 `MEMORY.md`、`memory/`（主题记忆和每日日志）和 `skills/`。Claude Code 就在这个目录里启动。
 
-想让 bot 在你的某个项目里干活，在 **Model → Working folder** 里选 **Custom** 并挑一个文件夹。记忆和技能仍然放在 bot 自己的目录里，pocket-bots 会告诉 Claude Code 这些目录也归它用，读写记忆不会因为「在工作目录之外」而弹审批（这对 Claude 和 Codex 成立，Codex 是在 Auto 模式下；OpenCode、Pi、Grok 没有这个功能，读写工作目录之外的记忆和技能仍可能弹审批）。
+想让 bot 在你的某个项目里干活，在 **Model → Working folder** 里选 **Custom** 并挑一个文件夹。记忆和技能仍然放在 bot 自己的目录里，pocket-bots 会告诉 Claude Code 这些目录也归它用，读写记忆不会因为「在工作目录之外」而弹审批（这对 Claude 和 Codex 成立，Codex 是在 Auto 模式下；OpenCode、Pi、Grok、DeepSeek Harness 没有这个功能，读写工作目录之外的记忆和技能仍可能弹审批）。
 
 **只给某个聊天换目录**：同一个 bot 在不同的仓库里干不同的活时，不用改 bot 的设置。新聊天的输入框左下角有个 📁 按钮，默认是 **Bot's folder**（bot 自己的工作目录）；点开从用过的目录里选（bot、群和最近的聊天用过的），或者 **Other folder…** 填一个绝对路径，比如 `/Users/me/code/my-repo`（`~/` 也行）。发出第一条消息时，这个聊天就在那个目录里启动。目录必须存在，不在就发不出去，提示哪里不对。选过的目录按 bot 记在浏览器里，这个 bot 的下一个新聊天也默认用它，点开选 **The bot's folder** 换回去。聊天开始以后，主目录就定了，不能再换：输入框里显示它在哪个目录（悬停看完整路径），**Copy path** 复制。要换主目录就开新聊天。记忆和技能照样放在 bot 自己的目录里，读写不弹审批。
 
 **给聊天再加几个文件夹**：主目录之外，聊天还能同时用别的文件夹（比如一个仓库改代码，另一个仓库查资料）。新聊天的输入框里，📁 旁边的 **+**（**Add folder**）从用过的目录里选，或者 **Other folder…** 填绝对路径；加进去的显示成带 × 的小标签，开聊天时一起带上。已开的聊天也一样，随时 **+** 加、× 去掉，不用开新聊天：会话接着原来的往下走，不丢上下文。聊天空闲时下一条消息就带着新列表继续；正在跑的一轮不被打断，跑完以后再生效。最多 20 个，必须是本机上存在的文件夹，和主目录相同的、重复的会自动去掉。
 
-- Claude 把它们当作自己能访问的附加目录。Codex 把它们加进沙箱的可写目录（Auto、Always Ask 模式），在里面改文件和在主目录里一样；改列表时 Codex 的会话不用重开，下一轮就用新的。OpenCode、Pi、Grok 不支持这个功能，它们的 agent 照样可以按绝对路径读写这些文件夹：pocket-bots 在 system prompt 里列出路径，列表中途改了，下一条消息前面会带一句说明（聊天里折叠成一行「Extra folders updated」）。这些 CLI 上输入框下面会有一行提示：这个 CLI 会按路径访问这些文件夹，操作可能需要审批。
+- Claude 把它们当作自己能访问的附加目录。Codex 把它们加进沙箱的可写目录（Auto、Always Ask 模式），在里面改文件和在主目录里一样；改列表时 Codex 的会话不用重开，下一轮就用新的。OpenCode、Pi、Grok、DeepSeek Harness 不支持这个功能，它们的 agent 照样可以按绝对路径读写这些文件夹：pocket-bots 在 system prompt 里列出路径，列表中途改了，下一条消息前面会带一句说明（聊天里折叠成一行「Extra folders updated」）。这些 CLI 上输入框下面会有一行提示：这个 CLI 会按路径访问这些文件夹，操作可能需要审批。
 - 额外文件夹不会自动加进信任的文件夹。Claude 上它和主目录一样：读文件不问，改文件按审批模式来（默认模式会问）；Codex 上也和主目录一样（Auto 模式下读写都不问）；其他 CLI 读文件一般不问，改文件、跑命令可能会问。审批卡的 **Allow in folder…** 里，如果请求在某个额外文件夹里，会把那个文件夹排在前面，一点就信任整个文件夹。
 - 群里的座位是普通聊天，但它的额外文件夹跟着群走，在座位的聊天里只能看、不能改，要到群里改。
 
@@ -302,7 +340,7 @@ MCP 服务器给 bot 增加工具。和技能一样，服务器放在共用的�
 2. **Access** 里每个服务器下面列着它的工具。勾上某个工具，表示这个 bot 调用它时**不用审批**。下面的 **Always allowed tools** 文本框是同一份列表，每行一个 `服务器/工具`。
 3. 新开的聊天就能用了。
 
-> 所有 agent 的审批都由 pocket-bots 自己回答，所以勾上的工具在五个 agent 上都免审批。在 Claude 的 `auto` 模式下，没勾的工具也可能被 Claude Code 的自动审批放行；想每次都问，把 bot 的审批模式设成 **Always Ask**。
+> 所有 agent 的审批都由 pocket-bots 自己回答，所以勾上的工具在六个 agent 上都免审批。在 Claude 的 `auto` 模式下，没勾的工具也可能被 Claude Code 的自动审批放行；想每次都问，把 bot 的审批模式设成 **Always Ask**。
 
 ## 9. 定时任务（Routines）
 
@@ -436,11 +474,11 @@ MCP 服务器给 bot 增加工具。和技能一样，服务器放在共用的�
 - 群菜单里的 **X's side**、bot 消息上的 ↗ 按钮也能进座位。座位不出现在侧栏 bot 的聊天列表里，打开后顶部有一条说明，可以跳回群。
 - 在座位里直接打字，是只对这个 bot 说，不进群。
 - 座位里，群发来的提示折叠成一行 **Group chat · 群名**。bot 的指令、记忆写入开关这类常驻 prompt 改了以后，用 Claude Code、Codex 的座位续接时第一条输入前会补发新的 prompt，显示成折叠的一行 **Instructions updated**，点开能看到补发的内容。
-- 用 Claude、Codex、OpenCode、Grok Build 的 bot 能开子 agent。没有 leader 的群里，它在群里负责回话、拆活和把关，大的、能拆成几块并行的活（或者会让它很久顾不上群的活）交给子 agent 去做，小活自己做，因为每个子 agent 都要从头读一遍；子 agent 不在群里说话，结果由这个 bot 核对后再报到群里。有 leader 的群里，成员自己做派给它的活。用 Pi 的 bot 没有这一条。
+- 用 Claude、Codex、DeepSeek Harness、OpenCode、Grok Build 的 bot 能开子 agent。没有 leader 的群里，它在群里负责回话、拆活和把关，大的、能拆成几块并行的活（或者会让它很久顾不上群的活）交给子 agent 去做，小活自己做，因为每个子 agent 都要从头读一遍；子 agent 不在群里说话，结果由这个 bot 核对后再报到群里。有 leader 的群里，成员自己做派给它的活。用 Pi 的 bot 没有这一条。
 - 座位空闲超过一小时、上下文又很大时，下次被叫醒会换一个新座位，带上一份简报：最近的群消息、它正在用的文件（重新读的当前内容）、最近做过的操作，以及它还没完成的任务：比续用一个冷掉的大上下文便宜。
 - pocket-bots 重启后，还有未读消息的 bot 会各收到一条补课提示：把未读读一遍就停，只有明确找它的事才处理。
 
-**bot 问你问题**：bot 遇到只有你能定的事（几个方案选哪个、它查不到的事实），会用它自己的提问工具问你：Claude 的 `AskUserQuestion`、OpenCode 的 `question`、Grok Build 的 `ask_user_question`。问题出现在群里，是这个 bot 的一条消息，显示成一张卡片，标着 **Waiting for you**：选好选项（或者在 **Something else…** 里自己写）点 **Submit**，答案回到问的那个 bot，它接着干活；不想答就点 **Dismiss**。答过以后卡片上显示 **Answered** 和你的回答。
+**bot 问你问题**：bot 遇到只有你能定的事（几个方案选哪个、它查不到的事实），会用它自己的提问工具问你：Claude 的 `AskUserQuestion`、OpenCode 的 `question`、Grok Build 的 `ask_user_question`（DeepSeek Harness 没有提问工具）。问题出现在群里，是这个 bot 的一条消息，显示成一张卡片，标着 **Waiting for you**：选好选项（或者在 **Something else…** 里自己写）点 **Submit**，答案回到问的那个 bot，它接着干活；不想答就点 **Dismiss**。答过以后卡片上显示 **Answered** 和你的回答。
 
 - 问题只是给你的：它不叫醒别的 bot，也不算它们的未读；别的 bot 读群消息时能看到问题和你的回答。
 - 在它的座位里回答也一样，群里的卡片跟着变。bot 这一轮没等到回答就结束了（比如你停了它），卡片显示 **Not answered**，不能再答。

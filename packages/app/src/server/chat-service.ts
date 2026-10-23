@@ -503,7 +503,10 @@ export class ChatService {
     const row = this.db.get<ChatRow>("SELECT * FROM chats WHERE id = ?", chatId);
     if (!row) return { ok: false, reason: "closed", detail: "This chat doesn't exist." };
     if (row.archived_at) this.db.run("UPDATE chats SET archived_at = NULL WHERE id = ?", chatId);
-    const outgoing: Outgoing = { message, clientMessageId: message.clientMessageId ?? randomUUID(), whenBusy, aliases: [] };
+    // A runtime that takes one prompt at a time (DeepSeek Harness) queues a message sent mid-turn
+    // rather than failing it: steer is the default, and asking for it would only be an error.
+    const mode = whenBusy === "steer" && this.runtimes.get(row.provider as ProviderId)?.capabilities.steer === false ? "queue" : whenBusy;
+    const outgoing: Outgoing = { message, clientMessageId: message.clientMessageId ?? randomUUID(), whenBusy: mode, aliases: [] };
     let result: SendResult;
     const start = this.starts.get(chatId);
     if (start && (start.phase === "queued" || start.phase === "opening")) {

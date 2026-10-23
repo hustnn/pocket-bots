@@ -1,6 +1,6 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ClaudeAdapter, CodexAdapter, FakeAdapter, GrokAdapter, OpenCodeAdapter, PiAdapter, type ProviderId, type RuntimeAdapter } from "@pocket-bots/runtime";
+import { ClaudeAdapter, CodexAdapter, DshAdapter, FakeAdapter, GrokAdapter, OpenCodeAdapter, PiAdapter, type ProviderId, type RuntimeAdapter } from "@pocket-bots/runtime";
 import { GROUP_LABEL } from "../shared/group-chat";
 import { savedApprovals, wireActivity } from "./activity";
 import { AskedAnswers } from "./answers";
@@ -28,7 +28,7 @@ import { ASKED_BY_LABEL } from "./tools/bots";
 
 /** The runtimes bots can run on. POCKET_BOTS_FAKE_RUNTIME=1 adds a scripted one for tests. */
 function runtimes(): Map<ProviderId, RuntimeAdapter> {
-  const list: RuntimeAdapter[] = [new ClaudeAdapter(), new CodexAdapter(), new OpenCodeAdapter(), new PiAdapter(), new GrokAdapter()];
+  const list: RuntimeAdapter[] = [new ClaudeAdapter(), new CodexAdapter(), new DshAdapter(), new OpenCodeAdapter(), new PiAdapter(), new GrokAdapter()];
   if (process.env.POCKET_BOTS_FAKE_RUNTIME === "1") list.push(new FakeAdapter());
   return new Map(list.map((adapter) => [adapter.id, adapter]));
 }

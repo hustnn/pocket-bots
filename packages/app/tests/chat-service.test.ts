@@ -27,7 +27,37 @@ afterEach(async () => {
   cleanup = null;
 });
 
+/** DeepSeek Harness reports steer: false, and its adapter refuses a second prompt mid-turn. */
+class NoSteerFake extends FakeAdapter {
+  readonly capabilities = { ...this.capabilities, steer: false };
+}
+
 describe("ChatService", () => {
+  // DeepSeek Harness takes one prompt at a time (steer: false): a message sent mid-turn is queued
+  // instead of coming back as steer_unavailable.
+  it("queues a mid-turn message on a runtime that can't steer", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bots-chats-"));
+    const db = new Db(join(dir, "bots.sqlite"));
+    const fake = new NoSteerFake((turn, step) => (step === 0 ? { say: "working" } : step === 1 ? { wait: 600 } : step === 2 ? { say: `after: ${turn.text}` } : null));
+    const chats = new ChatService(db, new Map([["fake", fake]]), async () => ({ systemPrompt: "test", mcpServers: {}, trustedTools: [] }), async () => null);
+    chats.start();
+    cleanup = () => chats.stop();
+    const turns: TurnEndedEvent[] = [];
+    const both = new Promise<void>((resolve) =>
+      chats.on("turn.ended", (event) => {
+        turns.push(event);
+        if (turns.length === 2) resolve();
+      }),
+    );
+    const id = await chats.create({ botId: "b1", provider: "fake", cwd: tmpdir(), labels: { "pocket-bots.bot": "b1" } }, { text: "first" });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(await chats.send(id, { text: "second", clientMessageId: "m2" })).toMatchObject({ ok: true, as: "queued" });
+    await both;
+    // The queued message ran as its own turn, after the first one.
+    expect(turns.map((event) => event.outcome.kind)).toEqual(["completed", "completed"]);
+    expect(chats.timeline(id, { direction: "tail" }).entries.some((entry) => JSON.stringify(entry.item).includes("after: second"))).toBe(true);
+  });
+
   it("runs a turn and stores the timeline", async () => {
     const { chats } = setup();
     cleanup = () => chats.stop();

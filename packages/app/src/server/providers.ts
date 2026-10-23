@@ -6,7 +6,7 @@ import type { ProviderEntry, ProvidersSnapshot } from "../shared/chat-types";
 
 const TTL_MS = 5 * 60_000;
 /** The approval mode a bot on "Provider default" gets, per runtime. */
-const DEFAULT_MODES: Partial<Record<ProviderId, string>> = { claude: "default", codex: "auto", opencode: "ask", pi: "ask", grok: "ask" };
+const DEFAULT_MODES: Partial<Record<ProviderId, string>> = { claude: "default", codex: "auto", dsh: "workspace-write", opencode: "ask", pi: "ask", grok: "ask" };
 
 export class Providers {
   private cached: { at: number; snapshot: ProvidersSnapshot } | null = null;
