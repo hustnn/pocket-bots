@@ -90,9 +90,9 @@ export class DshAdapter implements RuntimeAdapter {
     const binary = await this.binary();
     if (!binary) return { installed: false, auth: "unknown", diagnostic: "DeepSeek Harness isn't installed. Install the Desktop app, or run `npm install -g @deepseek-ai/dsh`." };
     const version = (await runQuiet(binary, ["--version"]))?.trim().split(/\s+/).at(-1);
-    // DSH keeps its keys in ~/.dsh/.credentials.yaml, shared by every profile; without it a model
-    // may still come from the environment, so this is only ever "ok" or "unknown".
-    const stored = await access(join(homedir(), ".dsh", ".credentials.yaml")).then(() => true, () => false);
+    // DSH keeps its keys in ~/.dsh/.credentials.yaml ($DSH_HOME when set), shared by every profile;
+    // without it a model may still come from the environment, so this is only ever "ok" or "unknown".
+    const stored = await access(join(dshHome(), ".credentials.yaml")).then(() => true, () => false);
     return { installed: true, ...(version ? { version } : {}), auth: stored ? "ok" : "unknown" };
   }
 
@@ -157,9 +157,10 @@ class DshSession extends SessionBase implements RuntimeSession {
   private reasoningKey: string | null = null;
   private reasoningText = "";
   private readonly tools = new Map<string, { name: string; detail: ToolCallDetail; input: unknown }>();
+  /** ACP server name (a tool name's middle part) → the caller's name, which grants are keyed by. */
+  private readonly mcpNames = new Map<string, string>();
   private interruptRequested = false;
   private closing = false;
-  private patchWarned = false;
   private stderrTail = "";
   /** Anything worth saying that happened while opening: nobody listens to events until open() returns. */
   private readonly notices: { level: "info" | "warning" | "error"; message: string }[] = [];
@@ -203,12 +204,25 @@ class DshSession extends SessionBase implements RuntimeSession {
       this.currentState = "closed";
       this.emit({ type: "exited", error: error ?? "DeepSeek Harness stopped." });
     });
-    await this.rpc.request("initialize", INITIALIZE, 60_000);
-    const mcpServers = await acpMcpServers(spec.mcpServers, (message) => this.notices.push({ level: "warning", message }));
+    await this.initialize();
+    const mcpServers = await acpMcpServers(spec.mcpServers, (message) => this.notices.push({ level: "warning", message }), this.mcpNames);
     let options = await this.openSession(mcpServers);
     options = await this.selectModel(options);
     this.currentState = "idle";
     this.setHandle({ provider: "dsh", sessionId: this.sessionId });
+  }
+
+  /** ACP's hello. A boot that fails here (a broken profile, an unresolvable model route) explains
+   * itself on stderr and nowhere else, so that text becomes the error the chat shows. */
+  private async initialize(): Promise<void> {
+    try {
+      await this.rpc.request("initialize", INITIALIZE, 60_000);
+    } catch (error) {
+      // A dying child's stderr can still be in the pipe when its exit is reported: let it land.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const tail = this.stderrTail.trim().slice(-800);
+      throw new Error(tail ? `${errorMessage(error)}\n${tail}` : errorMessage(error));
+    }
   }
 
   /** New, or resumed with a new one as the fallback: ACP's resume is the only way back into a session. */
@@ -244,7 +258,9 @@ class DshSession extends SessionBase implements RuntimeSession {
       else this.notices.push({ level: "warning", message: `DeepSeek Harness doesn't offer the model ${this.spec.model}; this chat runs on the one it has selected.` });
     }
     const thinking = thinkingFrom(options).map((option) => option.id);
-    if (this.spec.thinking && thinking.includes(this.spec.thinking)) {
+    // "" is the provider default, offered as an option of its own; sending it also undoes the level
+    // a resumed session had logged.
+    if (this.spec.thinking !== undefined && thinking.includes(this.spec.thinking)) {
       await this.rpc.request("session/set_config_option", { sessionId: this.sessionId, configId: "reasoning_effort", value: this.spec.thinking }, 30_000).catch(() => undefined);
     }
     return options;
@@ -301,9 +317,9 @@ class DshSession extends SessionBase implements RuntimeSession {
     if (this.currentState === "closed") return;
     this.closing = true;
     if (this.turnId) await this.interrupt();
-    // DSH keeps the session's own record: close it before the process goes, or it stays "active".
-    if (this.sessionId && !this.rpc.exited) await this.rpc.request("session/close", { sessionId: this.sessionId }, 10_000).catch(() => undefined);
-    this.rpc.kill();
+    // open() closes a session whose start() threw: there may be no process, and no session to close.
+    if (this.rpc && this.sessionId && !this.rpc.exited) await this.rpc.request("session/close", { sessionId: this.sessionId }, 10_000).catch(() => undefined);
+    if (this.rpc) this.rpc.kill();
     this.currentState = "closed";
     await this.removePatch();
   }
@@ -316,14 +332,9 @@ class DshSession extends SessionBase implements RuntimeSession {
     this.emit({ type: "item", turnId: null, key: `notice:${randomUUID()}`, item: { type: "notification", level, message } });
   }
 
-  /** DSH writes its own log lines to stdout (skipped by the JSON-RPC reader) and boot warnings to stderr. */
+  /** DSH writes its own log lines to stdout (skipped by the JSON-RPC reader) and failures to stderr. */
   private stderr(text: string): void {
     this.stderrTail = (this.stderrTail + text).slice(-4_000);
-    // A patch DSH couldn't apply (an entry renamed by an upgrade) fails silently otherwise.
-    if (!this.patchWarned && /patch: (entry .+ not found|name mismatch)/.test(this.stderrTail)) {
-      this.patchWarned = true;
-      this.notices.push({ level: "warning", message: "DeepSeek Harness didn't apply this chat's instructions: its system-prompt entry was not found (see the dsh output)." });
-    }
   }
 
   private async removePatch(): Promise<void> {
@@ -403,7 +414,9 @@ class DshSession extends SessionBase implements RuntimeSession {
     const known = this.tools.get(callId);
     const name = known?.name ?? "tool";
     const mcp = /^(?:mcp__)?([\w-]+)__([\w-]+)$/.exec(name);
-    if (mcp && isTrusted(this.spec.trustedTools, mcp[1]!, mcp[2]!)) return allow ? { outcome: { outcome: "selected", optionId: allow.optionId } } : { outcome: { outcome: "cancelled" } };
+    // The middle of an MCP tool's name is the ACP server name, which may be the rewritten one.
+    const server = mcp ? (this.mcpNames.get(mcp[1]!) ?? mcp[1]!) : null;
+    if (mcp && server && isTrusted(this.spec.trustedTools, server, mcp[2]!)) return allow ? { outcome: { outcome: "selected", optionId: allow.optionId } } : { outcome: { outcome: "cancelled" } };
     const controller = new AbortController();
     this.approvalAborts.add(controller);
     try {
@@ -486,8 +499,12 @@ async function writePromptPatch(key: string, prompt: string): Promise<string | n
   return file;
 }
 
-/** DSH mcp fields: stdio needs an absolute command, HTTP is passed through, SSE isn't supported. */
-async function acpMcpServers(servers: Record<string, McpServerConfig>, warn: (message: string) => void): Promise<unknown[]> {
+/**
+ * DSH mcp fields: stdio needs an absolute command, HTTP is passed through, SSE isn't supported.
+ * ACP names double as the middle part of every tool name (`mcp__name__tool`), so a name that isn't
+ * already ACP-safe is rewritten; `shown` keeps the caller's name for grants and approvals.
+ */
+async function acpMcpServers(servers: Record<string, McpServerConfig>, warn: (message: string) => void, shown: Map<string, string>): Promise<unknown[]> {
   const out: unknown[] = [];
   const names = new Set<string>();
   for (const [raw, server] of Object.entries(servers)) {
@@ -505,10 +522,12 @@ async function acpMcpServers(servers: Record<string, McpServerConfig>, warn: (me
         continue;
       }
       names.add(name);
+      shown.set(name, raw);
       out.push({ name, command: usable, args: server.args ?? [], env: Object.entries(server.env ?? {}).map(([key, value]) => ({ name: key, value })) });
       continue;
     }
     names.add(name);
+    shown.set(name, raw);
     out.push({ type: "http", name, url: server.url, headers: Object.entries(server.headers ?? {}).map(([key, value]) => ({ name: key, value })) });
   }
   return out;

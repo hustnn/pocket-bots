@@ -20,12 +20,18 @@ const readline = require("node:readline");
 const LOG = __LOG__;
 const FAIL_RESUME = __FAIL_RESUME__;
 const NO_MODEL = __NO_MODEL__;
+const FAIL_BOOT = __FAIL_BOOT__;
 if (process.argv.includes("--version")) {
   process.stdout.write("0.2.1-standin\\n");
   process.exit(0);
 }
 const args = process.argv.slice(2);
 appendFileSync(LOG, JSON.stringify({ start: true, args, mode: process.env.DSH_PERMISSION_MODE ?? null }) + "\\n");
+// A profile DSH refuses to boot: the reason only ever appears on stderr.
+if (FAIL_BOOT) {
+  process.stderr.write("dsh: profile acp: unknown model route sophon/nope\\n");
+  process.exit(1);
+}
 const out = (record) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...record }) + "\\n");
 const config = (current, thinking) => [
   { id: "model", name: "Model", category: "model", type: "select", currentValue: current, options: [
@@ -37,6 +43,8 @@ const config = (current, thinking) => [
 let current = '["prov","flash"]';
 let inflight = null;
 let permissionId = 900;
+// DSH names an MCP tool after the server name it was given, so the stand-in does too.
+let mcpServer = "notes";
 const watched = new Map();
 readline.createInterface({ input: process.stdin }).on("line", (line) => {
   const message = JSON.parse(line);
@@ -56,9 +64,11 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
     case "initialize":
       return reply({ protocolVersion: 1, agentInfo: { name: "dsh-standin" }, agentCapabilities: { mcpCapabilities: { http: true } }, authMethods: [] });
     case "session/new":
+      mcpServer = (params.mcpServers ?? [])[0]?.name ?? "notes";
       return reply({ sessionId: "session-new", configOptions: NO_MODEL ? [] : config(current, current.includes("pro")) });
     case "session/resume":
       if (FAIL_RESUME) return out({ id: message.id, error: { code: -32603, message: "no such session" } });
+      mcpServer = (params.mcpServers ?? [])[0]?.name ?? "notes";
       return reply({ configOptions: config(current, current.includes("pro")) });
     case "session/set_config_option": {
       if (params.configId === "model") current = params.value;
@@ -82,7 +92,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
       }
       if (text.includes("ask") || text.includes("mcp")) {
         const mcp = text.includes("mcp");
-        update({ sessionUpdate: "tool_call", toolCallId: "call-ask", title: mcp ? "mcp__notes__record_note" : "bash", kind: "other", status: "in_progress", rawInput: mcp ? { text: "hi" } : { command: "rm -rf build" } });
+        update({ sessionUpdate: "tool_call", toolCallId: "call-ask", title: mcp ? "mcp__" + mcpServer + "__record_note" : "bash", kind: "other", status: "in_progress", rawInput: mcp ? { text: "hi" } : { command: "rm -rf build" } });
         const id = ++permissionId;
         watched.set(id, (result) => {
           update({ sessionUpdate: "tool_call_update", toolCallId: "call-ask", status: "completed", content: [{ type: "content", content: { type: "text", text: "allowed: " + JSON.stringify(result) } }] });
@@ -104,12 +114,12 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 });
 `;
 
-function standIn(options: { failResume?: boolean; noModel?: boolean } = {}): { binary: string; log: string } {
+function standIn(options: { failResume?: boolean; noModel?: boolean; failBoot?: boolean } = {}): { binary: string; log: string } {
   const dir = mkdtempSync(join(tmpdir(), "bots-dsh-standin-"));
   const binary = join(dir, "dsh.cjs");
   const log = join(dir, "requests.jsonl");
   writeFileSync(binary, STANDIN.replace("__LOG__", JSON.stringify(log)).replace("__FAIL_RESUME__", options.failResume ? "true" : "false")
-    .replace("__NO_MODEL__", options.noModel ? "true" : "false"));
+    .replace("__NO_MODEL__", options.noModel ? "true" : "false").replace("__FAIL_BOOT__", options.failBoot ? "true" : "false"));
   chmodSync(binary, 0o755);
   return { binary, log };
 }
@@ -174,6 +184,12 @@ describe("DshAdapter", () => {
   it("says what to fix when the acp profile has no model", async () => {
     const { binary } = standIn({ noModel: true });
     await expect(new DshAdapter({ binary }).open(spec())).rejects.toThrow(/no model configured/);
+  });
+
+  it("carries what a failed boot said on stderr into the error", async () => {
+    const { binary } = standIn({ failBoot: true });
+    // DSH keeps its own logging off stderr here, so the adapter has to quote whatever it does write.
+    await expect(new DshAdapter({ binary }).open(spec())).rejects.toThrow(/unknown model route sophon\/nope/);
   });
 
   it("reads models and their reasoning levels out of a throwaway session", async () => {
@@ -244,6 +260,28 @@ describe("DshAdapter", () => {
     expect(asked).toBe(0);
     const items = run.events.flatMap((event) => (event.type === "item" && event.item.type === "tool_call" ? [event.item] : []));
     expect(items.at(-1)?.name).toBe("mcp__notes__record_note");
+    await session.close();
+  });
+
+  it("still matches a grant when the server name had to be rewritten for ACP", async () => {
+    const { binary } = standIn();
+    let asked = 0;
+    const session = await new DshAdapter({ binary }).open(
+      spec({
+        mcpServers: { "My Notes": { type: "http", url: "http://127.0.0.1:1/mcp" } },
+        trustedTools: ["My Notes"],
+        approvals: async () => {
+          asked += 1;
+          return { behavior: "deny" };
+        },
+      }),
+    );
+    const run = record(session);
+    await session.send({ text: "mcp" }, { whenBusy: "reject", clientMessageId: "c1" });
+    await run.ended;
+    expect(asked).toBe(0);
+    const items = run.events.flatMap((event) => (event.type === "item" && event.item.type === "tool_call" ? [event.item] : []));
+    expect(items.at(-1)?.name).toBe("mcp__My_Notes__record_note");
     await session.close();
   });
 
