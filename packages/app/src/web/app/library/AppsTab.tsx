@@ -23,7 +23,7 @@ function KeySetup() {
     <div className="card stack">
       <strong>Connect your Composio project</strong>
       <p className="hint" style={{ margin: 0 }}>
-        Connected apps run on your own Composio account: create a project at platform.composio.dev and copy its API key. The key stays on this computer; bots reach Composio through
+        Connected apps run on your own Composio account. Create a project at dashboard.composio.dev, then copy its project API key (ak_…) from Settings → API Keys — not the consumer key (ck_…) under Sessions & API Key, which only works for MCP clients. The key stays on this computer; bots reach Composio through
         pocket-bots's local relay, which only lets each bot use the apps you switch on for it.
       </p>
       <div className="row">
