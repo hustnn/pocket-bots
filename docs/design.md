@@ -11,7 +11,7 @@
 
 ## 1. 总览
 
-pocket-bots 是一个跑在你自己电脑上的个人 bot 平台。一个 bot = 一份配置（身份、指令、模型、技能、MCP 工具、连接的应用、定时任务）+ 一个工作目录（记忆、技能、上传的文件）。bot 本身不调模型 API：每个 bot 选一个本机已经登录好的编码 agent CLI（Claude Code、Codex、OpenCode、Pi、Grok Build）当「大脑」，pocket-bots 负责驱动这个 CLI、给它工具、替你回答它的审批、把它的输出存下来给你看。
+pocket-bots 是一个跑在你自己电脑上的个人 bot 平台。一个 bot = 一份配置（身份、指令、模型、技能、MCP 工具、连接的应用、定时任务）+ 一个工作目录（记忆、技能、上传的文件）。bot 本身不调模型 API：每个 bot 选一个本机已经登录好的编码 agent CLI（Claude Code、Codex、DeepSeek Harness、OpenCode、Pi、Grok Build）当「大脑」，pocket-bots 负责驱动这个 CLI、给它工具、替你回答它的审批、把它的输出存下来给你看。
 
 ```
  浏览器（React Web UI）
@@ -43,7 +43,7 @@ pocket-bots 是一个跑在你自己电脑上的个人 bot 平台。一个 bot =
 - **一个进程，一个数据目录。** 所有状态都在 `~/.pocket-bots`（可用 `POCKET_BOTS_HOME` 改）里，由一个 Node 进程独占（启动时加锁，第二个实例直接退出）。没有外部数据库、消息队列或多机协调。
 - **先提交，再展示。** runtime 的每个事件、群里的每条消息，都先写进 SQLite，再推给界面、再投递给 bot。进程随时被杀，重启后状态一致。
 - **runtime 层和业务分开。** `packages/runtime` 只管「驱动一个 agent 会话」：开会话、发消息、插话、打断、回答审批、续接、把输出统一成时间线条目。bot、群、记忆这些概念都在 `packages/app`。
-- **审批都由 pocket-bots 回答。** 五个 CLI 的审批请求都回调到同一套策略：bot 自己的工具直接放行，白名单里的放行，其余在聊天里弹卡片等你。
+- **审批都由 pocket-bots 回答。** 六个 CLI 的审批请求都回调到同一套策略：bot 自己的工具直接放行，白名单里的放行，其余在聊天里弹卡片等你。
 - **用 CLI 自己的登录。** pocket-bots 不保存、不注入任何模型 API key；每个 CLI 用它自己登录的账号和订阅额度。
 
 ---
@@ -54,7 +54,7 @@ pocket-bots 是一个跑在你自己电脑上的个人 bot 平台。一个 bot =
 
 | 包 | 内容 |
 |---|---|
-| `packages/runtime` | 直连五个 CLI 的运行时层：统一接口（`src/types.ts`）、五个适配器（`src/adapters/`）、工具调用详情的映射（`src/tool-detail.ts`）、提问工具的转换（`src/questions.ts`）、子进程环境清理（`src/env.ts`）、一个脚本化的假 runtime（测试用） |
+| `packages/runtime` | 直连六个 CLI 的运行时层：统一接口（`src/types.ts`）、六个适配器（`src/adapters/`）、工具调用详情的映射（`src/tool-detail.ts`）、提问工具的转换（`src/questions.ts`）、子进程环境清理（`src/env.ts`）、一个脚本化的假 runtime（测试用） |
 | `packages/app` | 后端（`src/server`）、Web UI（`src/web`）、两边共用的类型和纯逻辑（`src/shared`） |
 
 后端的主要组件：
@@ -156,7 +156,7 @@ type RuntimeEvent =
 - **`send` 有明确结果**：开了新一轮、插进了正在跑的一轮、排队了，还是被拒绝（以及为什么）。
 - **`input_accepted` 说明消息真的进了模型的上下文**，而不只是写进了进程。群聊靠它判断「这个 bot 的模型知道了什么」。
 
-五个 agent 的输出被统一成同一种**时间线条目**（`TimelineItem`）：用户消息、回复、思考、工具调用（带结构化详情：命令和输出、文件编辑的 diff、读文件、搜索、子 agent…）、待办列表、错误、通知、上下文压缩。存储和界面都只认这一种形状。
+六个 agent 的输出被统一成同一种**时间线条目**（`TimelineItem`）：用户消息、回复、思考、工具调用（带结构化详情：命令和输出、文件编辑的 diff、读文件、搜索、子 agent…）、待办列表、错误、通知、上下文压缩。存储和界面都只认这一种形状。
 
 `RuntimeCapabilities` 写死每个 agent 已验证的能力：能不能插话、插话落在哪（下一步 / 当前工具调用之后）、「收下」信号是真的送达还是只是排队、能不能看图、有没有子 agent 工具、续接时是否还用开始时的 system prompt、额外目录是不是原生交给 CLI、能不能不重开会话就换一组、会不会报告上下文压缩、有没有向用户提问的工具。
 
@@ -181,28 +181,30 @@ agent 要调用 pocket-bots 的工具（`ask_bot`、群聊工具、提议卡片�
 
 ---
 
-## 4. 和五个 agent CLI 的关系
+## 4. 和六个 agent CLI 的关系
 
 pocket-bots 不实现 agent，它是 agent CLI 的「宿主」：给 CLI 一个工作目录、一段追加的 system prompt、一组 MCP 工具，然后以用户的身份和它对话，并替用户回答它的审批。每个 CLI 都用它自己已经登录好的账号。
 
-| | Claude Code | Codex | OpenCode | Pi | Grok Build |
+| | Claude Code | Codex | DeepSeek Harness | OpenCode | Pi | Grok Build |
 |---|---|---|---|---|---|
-| 怎么驱动 | Claude Agent SDK `query()`（流式输入），指向本机 `claude` | `codex app-server`，stdio JSON-RPC | `opencode serve` + `@opencode/client` v2 | `pi --mode rpc`（JSONL）+ pocket-bots 生成的扩展 | ACP：`grok agent stdio` |
-| 登录 | 本机 `claude` 的 claude.ai 登录 | `codex login` | OpenCode 自己的配置 | Pi 的 `/login` | grok.com |
-| 插话进正在跑的一轮 | 一条 `priority: "next"` 的用户消息，当前工具调用结束后进上下文 | `turn/steer`，下一个模型步骤 | `delivery: "steer"`，当前工具调用后 | RPC `steer` | `_x.ai/interject` |
-| 「消息已进上下文」的信号 | 这条消息的生命周期变成 started | `turn/steer` 成功并出现这条 `userMessage` | inbox `delivered` | 队列清空后这条消息的 `message_start` | 没有单独的送达事件（排队即算收下） |
-| pocket-bots 的工具 | HTTP MCP（`bots`） | 动态工具（`dynamicTools`） | HTTP MCP + 权限规则 | 扩展注册的 MCP | ACP 会话的 MCP 服务器 |
-| 审批回到 pocket-bots | `canUseTool` | app-server 的审批请求 | 权限规则 + `permission.asked` | 扩展的 `tool_call` 钩子 | `session/request_permission` |
-| 续接 | `resume: sessionId` | `thread/resume` | 同一个会话 id | `--session-id` + `--session-dir` | `session/resume` |
-| 斜杠命令 | SDK 的命令列表，原样发送 | 内置 `/compact` + 技能 | 内置 `/compact` + 命令和技能 | 内置 `/compact` + RPC 命令列表 | ACP 推送的命令列表 |
-| 子 agent | ✅ | ✅ | ✅ | ✗ | ✅ |
-| 向用户提问的工具 | `AskUserQuestion` | `request_user_input`（只在 plan 模式下有） | `question` | ✗ | `ask_user_question` |
+| 怎么驱动 | Claude Agent SDK `query()`（流式输入），指向本机 `claude` | `codex app-server`，stdio JSON-RPC | ACP：`dsh --profile acp`，每个会话多一个 `--patch` overlay | `opencode serve` + `@opencode/client` v2 | `pi --mode rpc`（JSONL）+ pocket-bots 生成的扩展 | ACP：`grok agent stdio` |
+| 登录 | 本机 `claude` 的 claude.ai 登录 | `codex login` | DSH 自己的凭据（`~/.dsh/.credentials.yaml`） | OpenCode 自己的配置 | Pi 的 `/login` | grok.com |
+| 插话进正在跑的一轮 | 一条 `priority: "next"` 的用户消息，当前工具调用结束后进上下文 | `turn/steer`，下一个模型步骤 | —（一次一条 prompt，忙时排队） | `delivery: "steer"`，当前工具调用后 | RPC `steer` | `_x.ai/interject` |
+| 「消息已进上下文」的信号 | 这条消息的生命周期变成 started | `turn/steer` 成功并出现这条 `userMessage` | 没有（忙时直接拒绝，pocket-bots 降级成排队） | inbox `delivered` | 队列清空后这条消息的 `message_start` | 没有单独的送达事件（排队即算收下） |
+| pocket-bots 的工具 | HTTP MCP（`bots`） | 动态工具（`dynamicTools`） | ACP 会话的 MCP 服务器 | HTTP MCP + 权限规则 | 扩展注册的 MCP | ACP 会话的 MCP 服务器 |
+| 审批回到 pocket-bots | `canUseTool` | app-server 的审批请求 | `session/request_permission` | 权限规则 + `permission.asked` | 扩展的 `tool_call` 钩子 | `session/request_permission` |
+| 续接 | `resume: sessionId` | `thread/resume` | `session/resume`（cwd 要一致） | 同一个会话 id | `--session-id` + `--session-dir` | `session/resume` |
+| 斜杠命令 | SDK 的命令列表，原样发送 | 内置 `/compact` + 技能 | ✗ | 内置 `/compact` + 命令和技能 | 内置 `/compact` + RPC 命令列表 | ACP 推送的命令列表 |
+| 子 agent | ✅ | ✅ | ✅ | ✅ | ✗ | ✅ |
+| 向用户提问的工具 | `AskUserQuestion` | `request_user_input`（只在 plan 模式下有） | ✗ | `question` | ✗ | `ask_user_question` |
 
 几个由协议决定的细节：
 
 - **Codex 的工具**：pocket-bots 自己托管的 MCP 服务器（`hostedMcpServers`），Codex 适配器自己连上去列出工具，再作为 Codex 的动态工具交出去；调用时适配器转发给 relay。这样 Codex 不会为每次 MCP 调用发确认请求。
 - **OpenCode 的工具**：MCP 服务器按会话加入，pocket-bots 的工具和免审批的工具写成 `allow` 权限规则，其余是 `ask`。
 - **Grok 的每次 MCP 调用都会请求权限**：pocket-bots 的工具和白名单里的自动回答允许。
+- **DeepSeek Harness 的 prompt 和审批模式在启动时定**：它从 profile（插件树的 patch 层）启动，ACP 又没有 system prompt 字段、也没实现 `session/set_mode`。所以每个会话开进程时多带一个 `--patch` 文件，覆盖 acp profile 的 `system-prompt` 条目：DSH 打补丁时整块替换这条的 config，那句 `personaPrefix` 必须原样带上，bot 的指令放 `personaSuffix`（渲染在 DSH 自己那段之后）；DSH 对 `{{…}}` 是严格插值，遇到未知变量会抛错，适配器因此把 `{{` 拆开。审批模式走进程环境变量 `DSH_PERMISSION_MODE`，就是它的沙箱三档（沙箱根目录是进程的 cwd，所以会话在 bot 的工作目录里起）。这段 prompt 由 DSH 自己存成会话里的 `system/message`，每次模型调用前重新渲染、变了就替换，所以续接的会话会拿到新指令（`keepsPromptOnResume` 是 false，§6.6 那套补发用不上）。反过来，哪天 DSH 改掉了这个条目的 id、包名或整条配置的语义，patch 会被**静默跳过**（补丁告警走它自己的 logger，启动时并不写到 stderr），bot 就悄悄跑在 DSH 自己的 prompt 上。适配器因此每个 `DSH_HOME` 第一次开会话前做一次预检：把 profile 复制到临时目录（`--dump-config` 会重写它读到的 profile，不能直接跑用户的），拿同一个 patch 跑一次 `--dump-config`，只有输出里出现 `patch: entry "system-prompt" not found` 或 `name mismatch for "system-prompt"` 才判为没生效（其余失败一律当未知，避免误报），没生效就在会话里留一条警告。真机一次约 120ms，结果按 `DSH_HOME` 和 CLI 的修改时间缓存（应用跑着的时候 DSH 被就地升级也会重新问）。改动涉及 DSH 版本时（升级、换安装方式、改 acp profile）跑一次 `node packages/runtime/test/live-dsh-patch.ts [model]`，平时不用跑：不传模型时只 dump 组合配置（一秒左右、不花额度），报告 patch 还落不落，以及这条的哪些字段被整块替换（DSH 将来新增字段会在这里露出来，见上面说的「整块替换」）；传模型时再用一个随机暗号往返一次，证明文字确实渲染进了 system prompt——那是唯一能发现「字段还在但不再渲染」的办法。顺带说一句：`npm run test:live` **发现不了**这个问题——合同测试只要求模型照指令行动，不断言 system prompt 里有什么。
+- **DeepSeek Harness 列模型要开一个会话**：ACP 没有列模型的方法，模型和推理档位只出现在 `session/new`、`session/resume`、`session/set_config_option` 返回的 `configOptions` 里（值是 `["provider","model"]` 的 JSON 字符串）。探测时开一个临时会话（读完 `session/close`；DSH 会留下一条空会话记录），结果缓存 12 小时，真实会话每次返回的 `configOptions` 顺便刷新。
 - **Pi 原本没有审批**：pocket-bots 生成的扩展在 `tool_call` 钩子里回调到审批策略，Pi 也就有了审批。
 - **提问工具**：每个 CLI 的提问工具都被转换成一种「种类为 question 的审批」（`runtime/src/questions.ts`），界面显示成表单，回答按各 CLI 要求的格式送回。
 - **Codex 的额外目录**：`thread/start`、`thread/resume` 只收沙箱模式，所以额外目录随每次 `turn/start` 的 `sandboxPolicy` 交出去：开线程时 Codex 回的沙箱（带着用户 `config.toml` 里的设置）加上这些目录作为 `writableRoots`。一轮的沙箱 Codex 会沿用到之后的轮次，续接后却回到线程自己的，列表也可能中途换了，所以只要有目录要加（或要去掉）每轮都带；换列表因此不用重开会话（`liveDirectories`）。只用于沙箱是 workspace-write 的模式（Auto、Always Ask），只读和完全访问不动。`packages/runtime/test/live-directories.ts` 在真 CLI 上验证：额外目录里写文件不弹审批，中途加的下一轮能写，去掉的写不了，续接后照样能写。
@@ -267,7 +269,7 @@ skills/<name>/             这个 bot 用的技能（链接到共用的技能库
 uploads/                   聊天里上传的非文本文件
 ```
 
-托管目录同时就是 agent 的工作目录；选了自定义工作目录时，记忆和技能目录作为「额外可访问的目录」交给 agent，读写它们不弹审批。**这只对 Claude 和 Codex 成立**：`SessionSpec.extraDirectories` 只有这两个适配器读，Claude 映射成 `additionalDirectories`，Codex 映射成 workspace-write 沙箱的可写目录（`writableRoots`，见 §4；只读、完全访问模式不用，那里所有目录本来一样）；OpenCode、Pi、Grok 的适配器忽略它，能力位 `RuntimeCapabilities.additionalDirectories` 就是这个区别（claude、codex 为 true）；这三个 CLI 上 agent 照样能按绝对路径访问这些目录，但可能弹审批。
+托管目录同时就是 agent 的工作目录；选了自定义工作目录时，记忆和技能目录作为「额外可访问的目录」交给 agent，读写它们不弹审批。**这只对 Claude 和 Codex 成立**：`SessionSpec.extraDirectories` 只有这两个适配器读，Claude 映射成 `additionalDirectories`，Codex 映射成 workspace-write 沙箱的可写目录（`writableRoots`，见 §4；只读、完全访问模式不用，那里所有目录本来一样）；OpenCode、Pi、Grok、DeepSeek Harness 的适配器忽略它，能力位 `RuntimeCapabilities.additionalDirectories` 就是这个区别（claude、codex 为 true）；这些 CLI 上 agent 照样能按绝对路径访问这些目录，但可能弹审批。DeepSeek Harness 上只有**写**受限制：它的沙箱把可写根定成会话自己的工作目录加临时目录（`dsh-sandbox` 的 `writableRoots`，单根、`sandbox-policy` 里配的 `workspaceRoot` 只对没有会话的调用生效），而 ACP 的 `cwd` 只有一个、多给一个目录会直接报 `additionalDirectories is not supported`，所以写在主目录之外会先被拒、再由模型带 escalation 重试弹审批。
 
 **聊天的额外文件夹**（`chats.extra_folders`，JSON 数组，上限 20）是主目录之外的另一组目录，主目录 `chats.cwd` 的规则不变（创建后固定）。创建聊天（`pocket.chats.start`）时给，之后用 `pocket.chats.folders` 整体替换；每一项和主目录一样经 `workFolder` 校验（`~/` 展开、必须是存在的绝对路径文件夹），去重、去掉和主目录相同的，超了抛 `RequestError`。`chatSpecs` 把它们并进 `extraDirectories`（和技能目录、bot 目录合并去重，不含主目录），并写进 system prompt 的「Extra folders」段（§5.2）。
 

@@ -33,7 +33,7 @@ export function Splash({ onNewBot, onNewGroup }: { onNewBot: () => void; onNewGr
       <Lineup />
       <h1>Pocket Bots</h1>
       <p className="muted" style={{ maxWidth: 480, margin: 0 }}>
-        Personal bots on your own coding agents (Claude Code, Codex, OpenCode, Pi, Grok Build), each on its own login. Give each bot instructions, a model, memory, skills and tools, then chat with it, let it run routines, or put a few bots in a group chat to work together.
+        Personal bots on your own coding agents (Claude Code, Codex, DeepSeek Harness, OpenCode, Pi, Grok Build), each on its own login. Give each bot instructions, a model, memory, skills and tools, then chat with it, let it run routines, or put a few bots in a group chat to work together.
       </p>
       {providers.data && ready.length === 0 ? (
         <div className="notice warning" style={{ maxWidth: 520 }}>

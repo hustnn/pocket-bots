@@ -4,12 +4,12 @@
 
 ## 项目是什么
 
-pocket-bots 是跑在用户自己电脑上的个人 bot 平台。一个 bot = 一份配置（身份、指令、模型、技能、MCP、连接的应用、定时任务）+ 一个工作目录（记忆、技能、上传的文件）。bot 不直接调模型 API，而是驱动本机已登录的编码 agent CLI（Claude Code、Codex、OpenCode、Pi、Grok Build）当「大脑」：pocket-bots 负责开会话、给它工具、替用户回答审批、把输出存下来给 Web UI 看。几个 bot 还能进同一个群聊分工协作。
+pocket-bots 是跑在用户自己电脑上的个人 bot 平台。一个 bot = 一份配置（身份、指令、模型、技能、MCP、连接的应用、定时任务）+ 一个工作目录（记忆、技能、上传的文件）。bot 不直接调模型 API，而是驱动本机已登录的编码 agent CLI（Claude Code、Codex、DeepSeek Harness、OpenCode、Pi、Grok Build）当「大脑」：pocket-bots 负责开会话、给它工具、替用户回答审批、把输出存下来给 Web UI 看。几个 bot 还能进同一个群聊分工协作。
 
 ## 架构
 
 ```
-浏览器 (React) ──HTTP RPC / SSE──▶ App 后端（一个 Node 进程）──进程内调用──▶ packages/runtime ──▶ 五个 agent CLI
+浏览器 (React) ──HTTP RPC / SSE──▶ App 后端（一个 Node 进程）──进程内调用──▶ packages/runtime ──▶ 六个 agent CLI
                                      │  SQLite + bots.json                           │
                                      └── 127.0.0.1 Relay（MCP：bot 工具、应用代理、webhook）◀── agent 反向调用
 ```
@@ -30,7 +30,7 @@ pocket-bots 是跑在用户自己电脑上的个人 bot 平台。一个 bot = �
 packages/
 ├── runtime/                     @pocket-bots/runtime，直接导出 src/*.ts（无构建步骤）
 │   ├── src/types.ts             runtime 层的全部接口
-│   ├── src/adapters/            claude / codex / opencode / pi / grok，fake.ts 是测试用的脚本化 runtime
+│   ├── src/adapters/            claude / codex / dsh / opencode / pi / grok，fake.ts 是测试用的脚本化 runtime
 │   ├── src/session-base.ts      适配器共用的会话状态
 │   ├── src/tool-detail.ts       工具调用 → 时间线详情
 │   ├── src/questions.ts         各 CLI 的提问工具 → question 审批
@@ -69,6 +69,7 @@ npm run typecheck        # runtime + app 的 server / web 三份 tsconfig
 npm test                 # runtime 和 app 的全部 vitest（用 fake runtime，不调模型）
 npx vitest run --root packages/app tests/groups.test.ts   # 只跑一个文件
 npm run test:live -- claude   # 合同测试跑真 CLI（会消耗用户额度，只在改适配器时跑）
+node packages/runtime/test/live-dsh-patch.ts [model]   # 只在改 DSH 版本相关的东西时跑：它的私有条目还在不在、bot 指令还进不进 prompt
 ```
 
 开发时用单独的数据目录，别动用户真实的 `~/.pocket-bots`：`POCKET_BOTS_HOME=/tmp/pb-dev npm run dev`。`POCKET_BOTS_FAKE_RUNTIME=1` 会多出一个脚本化的 fake runtime。
