@@ -11,7 +11,7 @@
 // every real session refreshes it from the configOptions it returns. ACP has no steer: a prompt
 // while one is in flight is rejected, so mid-turn input reports steer_unavailable.
 import { randomUUID } from "node:crypto";
-import { access, constants, mkdir, rm, writeFile } from "node:fs/promises";
+import { access, constants, cp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { cleanEnv, findBinary, runQuiet } from "../env.ts";
@@ -77,6 +77,8 @@ export class DshAdapter implements RuntimeAdapter {
   readonly capabilities: RuntimeCapabilities = { steer: false, steerLands: "after_tool", steerAcceptance: "queued", images: false, subAgents: true, keepsPromptOnResume: false, additionalDirectories: false, liveDirectories: false, reportsCompaction: false };
   private readonly options: { binary?: string };
   private modelCache: { at: number; models: ModelDef[] } | null = null;
+  /** Whether the prompt patch still matches an entry, per DSH home (it doesn't change while we run). */
+  private readonly patchChecks = new Map<string, Promise<boolean>>();
 
   constructor(options: { binary?: string } = {}) {
     this.options = options;
@@ -134,7 +136,10 @@ export class DshAdapter implements RuntimeAdapter {
   async open(spec: SessionSpec): Promise<RuntimeSession> {
     const binary = await this.binary();
     if (!binary) throw new Error("DeepSeek Harness isn't installed, and its CLI isn't on PATH.");
-    const session = new DshSession(spec);
+    const home = dshHome({ ...process.env, ...spec.env });
+    // Only worth asking once the profile exists: start() reports a missing one itself.
+    const lands = (await profileInstalled(home)) ? await this.patchLands(binary, home) : true;
+    const session = new DshSession(spec, lands);
     try {
       await session.start(binary);
     } catch (error) {
@@ -143,6 +148,20 @@ export class DshAdapter implements RuntimeAdapter {
       throw error;
     }
     return session;
+  }
+
+  /**
+   * Whether this DSH still has the entry the per-chat patch targets — asked once per home by
+   * dumping the composed config against a throwaway copy of the profile, because the boot itself
+   * says nothing when a patch matches no entry (DSH logs that through its own logger, and its
+   * `--dump-config` rewrites the profile it reads).
+   */
+  private patchLands(binary: string, home: string): Promise<boolean> {
+    const cached = this.patchChecks.get(home);
+    if (cached) return cached;
+    const check = dumpAppliesPatch(binary, home);
+    this.patchChecks.set(home, check);
+    return check;
   }
 }
 
@@ -166,9 +185,13 @@ class DshSession extends SessionBase implements RuntimeSession {
   private readonly notices: { level: "info" | "warning" | "error"; message: string }[] = [];
   private readonly approvalAborts = new Set<AbortController>();
 
-  constructor(spec: SessionSpec) {
+  /** Whether the per-chat patch landed, decided before the process starts (see DshAdapter.patchLands). */
+  private readonly patchApplies: boolean;
+
+  constructor(spec: SessionSpec, patchApplies: boolean) {
     super();
     this.spec = spec;
+    this.patchApplies = patchApplies;
   }
 
   alive(): boolean | undefined {
@@ -188,6 +211,11 @@ class DshSession extends SessionBase implements RuntimeSession {
       throw new Error(`DeepSeek Harness isn't set up for pocket-bots yet: there's no "${PROFILE}" profile in ${join(home, "profiles")}. Run \`dsh --profile ${PROFILE}\` once in a terminal (its first boot installs the profile), give it a model in ${join(home, "profiles", PROFILE, "cordis.patch.yml")} (see docs/USAGE.md), then try again.`);
     }
     this.patchFile = await writePromptPatch(spec.key, spec.systemPrompt);
+    // A patch whose entry is gone is skipped without a word, so the bot would run on DSH's own
+    // prompt: the dump above is the only place that can say so.
+    if (!this.patchApplies && spec.systemPrompt.trim()) {
+      this.notices.push({ level: "warning", message: "DeepSeek Harness didn't apply this chat's instructions: the profile has no \"system-prompt\" entry for the patch to land on (a newer DSH may have moved it, so pocket-bots needs an update). This chat runs on DSH's own prompt." });
+    }
     const args = ["--profile", PROFILE, ...(this.patchFile ? ["--patch", this.patchFile] : [])];
     const mode = MODES.some((def) => def.id === spec.mode) ? spec.mode! : "workspace-write";
     this.rpc = new JsonRpcProcess(binary, args, { cwd: spec.cwd, env: cleanEnv({ ...spec.env, DSH_PERMISSION_MODE: mode }), jsonrpcField: true, onStderr: (text) => this.stderr(text) });
@@ -483,20 +511,54 @@ function contentText(content: unknown): string {
     .join("\n");
 }
 
+/** The entry every per-chat prompt patch replaces; DSH skips a patch that names another one. */
+const PROMPT_ENTRY = { id: "system-prompt", name: "@deepseek-ai/dsh-system-prompt" };
+/** The profile files a dump needs; the plugins themselves resolve from the install. */
+const PROFILE_FILES = ["cordis.yml", "cordis.patch.yml", "package.json", "pnpm-workspace.yaml"];
+
 /**
  * The bot's instructions as an overlay on the acp profile's system prompt. DSH replaces a patched
  * entry's whole config, so the persona line is restated; its own `{{…}}` template would fail on
  * any variable it doesn't know, so the bot's text has them defused.
  */
+function promptPatch(prompt: string): unknown[] {
+  const text = prompt.trim().replace(/\{\{/g, "{\u200B{");
+  return [{ ...PROMPT_ENTRY, config: { personaPrefix: PERSONA_PREFIX, personaSuffix: text } }];
+}
+
 async function writePromptPatch(key: string, prompt: string): Promise<string | null> {
-  const text = prompt.trim();
-  if (!text) return null;
+  if (!prompt.trim()) return null;
   const dir = join(tmpdir(), "pocket-bots-dsh");
   await mkdir(dir, { recursive: true });
   const file = join(dir, `${key.replace(/[^\w-]/g, "_")}-${randomUUID()}.json`);
-  const patch = [{ id: "system-prompt", name: "@deepseek-ai/dsh-system-prompt", config: { personaPrefix: PERSONA_PREFIX, personaSuffix: text.replace(/\{\{/g, "{\u200B{") } }];
-  await writeFile(file, JSON.stringify(patch, null, 2), "utf8");
+  await writeFile(file, JSON.stringify(promptPatch(prompt), null, 2), "utf8");
   return file;
+}
+
+/**
+ * Ask `--dump-config` whether the patch still lands, against a throwaway copy of the profile so the
+ * user's own files are never rewritten. Only DSH's two "skipped" warnings count as a no: a dump
+ * that fails for any other reason (a copy that can't resolve plugins) leaves the answer "yes", so a
+ * broken preflight can never raise a false alarm in a chat.
+ */
+async function dumpAppliesPatch(binary: string, home: string): Promise<boolean> {
+  const root = join(tmpdir(), "pocket-bots-dsh-check", randomUUID());
+  const profile = join(root, "profiles", PROFILE);
+  const source = join(home, "profiles", PROFILE);
+  try {
+    await mkdir(profile, { recursive: true });
+    for (const name of PROFILE_FILES) await cp(join(source, name), join(profile, name)).catch(() => undefined);
+    // An install keeps its plugins beside the profile: link, don't copy.
+    await symlink(join(source, "node_modules"), join(profile, "node_modules")).catch(() => undefined);
+    const patch = join(root, "probe.json");
+    await writeFile(patch, JSON.stringify(promptPatch("pocket-bots patch probe")), "utf8");
+    const dumped = await runQuiet(binary, ["--profile", PROFILE, "--dump-config", "--patch", patch], 15_000, cleanEnv({ DSH_HOME: root }));
+    return !/patch: (entry "system-prompt" not found|name mismatch for "system-prompt")/.test(dumped ?? "");
+  } catch {
+    return true;
+  } finally {
+    await rm(root, { recursive: true, force: true }).catch(() => undefined);
+  }
 }
 
 /**

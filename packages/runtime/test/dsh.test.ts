@@ -21,11 +21,18 @@ const LOG = __LOG__;
 const FAIL_RESUME = __FAIL_RESUME__;
 const NO_MODEL = __NO_MODEL__;
 const FAIL_BOOT = __FAIL_BOOT__;
+const NO_PROMPT_ENTRY = __NO_PROMPT_ENTRY__;
 if (process.argv.includes("--version")) {
   process.stdout.write("0.2.1-standin\\n");
   process.exit(0);
 }
 const args = process.argv.slice(2);
+// The adapter's pre-patch check: a dump says whether the entry a patch names still exists.
+if (args.includes("--dump-config")) {
+  if (NO_PROMPT_ENTRY) process.stderr.write('dsh: [probe] patch: entry "system-prompt" not found\\n');
+  process.stdout.write("[]\\n");
+  process.exit(0);
+}
 appendFileSync(LOG, JSON.stringify({ start: true, args, mode: process.env.DSH_PERMISSION_MODE ?? null }) + "\\n");
 // A profile DSH refuses to boot: the reason only ever appears on stderr.
 if (FAIL_BOOT) {
@@ -114,12 +121,13 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 });
 `;
 
-function standIn(options: { failResume?: boolean; noModel?: boolean; failBoot?: boolean } = {}): { binary: string; log: string } {
+function standIn(options: { failResume?: boolean; noModel?: boolean; failBoot?: boolean; noPromptEntry?: boolean } = {}): { binary: string; log: string } {
   const dir = mkdtempSync(join(tmpdir(), "bots-dsh-standin-"));
   const binary = join(dir, "dsh.cjs");
   const log = join(dir, "requests.jsonl");
   writeFileSync(binary, STANDIN.replace("__LOG__", JSON.stringify(log)).replace("__FAIL_RESUME__", options.failResume ? "true" : "false")
-    .replace("__NO_MODEL__", options.noModel ? "true" : "false").replace("__FAIL_BOOT__", options.failBoot ? "true" : "false"));
+    .replace("__NO_MODEL__", options.noModel ? "true" : "false").replace("__FAIL_BOOT__", options.failBoot ? "true" : "false")
+    .replace("__NO_PROMPT_ENTRY__", options.noPromptEntry ? "true" : "false"));
   chmodSync(binary, 0o755);
   return { binary, log };
 }
@@ -179,6 +187,18 @@ describe("DshAdapter", () => {
     await expect(new DshAdapter({ binary }).open(spec({ env: { DSH_HOME: join(tmpdir(), "dsh-home-missing") } }))).rejects.toThrow(/no "acp" profile/);
     // Nothing was spawned: no boot that would sit there installing plugins.
     expect(existsSync(log)).toBe(false);
+  });
+
+  it("warns when the profile has no entry for the patch to land on", async () => {
+    const { binary } = standIn({ noPromptEntry: true });
+    const session = await new DshAdapter({ binary }).open(spec({ systemPrompt: "You are Nova." }));
+    const run = record(session);
+    await session.send({ text: "hi" }, { whenBusy: "reject", clientMessageId: "c1" });
+    await run.ended;
+    const notice = run.events.find((event) => event.type === "item" && event.item.type === "notification");
+    expect(notice).toMatchObject({ item: { level: "warning" } });
+    expect(JSON.stringify(notice)).toContain("instructions");
+    await session.close();
   });
 
   it("says what to fix when the acp profile has no model", async () => {
