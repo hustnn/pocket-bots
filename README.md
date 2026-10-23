@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-Personal bots that run on your own computer. Each bot has its own instructions, model, long-term memory, skills, MCP tools and connected apps. You can chat with it, have it work on its own on a schedule or when a webhook arrives, and put several bots into one group chat to split up the work.
+Personal bots on your own machine, powered by the coding agents you already use. Each bot has its own instructions, model, long-term memory, skills, MCP tools and connected apps. You can chat with it, have it work on its own on a schedule or when a webhook arrives, and put several bots into one group chat to split up the work.
 
 pocket-bots drives the CLIs of six coding agents directly: **Claude Code, Codex, DeepSeek Harness, OpenCode, Pi and Grok Build**. Each CLI uses **the account and subscription you already logged in with**; pocket-bots never stores or injects any API key.
 

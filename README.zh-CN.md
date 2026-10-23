@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-跑在你自己电脑上的个人 bot。每个 bot 有自己的指令、模型、长期记忆、技能、MCP 工具和连接的应用；你可以和它聊天，让它按计划或在收到 webhook 时自己干活，还能把几个 bot 拉进一个群聊，让它们分工协作。
+跑在你自己电脑上的个人 bot，由你已经在用的编码 agent 驱动。每个 bot 有自己的指令、模型、长期记忆、技能、MCP 工具和连接的应用；你可以和它聊天，让它按计划或在收到 webhook 时自己干活，还能把几个 bot 拉进一个群聊，让它们分工协作。
 
 pocket-bots 直接驱动六个编码 agent 的 CLI：**Claude Code、Codex、DeepSeek Harness、OpenCode、Pi、Grok Build**。每个 CLI 用它**自己已经登录的账号和订阅额度**；pocket-bots 不保存、不注入任何 API key。
 
