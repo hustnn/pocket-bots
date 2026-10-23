@@ -269,7 +269,7 @@ skills/<name>/             这个 bot 用的技能（链接到共用的技能库
 uploads/                   聊天里上传的非文本文件
 ```
 
-托管目录同时就是 agent 的工作目录；选了自定义工作目录时，记忆和技能目录作为「额外可访问的目录」交给 agent，读写它们不弹审批。**这只对 Claude 和 Codex 成立**：`SessionSpec.extraDirectories` 只有这两个适配器读，Claude 映射成 `additionalDirectories`，Codex 映射成 workspace-write 沙箱的可写目录（`writableRoots`，见 §4；只读、完全访问模式不用，那里所有目录本来一样）；OpenCode、Pi、Grok 的适配器忽略它，能力位 `RuntimeCapabilities.additionalDirectories` 就是这个区别（claude、codex 为 true）；这三个 CLI 上 agent 照样能按绝对路径访问这些目录，但可能弹审批。
+托管目录同时就是 agent 的工作目录；选了自定义工作目录时，记忆和技能目录作为「额外可访问的目录」交给 agent，读写它们不弹审批。**这只对 Claude 和 Codex 成立**：`SessionSpec.extraDirectories` 只有这两个适配器读，Claude 映射成 `additionalDirectories`，Codex 映射成 workspace-write 沙箱的可写目录（`writableRoots`，见 §4；只读、完全访问模式不用，那里所有目录本来一样）；OpenCode、Pi、Grok、DeepSeek Harness 的适配器忽略它，能力位 `RuntimeCapabilities.additionalDirectories` 就是这个区别（claude、codex 为 true）；这些 CLI 上 agent 照样能按绝对路径访问这些目录，但可能弹审批。DeepSeek Harness 上只有**写**受限制：它的沙箱把可写根定成会话自己的工作目录加临时目录（`dsh-sandbox` 的 `writableRoots`，单根、`sandbox-policy` 里配的 `workspaceRoot` 只对没有会话的调用生效），而 ACP 的 `cwd` 只有一个、多给一个目录会直接报 `additionalDirectories is not supported`，所以写在主目录之外会先被拒、再由模型带 escalation 重试弹审批。
 
 **聊天的额外文件夹**（`chats.extra_folders`，JSON 数组，上限 20）是主目录之外的另一组目录，主目录 `chats.cwd` 的规则不变（创建后固定）。创建聊天（`pocket.chats.start`）时给，之后用 `pocket.chats.folders` 整体替换；每一项和主目录一样经 `workFolder` 校验（`~/` 展开、必须是存在的绝对路径文件夹），去重、去掉和主目录相同的，超了抛 `RequestError`。`chatSpecs` 把它们并进 `extraDirectories`（和技能目录、bot 目录合并去重，不含主目录），并写进 system prompt 的「Extra folders」段（§5.2）。
 
