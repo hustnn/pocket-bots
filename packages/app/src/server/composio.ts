@@ -118,13 +118,33 @@ async function sessionExists(apiKey: string, sessionId: string): Promise<boolean
   return true;
 }
 
+/** Where a project key lives, for errors about a key this setup can't use. */
+const PROJECT_KEY_HELP = "Use the project API key from Settings → API Keys in the Composio dashboard.";
+
+/** Composio's dashboard also offers keys for MCP clients and user routes; name the kind rather than echo a 401. */
+function wrongKeyKind(key: string): string | null {
+  if (key.startsWith("ck_")) return "That's a consumer key (ck_…), which only authenticates MCP clients.";
+  if (key.startsWith("uak_")) return "That's a user API key (uak_…), which this setup doesn't use.";
+  return null;
+}
+
 /** Saves a project key after proving it works by opening a session with it. */
 export async function setKey({ key }: { key: string }) {
   const apiKey = key.trim();
-  if (!apiKey.startsWith("ak_")) throw new RequestError("Composio project keys start with ak_.");
+  if (!apiKey) throw new RequestError("Enter a Composio project key.");
+  const kind = wrongKeyKind(apiKey);
+  if (kind) throw new RequestError(`${kind} ${PROJECT_KEY_HELP}`);
+  if (!apiKey.startsWith("ak_")) throw new RequestError(`Composio project keys start with ak_. ${PROJECT_KEY_HELP}`);
   const state = await readState();
-  const session = await createSession(apiKey, state.userId);
-  await writeState({ apiKey, sessionId: session.session_id, mcpUrl: session.mcp.url, multiAccount: true });
+  let created: SessionResponse;
+  try {
+    created = await createSession(apiKey, state.userId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/invalid api key/i.test(message)) throw new RequestError(`${message}. ${PROJECT_KEY_HELP}`);
+    throw error;
+  }
+  await writeState({ apiKey, sessionId: created.session_id, mcpUrl: created.mcp.url, multiAccount: true });
   forgetCaches();
   return { ok: true };
 }

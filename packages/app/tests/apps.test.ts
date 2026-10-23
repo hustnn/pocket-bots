@@ -236,9 +236,12 @@ describe("Composio client and relay", () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  it("checks a key by opening a session and keeps it out of the status", async () => {
+  it("checks a key's kind and prefix before opening a session, and keeps it out of the status", async () => {
     const composio = await import("../src/server/composio");
+    await expect(composio.setKey({ key: "   " })).rejects.toThrow("Enter a Composio project key");
     await expect(composio.setKey({ key: "sk-wrong" })).rejects.toThrow("start with ak_");
+    // The dashboard's consumer key is for MCP clients; Composio's REST API never accepts it.
+    await expect(composio.setKey({ key: "ck_consumer0123456789" })).rejects.toThrow("only authenticates MCP clients");
     await expect(composio.setKey({ key: "ak_bad" })).rejects.toThrow("Invalid API key");
     await composio.setKey({ key: "ak_test" });
     expect(await composio.status()).toEqual({ configured: true, keyHint: "ak_…test" });

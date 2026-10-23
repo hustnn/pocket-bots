@@ -533,7 +533,7 @@ Setup changes 能改的东西很多：建 bot、改 bot 的指令/模型/审批�
 
 让 bot 用 Gmail、Slack、GitHub、日历等应用，走的是**你自己的 Composio 账号**：
 
-1. 在 [platform.composio.dev](https://platform.composio.dev) 建一个项目，复制它的 API key（以 `ak_` 开头）。
+1. 在 [dashboard.composio.dev](https://dashboard.composio.dev) 建一个项目，从项目的 **Settings → API Keys** 复制 project API key（`ak_…` 开头）。不要用 **Sessions & API Key** 里的 consumer key（`ck_…`）：它只能给 MCP 客户端用，pocket-bots 调的是 Composio 的 REST API。
 2. **Skills & Tools → Connected apps → Connect**，粘贴 key。key 只存在本机（`composio.json`，权限 0600），不会交给 bot。
 3. 在应用列表里连接你要用的应用并登录。同一个应用可以连多个账号（比如工作和个人），可以给账号起名。
 4. 在 bot 的 **Access → Connected apps** 里给它打开需要的应用，并选：
