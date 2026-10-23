@@ -69,7 +69,7 @@ npm run typecheck        # runtime + app 的 server / web 三份 tsconfig
 npm test                 # runtime 和 app 的全部 vitest（用 fake runtime，不调模型）
 npx vitest run --root packages/app tests/groups.test.ts   # 只跑一个文件
 npm run test:live -- claude   # 合同测试跑真 CLI（会消耗用户额度，只在改适配器时跑）
-node packages/runtime/test/live-dsh-patch.ts [model]   # 升级 DeepSeek Harness 后：它的私有条目还在不在、bot 指令还进不进 prompt
+node packages/runtime/test/live-dsh-patch.ts [model]   # 只在改 DSH 版本相关的东西时跑：它的私有条目还在不在、bot 指令还进不进 prompt
 ```
 
 开发时用单独的数据目录，别动用户真实的 `~/.pocket-bots`：`POCKET_BOTS_HOME=/tmp/pb-dev npm run dev`。`POCKET_BOTS_FAKE_RUNTIME=1` 会多出一个脚本化的 fake runtime。
