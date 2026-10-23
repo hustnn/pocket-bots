@@ -169,8 +169,6 @@ describe("Composio client and relay", () => {
   ];
   const sessionBodies: Record<string, unknown>[] = [];
   const linkBodies: Record<string, unknown>[] = [];
-  /** Keys the fake accepts. Composio's key format changes, so the client can't check one itself. */
-  const validKeys = new Set(["ak_test", "csk_live_0123456789abcd"]);
 
   beforeAll(async () => {
     home = await mkdtemp(join(tmpdir(), "pocket-bots-apps-"));
@@ -182,7 +180,7 @@ describe("Composio client and relay", () => {
         const url = new URL(request.url!, origin);
         calls.push(`${request.method} ${url.pathname}`);
         const send = (status: number, value: unknown) => response.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(value));
-        if (!validKeys.has(request.headers["x-api-key"] as string)) return send(401, { message: "Invalid API key" });
+        if (request.headers["x-api-key"] !== "ak_test") return send(401, { message: "Invalid API key" });
         if (request.method === "POST" && url.pathname === "/api/v3.1/tool_router/session") {
           const parsed = JSON.parse(body) as { user_id: string };
           expect(parsed.user_id).toMatch(/^pocket_bots_/);
@@ -238,15 +236,12 @@ describe("Composio client and relay", () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  it("checks a key by opening a session, whatever its format, and keeps it out of the status", async () => {
+  it("checks a key by opening a session and keeps it out of the status", async () => {
     const composio = await import("../src/server/composio");
-    await expect(composio.setKey({ key: "   " })).rejects.toThrow("Enter a Composio project key");
-    await expect(composio.setKey({ key: "bad_key" })).rejects.toThrow("Invalid API key");
-    // No prefix check: any key is tried against Composio, which decides whether it's valid.
-    await composio.setKey({ key: "csk_live_0123456789abcd" });
-    expect(await composio.status()).toEqual({ configured: true, keyHint: "…abcd" });
+    await expect(composio.setKey({ key: "sk-wrong" })).rejects.toThrow("start with ak_");
+    await expect(composio.setKey({ key: "ak_bad" })).rejects.toThrow("Invalid API key");
     await composio.setKey({ key: "ak_test" });
-    expect(await composio.status()).toEqual({ configured: true, keyHint: "…test" });
+    expect(await composio.status()).toEqual({ configured: true, keyHint: "ak_…test" });
     const info = await stat(join(home, "composio.json"));
     expect(info.mode & 0o077).toBe(0);
   });
