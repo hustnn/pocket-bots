@@ -538,13 +538,14 @@ async function writePromptPatch(key: string, prompt: string): Promise<string | n
   return file;
 }
 
-/**
- * Ask `--dump-config` whether the patch still lands, against a throwaway copy of the profile so the
- * user's own files are never rewritten. Only DSH's two "skipped" warnings count as a no: a dump
- * that fails for any other reason (a copy that can't resolve plugins) leaves the answer "yes", so a
- * broken preflight can never raise a false alarm in a chat.
- */
-async function dumpAppliesPatch(binary: string, home: string): Promise<boolean> {
+/** Text the probe patch carries, so a dump can be told apart from the profile's own. */
+const PATCH_PROBE = "pocket-bots patch probe";
+
+/** DSH's own words when a patch matched no entry: the only sign that a chat's instructions are lost. */
+const SKIPPED_PATCH = new RegExp(`patch: (entry "${PROMPT_ENTRY.id}" not found|name mismatch for "${PROMPT_ENTRY.id}")`);
+
+/** The composed config, dumped against a throwaway copy of the profile so the user's files are never rewritten. */
+async function dumpProfile(binary: string, home: string, patch: unknown[] | null): Promise<string | null> {
   const root = join(tmpdir(), "pocket-bots-dsh-check", randomUUID());
   const profile = join(root, "profiles", PROFILE);
   const source = join(home, "profiles", PROFILE);
@@ -553,17 +554,66 @@ async function dumpAppliesPatch(binary: string, home: string): Promise<boolean> 
     for (const name of PROFILE_FILES) await cp(join(source, name), join(profile, name)).catch(() => undefined);
     // An install keeps its plugins beside the profile: link, don't copy.
     await symlink(join(source, "node_modules"), join(profile, "node_modules")).catch(() => undefined);
-    const patch = join(root, "probe.json");
-    await writeFile(patch, JSON.stringify(promptPatch("pocket-bots patch probe")), "utf8");
-    const dumped = await runQuiet(binary, ["--profile", PROFILE, "--dump-config", "--patch", patch], 15_000, cleanEnv({ DSH_HOME: root }));
-    return !/patch: (entry "system-prompt" not found|name mismatch for "system-prompt")/.test(dumped ?? "");
-  } catch {
-    return true;
+    const args = ["--profile", PROFILE, "--dump-config"];
+    if (patch) {
+      const file = join(root, "patch.json");
+      await writeFile(file, JSON.stringify(patch), "utf8");
+      args.push("--patch", file);
+    }
+    return await runQuiet(binary, args, 15_000, cleanEnv({ DSH_HOME: root }));
   } finally {
     await rm(root, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
+/**
+ * Whether the per-chat patch still lands. Only DSH's two "skipped" warnings count as a no: a dump
+ * that fails for any other reason (a copy that can't resolve plugins) leaves the answer "yes", so a
+ * broken preflight can never raise a false alarm in a chat.
+ */
+async function dumpAppliesPatch(binary: string, home: string): Promise<boolean> {
+  try {
+    const dumped = await dumpProfile(binary, home, promptPatch(PATCH_PROBE));
+    return !SKIPPED_PATCH.test(dumped ?? "");
+  } catch {
+    return true;
+  }
+}
+
+/** The config keys of the `system-prompt` entry, read off a dump's list without a YAML parser. */
+function promptEntryKeys(dumped: string): string[] | null {
+  const lines = dumped.split("\n");
+  const start = lines.findIndex((line) => line === `- id: ${PROMPT_ENTRY.id}`);
+  if (start < 0) return null;
+  const keys: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    if (line.startsWith("- ")) break;
+    const key = /^ {4}(\w+):/.exec(line);
+    if (key?.[1]) keys.push(key[1]);
+  }
+  return keys;
+}
+
+/**
+ * What this DSH says about the entry every chat's patch replaces, for `test/live-dsh-patch.ts`:
+ * whether the patch still lands, and which of the entry's fields the patch replaces wholesale (a
+ * field DSH added shows up here, before it silently falls back to a default in every DSH chat).
+ */
+export async function inspectPromptPatch(options: { binary?: string } = {}): Promise<{ version?: string; lands: boolean; replaced: string[] }> {
+  const binary = await findDsh(options.binary);
+  if (!binary) throw new Error("DeepSeek Harness isn't installed, and its CLI isn't on PATH.");
+  const home = dshHome();
+  const version = (await runQuiet(binary, ["--version"]))?.trim().split(/\s+/).at(-1);
+  // Dumped twice: the same profile, with and without the patch a chat would carry.
+  const plainDump = (await dumpProfile(binary, home, null)) ?? "";
+  const patchedDump = (await dumpProfile(binary, home, promptPatch(PATCH_PROBE))) ?? "";
+  const [plain, patched] = [promptEntryKeys(plainDump), promptEntryKeys(patchedDump)];
+  // Either DSH says it matched nothing, or its list no longer has the entry the patch names: a test
+  // should be loud about both, so a dump this can't read counts as a failure too.
+  const lands = !SKIPPED_PATCH.test(patchedDump) && plain !== null && patched !== null;
+  const replaced = plain === null || patched === null ? [] : plain.filter((key) => !patched.includes(key));
+  return { ...(version ? { version } : {}), lands, replaced };
+}
 /**
  * DSH mcp fields: stdio needs an absolute command, HTTP is passed through, SSE isn't supported.
  * ACP names double as the middle part of every tool name (`mcp__name__tool`), so a name that isn't
