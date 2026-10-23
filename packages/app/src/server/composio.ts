@@ -118,10 +118,10 @@ async function sessionExists(apiKey: string, sessionId: string): Promise<boolean
   return true;
 }
 
-/** Saves a project key after proving it works by opening a session with it. */
+/** Saves a project key after proving it works by opening a session with it. Composio's key format changes, so any non-empty key is tried. */
 export async function setKey({ key }: { key: string }) {
   const apiKey = key.trim();
-  if (!apiKey.startsWith("ak_")) throw new RequestError("Composio project keys start with ak_.");
+  if (!apiKey) throw new RequestError("Enter a Composio project key.");
   const state = await readState();
   const session = await createSession(apiKey, state.userId);
   await writeState({ apiKey, sessionId: session.session_id, mcpUrl: session.mcp.url, multiAccount: true });
@@ -137,7 +137,7 @@ export async function removeKey() {
 
 export async function status() {
   const { apiKey } = await readState();
-  return { configured: !!apiKey, keyHint: apiKey ? `ak_…${apiKey.slice(-4)}` : null };
+  return { configured: !!apiKey, keyHint: apiKey ? `…${apiKey.slice(-4)}` : null };
 }
 
 /** The key and a live session, recreating the session when Composio has dropped it. */
