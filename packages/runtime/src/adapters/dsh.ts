@@ -11,7 +11,7 @@
 // every real session refreshes it from the configOptions it returns. ACP has no steer: a prompt
 // while one is in flight is rejected, so mid-turn input reports steer_unavailable.
 import { randomUUID } from "node:crypto";
-import { access, constants, cp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { access, constants, cp, mkdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { cleanEnv, findBinary, runQuiet } from "../env.ts";
@@ -156,11 +156,14 @@ export class DshAdapter implements RuntimeAdapter {
    * says nothing when a patch matches no entry (DSH logs that through its own logger, and its
    * `--dump-config` rewrites the profile it reads).
    */
-  private patchLands(binary: string, home: string): Promise<boolean> {
-    const cached = this.patchChecks.get(home);
+  private async patchLands(binary: string, home: string): Promise<boolean> {
+    // Keyed by the install too: a DSH updated under a running app has to be asked again.
+    const stamp = await stat(binary).then((info) => `${info.mtimeMs}:${info.size}`, () => "unknown");
+    const key = `${home}\n${stamp}`;
+    const cached = this.patchChecks.get(key);
     if (cached) return cached;
     const check = dumpAppliesPatch(binary, home);
-    this.patchChecks.set(home, check);
+    this.patchChecks.set(key, check);
     return check;
   }
 }
