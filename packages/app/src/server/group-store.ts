@@ -3,6 +3,8 @@ import type { SQLInputValue } from "node:sqlite";
 import {
   DRAFT_TTL_MS,
   FRESHNESS_EXEMPT_SUBTYPES,
+  GROUP_TASK_DESCRIPTION_MAX,
+  GROUP_TASK_TITLE_MAX,
   GROUP_USER_ID,
   TASK_TRANSITIONS,
   deliveryReason,
@@ -1168,7 +1170,7 @@ export class GroupStore {
         assignee?.kind ?? null,
         assignee?.id ?? null,
         assignee?.name ?? null,
-        text,
+        text.slice(0, GROUP_TASK_TITLE_MAX),
         by.id,
         at,
         at,
@@ -1302,6 +1304,8 @@ export class GroupStore {
     return this.db.tx(() => {
       const task = this.task(groupId, { number });
       if (!task) return { ok: false as const, reason: `there's no task #${number}` };
+      if (patch.title !== undefined && patch.title.length > GROUP_TASK_TITLE_MAX) return { ok: false as const, reason: `the title is longer than ${GROUP_TASK_TITLE_MAX} characters` };
+      if (patch.description !== undefined && patch.description !== null && patch.description.length > GROUP_TASK_DESCRIPTION_MAX) return { ok: false as const, reason: `the description is longer than ${GROUP_TASK_DESCRIPTION_MAX} characters` };
       const changes: Partial<Record<"title" | "description", { from: string | null; to: string | null }>> = {};
       if (patch.title !== undefined && patch.title !== task.title) changes.title = { from: task.title, to: patch.title };
       if (patch.description !== undefined && patch.description !== task.description) changes.description = { from: task.description, to: patch.description };

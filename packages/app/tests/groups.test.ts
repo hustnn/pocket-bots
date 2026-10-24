@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { FakeAdapter, type FakeScript, type FakeStep, type FakeTurn } from "@pocket-bots/runtime";
+import { GROUP_READ_TOTAL_MAX, GROUP_TASK_DESCRIPTION_MAX, GROUP_TASK_LIST_MAX } from "../src/shared/group-chat";
 import { fakeHost, makeBot } from "./helpers";
 
 type BotScript = (turn: FakeTurn, step: number, botId: string) => FakeStep | null;
@@ -121,6 +122,45 @@ describe("group chats", () => {
     expect(metrics.read_bytes).toBeGreaterThan(0);
     expect(metrics.claims).toBe(0);
   });
+
+  it("bounds a read page, points at full, and leaves omitted messages unread", async () => {
+    const group = await setup(() => null);
+    stop = group.stop;
+    const alpha = (await group.host.bot("alpha"))!;
+    for (let index = 1; index <= 10; index++) await group.groups.postFromUser(group.id, { text: `${"x".repeat(5_000)} tail-${index}` });
+    await settle(group);
+
+    const page = await group.groups.read(alpha, group.id, { unread: true });
+    expect(page.length).toBeLessThanOrEqual(GROUP_READ_TOTAL_MAX + 500);
+    expect(page).toContain("group_read full: ");
+    expect(group.store.pending(group.id, "alpha").length).toBeGreaterThan(0);
+    expect(group.store.pending(group.id, "alpha").length).toBeLessThan(10);
+
+    const before = group.store.cursor(group.id, "alpha", 0);
+    const full = await group.groups.read(alpha, group.id, { full: 10 });
+    expect(full).toContain("Full message #10");
+    expect(full).toContain("tail-10");
+    expect(full.length).toBeLessThanOrEqual(20_100);
+    expect(group.store.cursor(group.id, "alpha", 0)).toBe(before);
+  }, 15_000);
+
+  it("caps task cards and task lists", async () => {
+    const group = await setup(() => null);
+    stop = group.stop;
+    const alpha = (await group.host.bot("alpha"))!;
+    const titles = Array.from({ length: GROUP_TASK_LIST_MAX + 1 }, (_, index) => `task ${index + 1}`);
+    // group_task create takes ten titles per call, so make the list with a few calls.
+    for (let index = 0; index < titles.length; index += 10) {
+      await group.groups.task(alpha, group.id, { action: "create", titles: titles.slice(index, index + 10) });
+    }
+    await settle(group);
+
+    const list = await group.groups.task(alpha, group.id, { action: "list", filter: "all" });
+    expect(list.split("\n").filter((line) => line.startsWith("- task #"))).toHaveLength(GROUP_TASK_LIST_MAX);
+    expect(list).toContain(`(${titles.length - GROUP_TASK_LIST_MAX} more tasks not shown`);
+
+    expect(await group.groups.task(alpha, group.id, { action: "amend", task: 1, description: "d".repeat(GROUP_TASK_DESCRIPTION_MAX + 1) })).toContain(`longer than ${GROUP_TASK_DESCRIPTION_MAX}`);
+  }, 20_000);
 
   it("answers an open question once: the second bot's post is held, and it lets it go", async () => {
     // Both read the question at once; Alpha answers first, Beta (slower) after it.

@@ -14,16 +14,20 @@ import {
   DELIVERY_MAX,
   deliveryFailureOf,
   GROUP_LABEL,
+  GROUP_READ_FULL_MAX,
+  GROUP_READ_MESSAGE_MAX,
+  GROUP_READ_TOTAL_MAX,
+  GROUP_TASK_LIST_MAX,
   GROUP_USER,
   GROUP_USER_ID,
   groupQuestion,
   HELD_SHOWN,
   heldText,
-  historyText,
   inboxText,
   membersProblem,
   mentionDeliveryText,
   messagePreview,
+  messageText,
   newGroupChatId,
   parseMentions,
   placeName,
@@ -682,33 +686,78 @@ export class GroupChats {
    * read position) to the newest message read; one that leaves a gap records each
    * message instead.
    */
-  async read(bot: Bot, groupId: string, input: { unread?: boolean; before?: number | null; around?: number | null; limit?: number; thread?: number | null; topLevel?: boolean }): Promise<string> {
+  async read(bot: Bot, groupId: string, input: { unread?: boolean; full?: number | null; before?: number | null; around?: number | null; limit?: number; thread?: number | null; topLevel?: boolean }): Promise<string> {
     const text = await this.readNow(bot, groupId, input);
     this.store.bumpMetric(groupId, "read_bytes", Buffer.byteLength(text, "utf8"));
     return text;
   }
 
-  private async readNow(bot: Bot, groupId: string, input: { unread?: boolean; before?: number | null; around?: number | null; limit?: number; thread?: number | null; topLevel?: boolean }): Promise<string> {
+  /**
+   * Renders a read page under a fixed budget. Whole messages are kept when possible; one long
+   * message is cut (with a full: pointer), and messages beyond the budget are dropped from the
+   * end (keep first) or the start (keep last). Returns what was shown, so only that is marked seen.
+   */
+  private readHistory(
+    messages: readonly GroupMessage[],
+    hasOlder: boolean,
+    botId: string,
+    options: { thread?: number | null; parents?: ReadonlyMap<number, GroupMessage>; keep?: "first" | "last" | "middle" } = {},
+  ): { text: string; messages: GroupMessage[]; omitted: number } {
+    const keep = options.keep ?? "last";
+    const shown = [...messages];
+    const render = (message: GroupMessage) => {
+      const full = messageText(message, botId, options.parents);
+      if (full.length <= GROUP_READ_MESSAGE_MAX) return full;
+      return `${full.slice(0, GROUP_READ_MESSAGE_MAX)}\n\n[truncated: group_read full: ${message.seq} for the rest of this message]`;
+    };
+    const build = () => {
+      const lines = shown.map(render);
+      if (hasOlder && lines.length) lines.unshift(`(Earlier messages exist: group_read with ${options.thread ? `thread: ${options.thread}, ` : ""}before: ${shown.find((message) => message.thread)?.seq ?? shown[0]!.seq}.)`);
+      return lines.join("\n\n");
+    };
+    let text = build();
+    let omitted = 0;
+    while (text.length > GROUP_READ_TOTAL_MAX && shown.length > 1) {
+      if (keep === "first") shown.pop();
+      else if (keep === "last") shown.shift();
+      else if (omitted % 2 === 0) shown.shift();
+      else shown.pop();
+      omitted++;
+      text = build();
+    }
+    return { text, messages: shown, omitted };
+  }
+
+  private async readNow(bot: Bot, groupId: string, input: { unread?: boolean; full?: number | null; before?: number | null; around?: number | null; limit?: number; thread?: number | null; topLevel?: boolean }): Promise<string> {
     this.requireMember(groupId, bot.id);
     const limit = Math.max(1, Math.min(input.limit ?? (input.unread ? DELIVERY_MAX : 20), DELIVERY_MAX));
+    if (input.full) {
+      const message = this.store.messageAt(groupId, input.full);
+      if (!message) throw new RequestError(`There's no message #${input.full}.`);
+      const rendered = messageText(message, bot.id, this.parents(groupId, [message]));
+      const text = rendered.length <= GROUP_READ_FULL_MAX ? rendered : `${rendered.slice(0, GROUP_READ_FULL_MAX)}\n\n[truncated at ${GROUP_READ_FULL_MAX} characters]`;
+      return `Full message #${message.seq} (this lookup doesn't move your read position):\n\n${text}`;
+    }
     if (input.unread && !input.thread && !input.topLevel) {
       const pending = this.store.pending(groupId, bot.id);
       if (pending.length === 0) return "Your inbox is empty: nothing new was delivered to you. group_inbox lists any place with unread messages.";
-      const shown = pending.slice(0, limit).map((entry) => entry.message);
-      this.store.recordSeenMessages(groupId, bot.id, shown);
-      const rest = pending.length - shown.length;
-      return historyText(shown, false, bot.id, { parents: this.parents(groupId, shown) }) + (rest > 0 ? `\n\n(${rest} more in your inbox: group_read with unread: true again.)` : "");
+      const candidates = pending.slice(0, limit).map((entry) => entry.message);
+      const page = this.readHistory(candidates, false, bot.id, { keep: "first", parents: this.parents(groupId, candidates) });
+      this.store.recordSeenMessages(groupId, bot.id, page.messages);
+      const rest = pending.length - page.messages.length;
+      return page.text + (rest > 0 ? `\n\n(${rest} more in your inbox: group_read with unread: true again.)` : "");
     }
     if (input.around) {
       const anchor = this.store.messageAt(groupId, input.around);
       if (!anchor) throw new RequestError(`There's no message #${input.around}.`);
       const conv = anchor.thread ?? 0;
       const page = this.store.convAround(groupId, conv, anchor.seq, limit);
-      this.store.recordSeen(groupId, bot.id, conv, { exact: page.messages.map((message) => message.seq) });
-      const parents = this.parents(groupId, page.messages);
+      const bounded = this.readHistory(page.messages, false, bot.id, { keep: "middle", parents: this.parents(groupId, page.messages) });
+      this.store.recordSeen(groupId, bot.id, conv, { exact: bounded.messages.map((message) => message.seq) });
       const lines = [`Around #${anchor.seq} at ${placeName(conv)}, oldest first:`];
       if (page.hasOlder) lines.push(`(Earlier messages exist: group_read with ${conv ? `thread: ${conv}, ` : ""}before: ${page.messages[0]!.seq}.)`);
-      lines.push(historyText(page.messages, false, bot.id, { parents }));
+      if (bounded.omitted) lines.push(`(${bounded.omitted} messages around #${anchor.seq} are not shown to keep this read bounded; group_read with around: ${anchor.seq} again or full: #N for one.)`);
+      lines.push(bounded.text);
       if (page.hasNewer) lines.push(`(Later messages exist: group_read with around: ${page.messages.at(-1)!.seq}.)`);
       return lines.join("\n\n");
     }
@@ -717,31 +766,42 @@ export class GroupChats {
     if (input.unread) {
       const page = this.store.convPage(groupId, conv, { after: prior, limit });
       const before = this.store.ledger(groupId, bot.id, conv);
-      this.consumeRead(bot.id, groupId, conv, page.messages, true);
       // Its own messages are never unread for it: they move the position but aren't shown. What it
       // was already shown (a hold, a notice's thread context) is folded into one line.
       const mine = (message: GroupMessage) => message.from.kind === "bot" && message.from.botId === bot.id;
       const others = page.messages.filter((message) => !mine(message));
       const folded = others.filter((message) => isSeen(before, message.seq));
-      const shown = others.filter((message) => !isSeen(before, message.seq));
-      const more = page.hasNewer ? this.store.convPage(groupId, conv, { after: page.messages.at(-1)!.seq, limit: DELIVERY_MAX }).messages.filter((message) => !mine(message)).length : 0;
+      const unshown = others.filter((message) => !isSeen(before, message.seq));
+      const bounded = this.readHistory(unshown, false, bot.id, { keep: "first", parents: this.parents(groupId, unshown) });
+      // Advance only over a contiguous prefix that was actually shown (or over folded messages
+      // when there was nothing new); messages dropped by the budget stay unread for the next read.
+      const lastShown = bounded.messages.at(-1)?.seq;
+      const consumed = bounded.omitted === 0 ? page.messages : lastShown === undefined ? [] : page.messages.filter((message) => message.seq <= lastShown);
+      this.consumeRead(bot.id, groupId, conv, consumed, true);
+      const more = (page.hasNewer ? this.store.convPage(groupId, conv, { after: page.messages.at(-1)!.seq, limit: DELIVERY_MAX }).messages.filter((message) => !mine(message)).length : 0) + bounded.omitted;
       if (others.length === 0) return `No unread messages at ${placeName(conv)}.`;
       const notes: string[] = [];
       if (folded.length) notes.push(`${folded.length} message${folded.length === 1 ? "" : "s"} you were already shown (${folded.length === 1 ? `#${folded[0]!.seq}` : `#${folded[0]!.seq} to #${folded.at(-1)!.seq}`}) ${folded.length === 1 ? "isn't" : "aren't"} repeated; group_read with around: ${folded[0]!.seq} shows ${folded.length === 1 ? "it" : "them"} again.`);
       const now = this.store.cursor(groupId, bot.id, conv);
       if (now > prior) notes.push(`Read position at ${placeName(conv)}: #${prior} → #${now}.`);
       if (more > 0) notes.push(`More unread at ${placeName(conv)}: group_read with unread: true and ${conv ? `thread: ${conv}` : "top_level: true"} again.`);
-      const body = shown.length ? historyText(shown, false, bot.id, { parents: this.parents(groupId, shown) }) : `No new unread messages at ${placeName(conv)}.`;
+      const body = bounded.messages.length ? bounded.text : `No new unread messages at ${placeName(conv)}.`;
       return [body, ...notes.map((note) => `(${note})`)].join("\n\n");
     }
     const page = this.store.convPage(groupId, conv, { before: input.before ?? null, limit });
-    this.consumeRead(bot.id, groupId, conv, page.messages, !page.hasOlder || (page.messages[0]?.seq ?? Infinity) <= prior);
-    if (!conv) return historyText(page.messages, page.hasOlder, bot.id);
+    if (!conv) {
+      const bounded = this.readHistory(page.messages, page.hasOlder, bot.id, { keep: "last" });
+      this.consumeRead(bot.id, groupId, conv, bounded.messages, !page.hasOlder || (bounded.messages[0]?.seq ?? Infinity) <= prior);
+      return bounded.text + (bounded.omitted ? `\n\n(${bounded.omitted} earlier messages are not shown to keep this read bounded; group_read with before: ${bounded.messages[0]!.seq} for them.)` : "");
+    }
     const parent = this.store.messageAt(groupId, conv)!;
-    // The top message is shown with the thread's first page; it's the top level's, seen one by one there.
-    if (!page.hasOlder) this.store.recordSeen(groupId, bot.id, 0, { exact: [parent.seq] });
     const messages = page.hasOlder ? page.messages : [parent, ...page.messages];
-    return historyText(messages, page.hasOlder, bot.id, { thread: conv }) + (page.messages.length === 0 ? "\n\n(No replies in its thread yet.)" : "");
+    const bounded = this.readHistory(messages, page.hasOlder, bot.id, { thread: conv, keep: "last" });
+    const shownPage = bounded.messages.filter((message) => message.thread === conv);
+    this.consumeRead(bot.id, groupId, conv, shownPage, !page.hasOlder || (shownPage[0]?.seq ?? Infinity) <= prior);
+    // The top message is shown with the thread's first page; it's the top level's, seen one by one there.
+    if (!page.hasOlder && bounded.messages.some((message) => message.seq === parent.seq)) this.store.recordSeen(groupId, bot.id, 0, { exact: [parent.seq] });
+    return bounded.text + (page.messages.length === 0 ? "\n\n(No replies in its thread yet.)" : "") + (bounded.omitted ? `\n\n(${bounded.omitted} earlier messages are not shown to keep this read bounded.)` : "");
   }
 
   /**
@@ -866,14 +926,15 @@ export class GroupChats {
         const statuses: TaskStatus[] | undefined = filter === "all" ? undefined : filter === "open" ? OPEN_TASKS : [TaskStatusSchema.parse(filter)];
         const tasks = this.store.tasks(groupId, { ...(statuses ? { statuses } : {}), ...(input.mine ? { assigneeId: bot.id } : {}) });
         if (tasks.length === 0) return `No ${filter === "all" ? "" : `${filter} `}tasks${input.mine ? " assigned to you" : ""}.`;
-        const messages = new Map(this.store.messagesAt(groupId, tasks.map((task) => task.seq)).map((message) => [message.seq, message]));
-        return tasks
-          .map((task) => {
-            const replies = messages.get(task.seq)?.replies ?? 0;
-            const description = task.description !== null ? `\n  Current description: ${messagePreview({ text: task.description, attachments: [] }, 200)}` : "";
-            return `- ${taskLabel(task, bot.id)} · rev=${task.revision}: ${this.titleOf(groupId, task, 90)}${replies ? ` (${replies} replies in its thread)` : ""}${description}`;
-          })
-          .join("\n");
+        const shown = tasks.slice(0, GROUP_TASK_LIST_MAX);
+        const messages = new Map(this.store.messagesAt(groupId, shown.map((task) => task.seq)).map((message) => [message.seq, message]));
+        const lines = shown.map((task) => {
+          const replies = messages.get(task.seq)?.replies ?? 0;
+          const description = task.description !== null ? `\n  Current description: ${messagePreview({ text: task.description, attachments: [] }, 200)}` : "";
+          return `- ${taskLabel(task, bot.id)} · rev=${task.revision}: ${this.titleOf(groupId, task, 90)}${replies ? ` (${replies} replies in its thread)` : ""}${description}`;
+        });
+        if (tasks.length > shown.length) lines.push(`(${tasks.length - shown.length} more tasks not shown: group_task list with a filter or mine: true.)`);
+        return lines.join("\n");
       }
       case "create":
         return this.createTasks(bot, groupId, input.titles ?? [], input.assignee ?? null);

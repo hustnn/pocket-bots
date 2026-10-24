@@ -35,6 +35,15 @@ export const DELIVERY_MAX = 40;
 export const GROUP_NAME_MAX = 80;
 export const USER_TEXT_MAX = 200_000;
 export const BOT_TEXT_MAX = 20_000;
+/** A group_read page: one rendered message, and the whole page, stay under these. */
+export const GROUP_READ_MESSAGE_MAX = 4_000;
+export const GROUP_READ_TOTAL_MAX = 32_000;
+/** group_read full: one message, rendered. */
+export const GROUP_READ_FULL_MAX = 20_000;
+/** Task cards: the title and details a bot sees in a list, and how many a list returns. */
+export const GROUP_TASK_TITLE_MAX = 200;
+export const GROUP_TASK_DESCRIPTION_MAX = 8_000;
+export const GROUP_TASK_LIST_MAX = 20;
 
 export const GroupAttachmentSchema = z.object({
   kind: z.enum(["image", "text", "file"]),
