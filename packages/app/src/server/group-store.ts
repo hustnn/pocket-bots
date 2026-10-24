@@ -230,8 +230,42 @@ export interface AppendInput {
   mentionHandles?: Record<string, string>;
 }
 
+export type GroupMetricField = "wake_calls" | "woken_bots" | "notices" | "read_bytes" | "bot_messages" | "user_messages" | "claims";
+
+export interface GroupMetricRow {
+  wake_calls: number;
+  woken_bots: number;
+  notices: number;
+  read_bytes: number;
+  bot_messages: number;
+  user_messages: number;
+  claims: number;
+}
+
+const METRIC_ZERO: GroupMetricRow = { wake_calls: 0, woken_bots: 0, notices: 0, read_bytes: 0, bot_messages: 0, user_messages: 0, claims: 0 };
+
 export class GroupStore {
   constructor(private readonly db: Db) {}
+
+  // ---------------------------------------------------------------- experiment metrics
+
+  /** Adds to one of the day's counters. Observation only: no wake or delivery reads it. */
+  bumpMetric(groupId: string, field: GroupMetricField, amount = 1): void {
+    if (amount <= 0) return;
+    const day = new Date().toISOString().slice(0, 10);
+    this.db.run(
+      `INSERT INTO group_metrics (group_id, day, ${field}) VALUES (?, ?, ?)
+       ON CONFLICT (group_id, day) DO UPDATE SET ${field} = ${field} + excluded.${field}`,
+      groupId,
+      day,
+      amount,
+    );
+  }
+
+  /** The day's counters for a group; a group with no activity reads as zeroes. */
+  metrics(groupId: string, day = new Date().toISOString().slice(0, 10)): GroupMetricRow {
+    return this.db.get<GroupMetricRow>("SELECT wake_calls, woken_bots, notices, read_bytes, bot_messages, user_messages, claims FROM group_metrics WHERE group_id = ? AND day = ?", groupId, day) ?? { ...METRIC_ZERO };
+  }
 
   // ---------------------------------------------------------------- groups
 
@@ -354,6 +388,8 @@ export class GroupStore {
         now(),
       );
       if (input.text.trim()) this.db.run("INSERT INTO group_messages_fts (text, group_id, seq) VALUES (?, ?, ?)", input.text, groupId, seq);
+      if (from.kind === "bot") this.bumpMetric(groupId, "bot_messages");
+      else if (from.kind === "user") this.bumpMetric(groupId, "user_messages");
       if (from.kind !== "system") this.recordMentions(groupId, seq, input);
       const row = this.db.get<MessageRow>("SELECT * FROM group_messages WHERE group_id = ? AND seq = ?", groupId, seq)!;
       const message = this.message(row);
@@ -1176,6 +1212,7 @@ export class GroupStore {
       );
       this.taskEvent(groupId, task.number, "assignee_changed", claimant, { assigneeType: claimant.kind, assigneeId: claimant.id });
       if (next !== task.status) this.taskEvent(groupId, task.number, "status_changed", claimant, { from: task.status, to: next });
+      this.bumpMetric(groupId, "claims");
       return { ok: true as const, task: this.task(groupId, { number: task.number })!, created };
     });
   }

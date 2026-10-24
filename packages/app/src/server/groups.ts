@@ -683,6 +683,12 @@ export class GroupChats {
    * message instead.
    */
   async read(bot: Bot, groupId: string, input: { unread?: boolean; before?: number | null; around?: number | null; limit?: number; thread?: number | null; topLevel?: boolean }): Promise<string> {
+    const text = await this.readNow(bot, groupId, input);
+    this.store.bumpMetric(groupId, "read_bytes", Buffer.byteLength(text, "utf8"));
+    return text;
+  }
+
+  private async readNow(bot: Bot, groupId: string, input: { unread?: boolean; before?: number | null; around?: number | null; limit?: number; thread?: number | null; topLevel?: boolean }): Promise<string> {
     this.requireMember(groupId, bot.id);
     const limit = Math.max(1, Math.min(input.limit ?? (input.unread ? DELIVERY_MAX : 20), DELIVERY_MAX));
     if (input.unread && !input.thread && !input.topLevel) {
@@ -1948,6 +1954,8 @@ export class GroupChats {
    * note included): a stopped bot is started again unless a breaker refuses (automaticStart).
    */
   private wake(groupId: string, botIds: readonly string[]): void {
+    this.store.bumpMetric(groupId, "wake_calls");
+    this.store.bumpMetric(groupId, "woken_bots", botIds.length);
     this.changed(groupId);
     for (const botId of botIds) {
       this.automaticStart(groupId, botId);
@@ -2114,6 +2122,7 @@ export class GroupChats {
         });
       }
       this.store.markNoticed(groupId, botId, told);
+      this.store.bumpMetric(groupId, "notices");
       this.store.markRemindersWoken(reminders.map((reminder) => reminder.id));
       if (piece && piece.work !== null) this.store.setSeatTask(groupId, botId, piece.work);
     } catch (error) {

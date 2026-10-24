@@ -432,6 +432,24 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE groups ADD COLUMN extra_folders TEXT NOT NULL DEFAULT '[]';
     `);
   },
+  // 21: per-group, per-day counters for the group-chat experiment. They are observations only:
+  // no behavior reads them, and a missing row means zero.
+  (db) => {
+    db.exec(`
+      CREATE TABLE group_metrics (
+        group_id TEXT NOT NULL,
+        day TEXT NOT NULL,
+        wake_calls INTEGER NOT NULL DEFAULT 0,
+        woken_bots INTEGER NOT NULL DEFAULT 0,
+        notices INTEGER NOT NULL DEFAULT 0,
+        read_bytes INTEGER NOT NULL DEFAULT 0,
+        bot_messages INTEGER NOT NULL DEFAULT 0,
+        user_messages INTEGER NOT NULL DEFAULT 0,
+        claims INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (group_id, day)
+      );
+    `);
+  },
 ];
 
 /** How much of one message the search index takes: a long pasted attachment doesn't need all of it. */

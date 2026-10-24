@@ -101,6 +101,27 @@ const settle = async (group: { idle: () => boolean }) => {
 };
 
 describe("group chats", () => {
+  it("records the day's wakes, notices, reads and posts without changing delivery", async () => {
+    const group = await setup(() => null);
+    stop = group.stop;
+    const alpha = (await group.host.bot("alpha"))!;
+    await group.groups.postFromUser(group.id, { text: "metrics check" });
+    await settle(group);
+    // A direct send is the same path as group_send after the bot's own read.
+    await group.groups.read(alpha, group.id, { unread: true });
+    await group.groups.send(alpha, group.id, { text: "Alpha read it." });
+    await settle(group);
+
+    const metrics = group.store.metrics(group.id);
+    expect(metrics.user_messages).toBe(1);
+    expect(metrics.bot_messages).toBe(1);
+    expect(metrics.wake_calls).toBeGreaterThanOrEqual(2); // the user's post and Alpha's reply
+    expect(metrics.woken_bots).toBeGreaterThanOrEqual(2);
+    expect(metrics.notices).toBeGreaterThanOrEqual(2);
+    expect(metrics.read_bytes).toBeGreaterThan(0);
+    expect(metrics.claims).toBe(0);
+  });
+
   it("answers an open question once: the second bot's post is held, and it lets it go", async () => {
     // Both read the question at once; Alpha answers first, Beta (slower) after it.
     const group = await setup(
