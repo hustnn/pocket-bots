@@ -16,6 +16,7 @@ import {
   pieceFor,
   questionText,
   taskHistoryText,
+  WAKE_HOPS_MAX,
   threadMismatchText,
   undeliveredMentionsText,
   unreadEligible,
@@ -119,6 +120,24 @@ describe("unread and delivery", () => {
     // Never its own message, nor one that isn't unread for it.
     expect(reason({ receiverId: "r", message: { senderId: "r", kind: "bot" } })).toBeNull();
     expect(reason({ eligible: false })).toBeNull();
+  });
+
+  it("in full mode wakes only obligations: named, assigned, replied to, or the user's broadcast", () => {
+    // A bot's unnamed top-level message is board material, not a wake; the user's still reaches the group.
+    expect(reason({ full: true, message: { senderId: "r", kind: "bot" } })).toBeNull();
+    expect(reason({ full: true })).toBe("open");
+    expect(reason({ full: true, message: { senderId: "r", kind: "bot", mentions: ["w"] }, personal: true })).toBe("handoff");
+    expect(reason({ full: true, message: { senderId: "r", kind: "bot", everyone: true } })).toBeNull();
+    expect(reason({ full: true, message: { senderId: "r", kind: "bot" }, repliedTo: true })).toBe("reply");
+    // A reply chain this deep stops waking its author; an explicit handoff still does.
+    expect(reason({ full: true, depth: WAKE_HOPS_MAX, message: { senderId: "r", kind: "bot" }, repliedTo: true })).toBeNull();
+    expect(reason({ full: true, depth: WAKE_HOPS_MAX, message: { senderId: "r", kind: "bot", mentions: ["w"] }, personal: true })).toBe("handoff");
+    // A bot's thread chatter wakes nobody without a reply; a reply wakes its author.
+    expect(reason({ full: true, conv: 3, message: { senderId: "r", kind: "bot" } })).toBeNull();
+    expect(reason({ full: true, conv: 3, message: { senderId: "r", kind: "bot" }, repliedTo: true })).toBe("reply");
+    // The user's reply reaches the bot it answers, and only that bot.
+    expect(reason({ full: true, message: { senderId: "user", kind: "user", repliesTo: "w" }, repliedTo: true })).toBe("reply");
+    expect(reason({ full: true, message: { senderId: "user", kind: "user", repliesTo: "r" } })).toBeNull();
   });
 
   it("in addressed mode only what's aimed at the bot, and the user's messages that address nobody", () => {
@@ -408,6 +427,19 @@ describe("the seat prompt", () => {
     expect(member).toContain("- Do the piece yourself: Lead has already split the work, and a sub-agent starts from nothing and reads everything again.");
     expect(member).toContain("tell it not to use the group tools: only you speak in the group.");
     expect(groupPrompt("Launch", { lead: { role: "member", leader: "Lead" } })).not.toContain("Do the piece yourself");
+  });
+
+  it("adds the board rules only when the board is on, and never for a leader group", () => {
+    const plain = groupPrompt("Launch");
+    expect(plain).not.toContain("The board:");
+    const board = groupPrompt("Launch", { workbenchMode: "board" });
+    expect(board).toContain("The board:");
+    expect(board).toContain("group_note_search");
+    expect(board).toContain("It wakes nobody");
+    expect(groupPrompt("Launch", { workbenchMode: "full" })).toContain("The board:");
+    expect(groupPrompt("Launch", { workbenchMode: "board", lead: { role: "member", leader: "Lead" } })).not.toContain("The board:");
+    // Off groups keep the same prompt bytes: the experiment adds nothing to existing groups.
+    expect(groupPrompt("Launch", { workbenchMode: "off" })).toBe(plain);
   });
 
   it("tells a seat that group messages are text first, files attached with them, and names its runtime's question tool", () => {

@@ -15,7 +15,7 @@ import { BOT_LABEL, POCKET_LABEL } from "../src/shared/bot";
 import { GROUP_LABEL } from "../src/shared/group-chat";
 import { replyText } from "../src/shared/reply";
 import { excerpt, markTerms, searchTerms } from "../src/shared/search";
-import { fakeHost, makeBot } from "./helpers";
+import { dropExperimentSchema, fakeHost, makeBot } from "./helpers";
 
 const dirs: string[] = [];
 const closers: (() => Promise<void> | void)[] = [];
@@ -136,6 +136,7 @@ describe("chat timelines' index", () => {
     const id = await chatWith(chats, "ada", "the albatross report");
     await chats.stop();
     // Back to before the migration, with the timeline kept.
+    dropExperimentSchema(db);
     db.raw.exec("DROP TRIGGER timeline_fts_delete; DROP TABLE timeline_fts; ALTER TABLE chats DROP COLUMN indexed_seq; ALTER TABLE groups DROP COLUMN leader_id; ALTER TABLE group_members DROP COLUMN seat_task; ALTER TABLE groups DROP COLUMN cwd; ALTER TABLE chats DROP COLUMN extra_folders; ALTER TABLE chats DROP COLUMN folders_told; ALTER TABLE groups DROP COLUMN extra_folders; UPDATE schema_version SET version = 13");
     db.close();
     const reopened = new Db(join(dir, "bots.sqlite"));

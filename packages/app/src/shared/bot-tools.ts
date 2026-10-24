@@ -4,7 +4,7 @@
 
 export const TOOLS_MCP_NAME = "bots";
 
-const BOT_TOOL_NAMES = ["group_send", "group_send_draft", "group_read", "group_inbox", "group_search", "group_claim", "group_task", "group_react", "group_mute", "group_follow", "group_reminder", "group_mention_delivery", "group_members", "list_bots", "ask_bot", "check_chat", "search_chats", "get_setup", "propose_skill", "propose_routine", "propose_changes", "connect_app"] as const;
+const BOT_TOOL_NAMES = ["group_send", "group_send_draft", "group_read", "group_inbox", "group_search", "group_claim", "group_task", "group_react", "group_mute", "group_follow", "group_reminder", "group_mention_delivery", "group_members", "group_note", "group_note_search", "group_note_visit", "list_bots", "ask_bot", "check_chat", "search_chats", "get_setup", "propose_skill", "propose_routine", "propose_changes", "connect_app"] as const;
 export type BotToolName = (typeof BOT_TOOL_NAMES)[number];
 
 /**
@@ -12,7 +12,7 @@ export type BotToolName = (typeof BOT_TOOL_NAMES)[number];
  * a group chat the user put the bot in, so they run without a permission
  * prompt. Asking another bot is left to the bot's "Contact other bots" setting.
  */
-export const QUIET_TOOLS: readonly BotToolName[] = ["group_send", "group_send_draft", "group_read", "group_inbox", "group_search", "group_claim", "group_task", "group_react", "group_mute", "group_follow", "group_reminder", "group_mention_delivery", "group_members", "list_bots", "check_chat", "search_chats", "get_setup", "propose_skill", "propose_routine", "propose_changes", "connect_app"];
+export const QUIET_TOOLS: readonly BotToolName[] = ["group_send", "group_send_draft", "group_read", "group_inbox", "group_search", "group_claim", "group_task", "group_react", "group_mute", "group_follow", "group_reminder", "group_mention_delivery", "group_members", "group_note", "group_note_search", "group_note_visit", "list_bots", "check_chat", "search_chats", "get_setup", "propose_skill", "propose_routine", "propose_changes", "connect_app"];
 
 /**
  * The bot tool a timeline tool call is, whatever the provider calls it:

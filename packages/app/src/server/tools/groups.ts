@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { BOT_FILES_MAX, BOT_TEXT_MAX, TaskStatusSchema } from "../../shared/group-chat";
+import { BOT_FILES_MAX, BOT_TEXT_MAX, GROUP_TASK_DESCRIPTION_MAX, GROUP_TASK_TITLE_MAX, NOTE_BODY_MAX, NOTE_KINDS, NOTE_REFS_MAX, NOTE_SEARCH_K, NOTE_TITLE_MAX, NOTE_VISIT_MAX, TaskStatusSchema } from "../../shared/group-chat";
 import { defineTool, type ToolCaller } from "./mcp";
 
 // A seat's tools for its group chat (see shared/group-chat.ts). Only a group's seats get these;
@@ -14,6 +14,9 @@ function seatOf(caller: ToolCaller) {
   if (!caller.groups) throw new Error("Group chats aren't available right now.");
   return { groupId: caller.groupId, groups: caller.groups };
 }
+
+/** The group opted into the board (and has no leader). */
+const onBoard = (caller: ToolCaller): boolean => !!caller.groupId && !!caller.groups?.boardEnabled(caller.groupId);
 
 const inGroup = (caller: ToolCaller) => !!caller.groupId;
 const Seq = z.number().int().positive();
@@ -56,20 +59,21 @@ export const groupSendDraft = defineTool({
 export const groupRead = defineTool({
   name: "group_read",
   description:
-    "Read your group chat. unread: true reads your whole inbox (with thread or top_level, one place's unread); thread: N reads a thread; nothing reads the latest top-level messages; before: N pages back; around: N reads around message N.",
+    "Read your group chat. unread: true reads your whole inbox (with thread or top_level, one place's unread); thread: N reads a thread; nothing reads the latest top-level messages; before: N pages back; around: N reads around message N; full: N reads one message in full (a lookup: it doesn't move your read position). A page is bounded; truncated messages point at full: N.",
   input: z.object({
     unread: z.boolean().optional(),
     thread: Seq.optional().describe("A thread's top message, or any message in it."),
     top_level: z.boolean().optional(),
     before: Seq.optional(),
     around: Seq.optional(),
+    full: Seq.optional().describe("One message's full text, up to 20,000 characters; doesn't change what you've read."),
     limit: z.number().int().min(1).max(40).optional(),
   }),
   available: inGroup,
   led: true,
-  async run({ unread, thread, top_level, before, around, limit }, caller) {
+  async run({ unread, thread, top_level, before, around, full, limit }, caller) {
     const { groupId, groups } = seatOf(caller);
-    return groups.read(caller.bot, groupId, { unread: unread ?? false, thread: thread ?? null, topLevel: top_level ?? false, before: before ?? null, around: around ?? null, ...(limit ? { limit } : {}) });
+    return groups.read(caller.bot, groupId, { unread: unread ?? false, thread: thread ?? null, topLevel: top_level ?? false, before: before ?? null, around: around ?? null, full: full ?? null, ...(limit ? { limit } : {}) });
   },
 });
 
@@ -142,13 +146,13 @@ export const groupTask = defineTool({
     action: z.enum(["update", "create", "convert", "assign", "unclaim", "amend", "show", "history", "delete", "list"]),
     task: Seq.optional(),
     status: TaskStatusSchema.optional(),
-    titles: z.array(z.string().min(1).max(BOT_TEXT_MAX)).max(10).optional().describe("Independent pieces that can run in parallel."),
+    titles: z.array(z.string().min(1).max(GROUP_TASK_TITLE_MAX)).max(10).optional().describe("Independent pieces that can run in parallel."),
     assignee: z.string().max(100).optional().describe("With create, for every title: tasks for different owners go in separate calls."),
     filter: z.string().max(20).optional(),
     mine: z.boolean().optional(),
     expected_revision: z.number().int().min(0).optional(),
-    title: z.string().min(1).max(10_000).optional(),
-    description: z.string().max(50_000).optional(),
+    title: z.string().min(1).max(GROUP_TASK_TITLE_MAX).optional(),
+    description: z.string().max(GROUP_TASK_DESCRIPTION_MAX).optional(),
     clear_description: z.boolean().optional(),
   }),
   available: inGroup,
@@ -216,6 +220,59 @@ export const groupReminder = defineTool({
   async run({ delay_seconds, fire_at, ...input }, caller) {
     const { groupId, groups } = seatOf(caller);
     return groups.reminder(caller.bot, groupId, { ...input, delaySeconds: delay_seconds ?? null, fireAt: fire_at ?? null });
+  },
+});
+
+export const groupNote = defineTool({
+  name: "group_note",
+  description: [
+    "Publish a reusable note on the group's board. It wakes nobody; the next wake can list it.",
+    "title: what someone would search for. body: the finding, decision, dead end or answer, and why it matters.",
+    "refs: what it builds on, {message: 12} or {note: 3}; the body must name every ref ('#12', 'note #3').",
+    "kind: finding | decision | dead_end | answer | plan | review. supersedes: replace an older note without editing it.",
+    "Use this instead of announcing the same thing in chat.",
+  ].join("\n"),
+  input: z.object({
+    kind: z.enum(NOTE_KINDS),
+    title: z.string().min(1).max(NOTE_TITLE_MAX),
+    body: z.string().min(1).max(NOTE_BODY_MAX),
+    refs: z.array(z.object({ note: Seq.optional(), message: Seq.optional() })).max(NOTE_REFS_MAX).optional(),
+    task: Seq.optional().describe("The task this note is about, if any."),
+    thread: Seq.optional().describe("The thread this note is about, if any."),
+    supersedes: Seq.optional().describe("An older note this one replaces."),
+  }),
+  available: onBoard,
+  led: true,
+  async run({ refs, ...input }, caller) {
+    const { groupId, groups } = seatOf(caller);
+    return groups.publishNote(caller.bot, groupId, { ...input, ...(refs ? { refs } : {}) });
+  },
+});
+
+export const groupNoteSearch = defineTool({
+  name: "group_note_search",
+  description: "Search the group's board before starting work: up to 8 relevant notes, ranked by match and by how often other notes build on them. Read one with group_note_visit.",
+  input: z.object({
+    query: z.string().min(1).max(200),
+    limit: z.number().int().min(1).max(NOTE_SEARCH_K).optional(),
+  }),
+  available: onBoard,
+  led: true,
+  async run({ query, limit }, caller) {
+    const { groupId, groups } = seatOf(caller);
+    return groups.searchNotes(caller.bot, groupId, { query, ...(limit ? { limit } : {}) });
+  },
+});
+
+export const groupNoteVisit = defineTool({
+  name: "group_note_visit",
+  description: "Read up to 8 board notes in full, with their refs and the notes that cite them. All-or-nothing: one missing id returns nothing.",
+  input: z.object({ notes: z.array(Seq).min(1).max(NOTE_VISIT_MAX) }),
+  available: onBoard,
+  led: true,
+  async run({ notes }, caller) {
+    const { groupId, groups } = seatOf(caller);
+    return groups.visitNotes(caller.bot, groupId, { notes });
   },
 });
 

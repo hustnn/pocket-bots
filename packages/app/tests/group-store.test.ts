@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Db } from "../src/server/db";
 import { GroupStore, isSeen } from "../src/server/group-store";
 import { GROUP_USER, type GroupSender } from "../src/shared/group-chat";
+import { dropExperimentSchema } from "./helpers";
 
 let dir: string;
 let db: Db;
@@ -566,7 +567,8 @@ describe("task statuses", () => {
     store.claimTask(G, { seq: second.seq }, cody);
     db.run("UPDATE group_tasks SET status = 'in_review', completed_at = NULL, updated_at = '2026-10-01T00:00:00.000Z' WHERE number = ?", second.seq);
     db.run("INSERT INTO group_task_events (group_id, number, event, actor_kind, actor_id, actor_name, payload, created_at) VALUES (?, ?, 'status_changed', 'bot', 'cody', 'Cody', ?, '2026-10-01T00:00:00.000Z')", G, second.seq, JSON.stringify({ from: "in_progress", to: "in_review", forced: false }));
-    // (Migration 20 is undone too, or it would add its columns again.)
+    // (Migrations 20–22 are undone too, or they would add their columns again.)
+    dropExperimentSchema(db);
     db.raw.exec("ALTER TABLE chats DROP COLUMN extra_folders; ALTER TABLE chats DROP COLUMN folders_told; ALTER TABLE groups DROP COLUMN extra_folders");
     db.run("UPDATE schema_version SET version = 18");
     db.close();
