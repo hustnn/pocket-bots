@@ -681,8 +681,14 @@ describe("group chats", () => {
       await group.groups.update(group.id, { cwd: null });
       expect((await group.groups.list())[0]!.cwd).toBeNull();
       await group.groups.postFromUser(group.id, { text: "third thing" });
-      await until(async () => (await seatOf()) !== after && group.idle());
-      expect(group.chats.get(await seatOf())?.cwd).toBe(join(home, "Bots", "alpha"));
+      const ownFolder = join(home, "Bots", "alpha");
+      // The new seat id is recorded before ChatService has registered the chat, so wait for
+      // the seat itself rather than just for a changed id.
+      await until(async () => {
+        const current = await seatOf();
+        return current !== after && group.chats.get(current)?.cwd === ownFolder;
+      });
+      expect(group.chats.get(await seatOf())?.cwd).toBe(ownFolder);
     } finally {
       await rm(repo, { recursive: true, force: true });
       await rm(other, { recursive: true, force: true });
