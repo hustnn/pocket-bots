@@ -20,6 +20,11 @@ import {
   GROUP_TASK_LIST_MAX,
   GROUP_USER,
   GROUP_USER_ID,
+  NOTE_CITED_BY_MAX,
+  NOTE_DIGEST_MAX,
+  NOTE_SEARCH_K,
+  NOTE_VISIT_MAX,
+  WorkbenchModeSchema,
   groupQuestion,
   HELD_SHOWN,
   heldText,
@@ -46,10 +51,15 @@ import {
   type GroupAttachment,
   type GroupLead,
   type GroupMessage,
+  type GroupNote,
+  type GroupNoteRef,
+  type GroupNoteSummary,
   type GroupQuestion,
   type GroupSender,
   type GroupSummary,
   type GroupTask,
+  type NoteKind,
+  type WorkbenchMode,
   type HeldInput,
   type Member,
   type MentionDeliveryRow,
@@ -211,6 +221,11 @@ export interface GroupOptions {
   recycleTokens?: number;
   /** The backoff's jitter, a number in [0, 1). */
   random?: () => number;
+  /** Full mode: notices per seat per window (a soft cap; the excess waits for room). */
+  noticeBudget?: number;
+  noticeWindowMs?: number;
+  /** Full mode: an idle seat's notice waits this long, so a burst is one turn. */
+  idleNoticeDelayMs?: number;
 }
 
 function safeName(name: string): string {
@@ -282,6 +297,13 @@ export class GroupChats {
   private readonly random: () => number;
   private readonly recycleAfterMs: number;
   private readonly recycleTokens: number;
+  private readonly noticeBudget: number;
+  private readonly noticeWindowMs: number;
+  private readonly idleNoticeDelayMs: number;
+  /** Per seat: when its recent notices went out, for the full mode's soft cap. */
+  private readonly noticeTimes = new Map<string, number[]>();
+  /** Seats whose board mode changed while they were busy: reset when their turn ends. */
+  private readonly boardResets = new Set<string>();
   private reminderTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
 
@@ -294,6 +316,9 @@ export class GroupChats {
   ) {
     this.recycleAfterMs = options.recycleAfterMs ?? 60 * 60_000;
     this.recycleTokens = options.recycleTokens ?? 128_000;
+    this.noticeBudget = options.noticeBudget ?? 30;
+    this.noticeWindowMs = options.noticeWindowMs ?? 60 * 60_000;
+    this.idleNoticeDelayMs = options.idleNoticeDelayMs ?? 1_000;
     this.random = options.random ?? Math.random;
   }
 
@@ -311,13 +336,13 @@ export class GroupChats {
    * What a seat's prompt says about its group: the name, and with a leader, the seat's part: the
    * leader, with what each member it hands work to does and runs on, or a member, with its leader.
    */
-  async seatGroup(groupId: string, botId: string | null): Promise<{ name: string; lead?: GroupLead } | null> {
+  async seatGroup(groupId: string, botId: string | null): Promise<{ name: string; workbenchMode: WorkbenchMode; lead?: GroupLead } | null> {
     const group = this.store.group(groupId);
     if (!group) return null;
     const leaderId = this.store.leader(groupId);
-    if (!leaderId || !botId) return { name: group.name };
+    if (!leaderId || !botId) return { name: group.name, workbenchMode: group.workbench_mode };
     const bots = await this.liveBots();
-    if (botId !== leaderId) return { name: group.name, lead: { role: "member", leader: bots.get(leaderId)?.name ?? "the leader" } };
+    if (botId !== leaderId) return { name: group.name, workbenchMode: group.workbench_mode, lead: { role: "member", leader: bots.get(leaderId)?.name ?? "the leader" } };
     const members = this.store.members(groupId).flatMap((member) => {
       const bot = member.bot_id === leaderId ? null : bots.get(member.bot_id);
       if (!bot) return [];
@@ -325,7 +350,7 @@ export class GroupChats {
       const about = [bot.title.trim(), bot.description.trim() ? foldText(bot.description, 200) : "", `runs on ${runtime}${bot.model ? ` with ${bot.model}` : ""}`].filter(Boolean).join(" · ");
       return [{ name: bot.name, about }];
     });
-    return { name: group.name, lead: { role: "leader", members } };
+    return { name: group.name, workbenchMode: group.workbench_mode, lead: { role: "leader", members } };
   }
 
   private summary(group: GroupRow): GroupSummary {
@@ -340,6 +365,7 @@ export class GroupChats {
       lastSeq: group.last_seq,
       readSeq: this.store.cursor(group.id, USER_ID, 0),
       wakeMode: group.wake_mode,
+      workbenchMode: group.workbench_mode,
       leaderId: this.store.leader(group.id),
       cwd: group.cwd,
       extraFolders: this.extraFoldersOf(group),
@@ -373,13 +399,18 @@ export class GroupChats {
    * `cwd`: the folder its seats work in, null (or empty) for each bot's own; left out, it stays.
    * `extraFolders`: the folders its seats may use besides it, replacing the list; left out, it stays.
    */
-  async update(groupId: string, input: { name?: string | null; memberIds?: string[] | null; wakeMode?: WakeMode | null; leaderId?: string | null; cwd?: string | null; extraFolders?: string[] }): Promise<void> {
+  async update(groupId: string, input: { name?: string | null; memberIds?: string[] | null; wakeMode?: WakeMode | null; workbenchMode?: WorkbenchMode | null; leaderId?: string | null; cwd?: string | null; extraFolders?: string[] }): Promise<void> {
     const group = this.require(groupId);
     // Checked before anything changes, so a folder that isn't there changes nothing.
     const cwd = input.cwd === undefined ? undefined : input.cwd?.trim() ? await workFolder(input.cwd) : null;
     const folders = input.extraFolders === undefined ? undefined : await extraFolders(input.extraFolders, cwd === undefined ? group.cwd : cwd);
+    const workbenchMode = input.workbenchMode === undefined ? undefined : input.workbenchMode === null ? "off" : WorkbenchModeSchema.parse(input.workbenchMode);
+    const nextLeader = input.leaderId !== undefined ? input.leaderId : group.leader_id;
+    if (nextLeader && (workbenchMode ?? group.workbench_mode) !== "off") throw new RequestError("A group with a leader can't use the board; clear the leader first.");
     if (input.name !== undefined && input.name !== null && input.name.trim()) this.store.updateGroup(groupId, { name: input.name.trim() });
     if (input.wakeMode) this.store.updateGroup(groupId, { wakeMode: input.wakeMode });
+    const modeChanged = workbenchMode !== undefined && workbenchMode !== group.workbench_mode;
+    if (workbenchMode !== undefined) this.store.updateGroup(groupId, { workbenchMode });
     const before = this.store.leader(groupId);
     if (input.leaderId && !(input.memberIds ?? this.store.members(groupId).map((member) => member.bot_id)).includes(input.leaderId)) throw new RequestError("The leader must be one of the group's bots.");
     if (input.memberIds) {
@@ -413,6 +444,20 @@ export class GroupChats {
       this.note(groupId, cwd ? `📁 the user set the group's working folder to ${cwd}: each bot's next turn here runs there.` : "📁 the user removed the group's working folder: each bot's next turn here runs in its own folder.", "group.folder", USER_ID);
     }
     if (folders !== undefined && JSON.stringify(folders) !== JSON.stringify(this.extraFoldersOf(group))) await this.setExtraFolders(groupId, folders);
+    if (modeChanged) {
+      // The board changes the seat's prompt and the tools it is offered. A running session keeps
+      // both from its start, so each seat starts over once the mode changes; a busy one waits for
+      // its turn to end.
+      for (const member of this.store.members(groupId)) {
+        const seat = member.seat_chat_id ? this.host.chats.get(member.seat_chat_id) : null;
+        if (seat && isBusy(seat.status)) {
+          this.boardResets.add(this.key(groupId, member.bot_id));
+          continue;
+        }
+        if (seat) await this.host.chats.archive(seat.id).catch(() => undefined);
+        this.store.setSeat(groupId, member.bot_id, null);
+      }
+    }
     this.changed(groupId);
   }
 
@@ -621,6 +666,85 @@ export class GroupChats {
   async searchMessages(groupId: string, query: string): Promise<GroupMessage[]> {
     this.require(groupId);
     return this.store.search(groupId, query, 50);
+  }
+
+  // ---------------------------------------------------------------- the quiet board
+
+  /** The board is on for a group that opted in and has no leader. */
+  boardEnabled(groupId: string): boolean {
+    const group = this.store.group(groupId);
+    return !!group && group.workbench_mode !== "off" && this.store.leader(groupId) === null;
+  }
+
+  private requireBoard(groupId: string): void {
+    if (!this.boardEnabled(groupId)) throw new RequestError("The board is off for this group (or it has a leader). Use the group chat, or ask the user to turn on the board.");
+  }
+
+  private noteRefText(ref: GroupNoteRef): string {
+    return ref.note ? `note #${ref.note}` : `#${ref.message}`;
+  }
+
+  /** One note as visit returns it: the body, its refs, and the notes that cite it. */
+  private noteText(note: GroupNote, citedBy: readonly GroupNoteSummary[] = []): string {
+    const lines = [
+      `## Note #${note.id} · ${note.kind} · by ${note.authorName} · ${note.createdAt}`,
+      note.title,
+      "",
+      note.body,
+    ];
+    if (note.refs.length) lines.push("", `Refs: ${note.refs.map((ref) => this.noteRefText(ref)).join(", ")}`);
+    if (note.task) lines.push(`Task: #${note.task}`);
+    if (note.thread) lines.push(`Thread: #${note.thread}`);
+    if (note.supersedes) lines.push(`Supersedes: note #${note.supersedes}`);
+    if (note.supersededBy) lines.push(`Superseded by: note #${note.supersededBy}`);
+    if (citedBy.length) lines.push(`Cited by: ${citedBy.map((entry) => `note #${entry.id} "${entry.title}"`).join(", ")}`);
+    return lines.join("\n");
+  }
+
+  /** group_note: publish a reusable note. It wakes nobody; a wake's digest mentions it. */
+  async publishNote(bot: Bot, groupId: string, input: { kind: NoteKind; title: string; body: string; refs?: readonly GroupNoteRef[]; task?: number | null; thread?: number | null; supersedes?: number | null }): Promise<string> {
+    this.requireMember(groupId, bot.id);
+    this.requireBoard(groupId);
+    const result = this.store.publishNote(groupId, { id: bot.id, name: bot.name }, input);
+    if (!result.ok) return `Not published: ${result.reason}.`;
+    this.store.bumpMetric(groupId, "notes_published");
+    this.changed(groupId);
+    return `Published note #${result.note.id} (${result.note.kind}). It woke nobody; the next wake can list it in its board digest.`;
+  }
+
+  /** group_note_search: bounded, relevance plus citation weight; never returns the body. */
+  async searchNotes(bot: Bot, groupId: string, input: { query: string; limit?: number }): Promise<string> {
+    this.requireMember(groupId, bot.id);
+    this.requireBoard(groupId);
+    const notes = this.store.searchNotes(groupId, input.query, input.limit ?? NOTE_SEARCH_K);
+    this.store.bumpMetric(groupId, "note_searches");
+    if (notes.length === 0) return `No notes matched "${input.query.trim()}". Publish what you learned with group_note, or search the chat with group_search.`;
+    return [`Board search for "${input.query.trim()}" (${notes.length}):`, ...notes.map((note) => `- note #${note.id} · ${note.kind} · ${note.authorName}: ${note.title}${note.refs.length ? `\n  refs: ${note.refs.map((ref) => (ref.note ? `note #${ref.note}` : `#${ref.message}`)).join(", ")}` : ""}\n  ${note.snippet}`), "", "Read one with group_note_visit (up to 8)."].join("\n");
+  }
+
+  /** group_note_visit: all-or-nothing; returns bodies, refs and recent citers, not weights. */
+  async visitNotes(bot: Bot, groupId: string, input: { notes: readonly number[] }): Promise<string> {
+    this.requireMember(groupId, bot.id);
+    this.requireBoard(groupId);
+    const ids = [...new Set(input.notes)].slice(0, NOTE_VISIT_MAX);
+    if (ids.length === 0) throw new RequestError("Which notes? Give note ids (notes: [3, 4]).");
+    const notes = this.store.notesByIds(groupId, ids);
+    if (!notes) return `Not read: at least one of ${ids.map((id) => `#${id}`).join(", ")} doesn't exist. Nothing was returned; check the ids with group_note_search.`;
+    this.store.bumpMetric(groupId, "note_visits");
+    return notes.map((note) => this.noteText(note, this.store.citedBy(groupId, note.id, NOTE_CITED_BY_MAX))).join("\n\n---\n\n");
+  }
+
+  /** The user's board list: recent notes, newest first. */
+  async listNotes(groupId: string, limit = 50): Promise<GroupNoteSummary[]> {
+    this.require(groupId);
+    return this.store.recentNoteSummaries(groupId, limit);
+  }
+
+  /** The user opens one note, with its citers. */
+  async noteDetail(groupId: string, id: number): Promise<{ note: GroupNote; citedBy: GroupNoteSummary[] } | null> {
+    this.require(groupId);
+    const note = this.store.note(groupId, id);
+    return note ? { note, citedBy: this.store.citedBy(groupId, id) } : null;
   }
 
   /** The user's search across groups (search.ts): messages with every term, newest first. */
@@ -1400,6 +1524,8 @@ export class GroupChats {
     for (const timer of [...this.noticeTimers.values(), ...this.sweepTimers.values()]) clearTimeout(timer);
     this.noticeTimers.clear();
     this.sweepTimers.clear();
+    this.noticeTimes.clear();
+    this.boardResets.clear();
   }
 
   // ---------------------------------------------------------------- reminders firing
@@ -1466,6 +1592,14 @@ export class GroupChats {
     if (!groupId || isBusy(agent.status)) return;
     const member = this.store.memberBySeat(agent.id);
     if (!member || member.group_id !== groupId) return;
+    if (this.boardResets.delete(this.key(groupId, member.bot_id))) {
+      void this.serial(groupId, async () => {
+        await this.host.chats.archive(agent.id).catch(() => undefined);
+        this.store.setSeat(groupId, member.bot_id, null);
+        await this.pump(groupId, member.bot_id);
+      });
+      return;
+    }
     void this.serial(groupId, () => this.pump(groupId, member.bot_id));
   }
 
@@ -1910,6 +2044,7 @@ export class GroupChats {
   /** A member left (or its group was deleted): nothing of its seat's waits stays. */
   private forgetSeat(groupId: string, botId: string): void {
     const key = this.key(groupId, botId);
+    this.boardResets.delete(key);
     this.clearBackoff(key);
     this.clearNotice(key);
     const spawn = this.spawnBackoffs.get(key);
@@ -1921,6 +2056,23 @@ export class GroupChats {
     this.crashLoops.delete(key);
     this.clearSweep(key);
     this.failures.delete(key);
+  }
+
+  /** Full mode: how long a seat must wait for its notice budget; 0 when it has room now. */
+  private noticeDelay(key: string): number {
+    if (this.noticeBudget <= 0) return this.noticeWindowMs;
+    const at = Date.now();
+    const recent = (this.noticeTimes.get(key) ?? []).filter((time) => at - time < this.noticeWindowMs);
+    this.noticeTimes.set(key, recent);
+    if (recent.length < this.noticeBudget) return 0;
+    return Math.max(1_000, recent[0]! + this.noticeWindowMs - at + 100);
+  }
+
+  private recordNotice(key: string): void {
+    const at = Date.now();
+    const recent = (this.noticeTimes.get(key) ?? []).filter((time) => at - time < this.noticeWindowMs);
+    recent.push(at);
+    this.noticeTimes.set(key, recent);
   }
 
   /** A busy seat's notice goes out after `delay`, carrying whatever came in by then. */
@@ -2037,6 +2189,7 @@ export class GroupChats {
    * notice.
    */
   private async pump(groupId: string, botId: string, flush = false): Promise<void> {
+    if (this.closed) return;
     const group = this.store.group(groupId);
     const member = this.store.member(groupId, botId);
     if (!group || !member?.active) return;
@@ -2076,6 +2229,18 @@ export class GroupChats {
     if (spawn && spawn.until > Date.now()) {
       this.armBackoff(this.spawnBackoffs, groupId, botId);
       return;
+    }
+    // Full mode: a soft cap on notices per seat, and a short idle debounce so a burst is one turn.
+    if (group.workbench_mode === "full" && leaderId === null) {
+      const wait = this.noticeDelay(key);
+      if (wait > 0) {
+        this.armNotice(groupId, botId, wait);
+        return;
+      }
+      if (!busy && !flush) {
+        this.armNotice(groupId, botId, this.idleNoticeDelayMs);
+        return;
+      }
     }
     // A busy seat's notice waits a moment, so what comes in meanwhile joins it; an idle seat starts at once.
     if (busy && !flush) {
@@ -2135,6 +2300,12 @@ export class GroupChats {
       // A led member's session is for one piece: its other tasks come back with their threads.
       owed: seat || piece ? [] : this.store.tasks(groupId, { statuses: OPEN_TASKS, assigneeId: botId }),
     });
+    // The board rides on a wake that was happening anyway: at most five new titles, never a wake of its own.
+    const boardNotes = this.boardEnabled(groupId) ? this.store.newNoteSummaries(groupId, member.last_note_id, NOTE_DIGEST_MAX) : [];
+    const digest = boardNotes.length
+      ? `\n\nBoard — ${boardNotes.length} new note${boardNotes.length === 1 ? "" : "s"} since your last wake:\n${boardNotes.map((note) => `- note #${note.id} · ${note.kind}: ${note.title}`).join("\n")}\nSearch with group_note_search; read with group_note_visit. Publishing one wakes nobody.`
+      : "";
+    const promptText = text + digest;
     const files = await this.deliveryFiles([...joins.flatMap((join) => [join.parent, ...join.recent, join.trigger]), ...handed], botId);
     const clientMessageId = randomUUID();
     const told = pending.map((entry) => entry.message.seq);
@@ -2151,12 +2322,12 @@ export class GroupChats {
     try {
       if (!seat) {
         const chatId = await this.startSeat(bot, {
-          prompt: text,
+          prompt: promptText,
           title: `Group · ${group.name}`,
           cwd: folder,
           extraFolders: this.extraFoldersOf(this.store.group(groupId) ?? group),
           labels: { [GROUP_LABEL]: groupId },
-          group: { id: groupId, name: group.name },
+          group: { id: groupId, name: group.name, workbenchMode: group.workbench_mode },
           clientMessageId,
           ...(files.images.length ? { images: files.images } : {}),
           ...(files.attachments.length ? { attachments: files.attachments } : {}),
@@ -2175,7 +2346,7 @@ export class GroupChats {
         this.crashLoop(key).startedAt = Date.now();
       } else {
         await sendToChat(this.host, seat.id, {
-          text,
+          text: promptText,
           activeTurnBehavior: "steer",
           messageId: clientMessageId,
           ...(files.images.length ? { images: files.images } : {}),
@@ -2184,6 +2355,8 @@ export class GroupChats {
       }
       this.store.markNoticed(groupId, botId, told);
       this.store.bumpMetric(groupId, "notices");
+      if (group.workbench_mode === "full" && leaderId === null) this.recordNotice(key);
+      if (boardNotes.length) this.store.markNotesSeen(groupId, botId, boardNotes.at(-1)!.id);
       this.store.markRemindersWoken(reminders.map((reminder) => reminder.id));
       if (piece && piece.work !== null) this.store.setSeatTask(groupId, botId, piece.work);
     } catch (error) {

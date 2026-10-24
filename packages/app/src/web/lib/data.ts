@@ -11,6 +11,8 @@ import {
   chatsListRpc,
   chatTimelineRpc,
   groupMessagesRpc,
+  groupNoteRpc,
+  groupNotesRpc,
   groupRemindersRpc,
   groupTasksRpc,
   groupsListRpc,
@@ -43,6 +45,8 @@ export const keys = {
   /** Under groupMessages, so the group's changes refresh its open thread too. */
   groupThread: (groupId: string, thread: number) => ["groups", "messages", groupId, "thread", thread] as const,
   groupTasks: (groupId: string) => ["groups", "messages", groupId, "tasks"] as const,
+  groupNotes: (groupId: string) => ["groups", "messages", groupId, "notes"] as const,
+  groupNote: (groupId: string, id: number) => ["groups", "messages", groupId, "notes", id] as const,
   groupReminders: (groupId: string) => ["groups", "messages", groupId, "reminders"] as const,
 };
 
@@ -363,6 +367,16 @@ export function useGroupReminders(groupId: string, enabled: boolean) {
 /** A group's tasks (its task board), refreshed with its messages. */
 export function useGroupTasks(groupId: string, enabled: boolean) {
   return useQuery({ queryKey: keys.groupTasks(groupId), queryFn: async () => (await rpc(groupTasksRpc, { groupId })).tasks, enabled });
+}
+
+/** The group's board: recent notes, newest first, refreshed with its messages. */
+export function useGroupNotes(groupId: string, enabled: boolean) {
+  return useQuery({ queryKey: keys.groupNotes(groupId), queryFn: async () => (await rpc(groupNotesRpc, { groupId, limit: 50 })).notes, enabled });
+}
+
+/** One board note in full, with the notes that cite it. */
+export function useGroupNote(groupId: string, id: number | null) {
+  return useQuery({ queryKey: keys.groupNote(groupId, id ?? 0), queryFn: async () => (await rpc(groupNoteRpc, { groupId, id: id! })), enabled: !!id });
 }
 
 // ---------------------------------------------------------------- one chat
