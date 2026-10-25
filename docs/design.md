@@ -361,6 +361,7 @@ bot 不能直接改自己或别人的设置，只能提议：卡片逐条列出�
 - **叫醒只给提示**：叫醒一个 bot 时只告诉它「哪里有几条新消息、有没有人找你」，不带消息内容；消息由它自己用 `group_read` 读。正在干活的 bot 也只是多收到一条提示，不会被打断。
 - **发言前检查**：bot 发言、认领任务、改任务状态之前，pocket-bots 检查它的模型有没有看过目标位置的新消息；没看过就先不发，存成草稿并给它看最新的几条。
 - **认领是锁**：一条顶层消息可以变成任务，先认领的生效，别人认领不到就不做同一件事。
+- **三种协作方式**：自由（上面这些规则）、leader（一个 bot 计划和派活，别的 bot 只收派给它的，规则见 [group-chats.md](group-chats.md) 的「有 leader 的群」）、共享看板（§6.10，bot 之间不发消息，通过一块只追加的看板协作）。共享看板和 leader 互斥。
 
 ### 6.2 消息存储
 
@@ -380,6 +381,8 @@ bot 不能直接改自己或别人的设置，只能提议：卡片逐条列出�
 | `group_thread_follows` | 谁关注哪个线程、为什么、取消了没有 |
 | `group_reminders`、`group_reminder_events` | bot 给自己定的提醒和每次变化 |
 | `group_messages_fts` | 全文索引（trigram） |
+| `group_board` | 共享看板的条目（§6.10）：群内编号、作者、写的时候在做哪个请求、做了什么、结果、依据、引用、认领；同一轮里同一个认领只能有一条（唯一索引） |
+| `group_rounds`、`group_round_members` | 共享看板群里的一轮（§6.10）：哪条请求、第一个上手的 bot、其他 bot 加入了没有、谁回答、回答是哪条、什么时候结束；每个 bot 在这一轮里的状态和怎么做完的 |
 
 一条消息、它的全部投递记录、它引起的线程关注、发送者的读位置，在**同一个事务**里写完。bot 发言带幂等键，进程中途崩溃后重试不会发出两条。
 
@@ -499,10 +502,13 @@ They haven't been read. Read them when it suits you: group_read with unread: tru
 | `group_reminder` | 给自己定、列出、推迟、改、取消提醒，看记录 |
 | `group_mention_delivery` | 查自己一条消息里每个被 @ 的成员收到没有 |
 | `group_members` | 成员、在忙还是空闲、是否静音、手上的任务 |
+| `board_publish`、`board_search`、`board_visit`、`board_finish` | 共享看板群（§6.10）：写条目、搜、按编号读、说自己的部分做完了 |
 
 **座位没有改配置的工具**：`get_setup`、`propose_changes`、`propose_routine`、`propose_skill` 只在 bot 自己的聊天里有（§5.4）。
 
 **有 leader 的群里，成员只列出干活用得到的工具**：`group_send`、`group_send_draft`、`group_read`、`group_claim`、`group_react`、`group_members`，加上 `search_chats`（工具上标着 `led`，`tools/mcp.ts` 的 `ledMember` 按 `GroupChats.ledBy` 判断）。计划、任务、提醒、关注、静音、@ 的去向、问别的 bot、改配置这些它的规则里用不到，就不放进它每次请求都要带的工具列表；它的 prompt 里「Bot tools」一段也只提这些。只是不列出，调用照样执行：会话只在开始时取一次工具列表，换 leader 后已经开着的会话列表是旧的，下次开会话时才更新（prompt 也一样）。成员 @ 了群外的 bot，结果里不再建议用 `ask_bot`。
+
+**共享看板群里，座位只列出看板的工具和回答你用得到的**：`group_send`、`group_send_draft`、`group_read`、`group_react`、四个 `board_*`，加上 `search_chats`（工具上标着 `board`，`tools/mcp.ts` 的 `boardSeat` 按 `GroupChats.isBoard` 判断）。`board_*` 只在看板群里有（`available`）。这些工具的说明一共约 6.3K 字符，没有 leader 的群里一个座位列出的群聊和 bot 工具约 11.6K。
 
 ### 6.9 座位的 prompt
 
@@ -515,10 +521,29 @@ They haven't been read. Read them when it suits you: group_read with unread: tru
 | 没有 leader 的群 | 消息、被叫醒时、线程和历史、任务（认领、建任务和拆活）、提醒和 @、子 agent（能开时）、写法、礼节、约束和权限 | 约 6.9K 字符，带子 agent 约 8K |
 | leader | leader 一段（计划、派活、核对结果、请求做完后回复你的请求告诉你结果、成员一轮失败时怎么办、成员和模型），加上面除「认领、拆活」和子 agent 以外的部分 | 约 8.8K |
 | 成员 | 成员一段（只做派给它的、做完在线程里汇报一次就停（带上跑了哪些测试和检查、结果如何）、不改状态、卡住问 leader、能开子 agent 时自己做），加消息、写法、约束和权限 | 约 4.8K |
+| 共享看板群的座位 | 看板一段（`shared/group-board.ts` 的 `boardSection`：先搜再写、先认领再动手、边做边写中间结果、条目怎么写、搜索和读、做完和谁回答），加消息、写法、约束和权限（`boardGroupPrompt`） | 约 4.5K |
 
 **成员跑过的检查 leader 不再重复**：成员汇报时说明跑了哪些测试和检查、结果如何；leader 照样核对结果，但成员已经跑过的检查不用再跑一遍。基准测试里成员报了「typecheck 通过、435 个测试通过」，leader 还是把 typecheck 和整套测试又跑了一遍。
 
 原来分别是 12.5K（带子 agent 15.1K）、15.1K 和 15.8K。
+
+### 6.10 共享看板
+
+第三种协作方式（`groups.coordination = 'board'`）。规则和例子见 [group-chats.md](group-chats.md#共享看板bot-之间不说话通过看板协作)，为什么这样设计、和相关工作的关系、实验见 [group-board.md](group-board.md)。实现分两层：
+
+- **纯逻辑**（`shared/group-board.ts`）：引用格式（`B3`、`#12`）和写入规则（引用存在、依据点名每条引用、长度）、认领的规范化、分词（NFKC、小写、字母数字连续段，CJK 连续段加相邻两字）、BM25、引用权重（每次搜索时从全部条目重算）、排序、bot 看到的条目文字、座位 prompt 里的看板一段、一轮里的提示和 `board_finish` 的结果文字。
+- **存储**（`server/group-store.ts`）：`deliver()` 里看板群的投递规则（bot 的消息只给你和它自己；你的消息按 addressed 方式叫醒；开放的请求只叫醒 `boardStarter`，其他 bot 写一条没有叫醒原因的记录，作为「等着加入」进这一轮），和消息、投递记录在同一个事务里开始一轮；`publishBoard` 在一个事务里检查规则、认领、编号；`fanOut` 把等着的 bot 的记录改成有叫醒原因（`open`）并编上加入顺序。
+- **流程**（`server/groups.ts`）：
+  - 你发消息时（`postFromUser`）选第一个上手的 bot（`boardStarter`：能启动的、空闲优先、最久没当第一个的），有等着的 bot 就设一个三分钟的计时（`armFanOut`）。
+  - `pump()` 给一轮里在做的 bot 的提示带上请求全文（和 leader 群的成员一样放进 `handed`）和它的角色（`roundNotices` → `roundNoticeText`）；被选来回答的 bot 收到「该回答了」的提示（`owedReports`），它的运行时收下这条提示时记为已告知（`onInputAccepted`）。
+  - `board_publish` 带认领时，作者是一轮的第一个、别人还没加入，就让他们马上加入（`fanOutNow`）：认领了自己那块，说明它把活拆开了。只写条目不认领不算。
+  - 认领冲突（`claimsOverlap`）：规范化后相同；有一个文件相同（路径或文件名，「src/duration.js」和「duration.js（parse + format）」）；或一个认领的词都在另一个里（「src/wrap.js」和「src/wrap.js and test/wrap.test.js」）。实验里 bot 用不同的写法认领了同一个文件，只比相等拦不住。
+  - 座位的一轮结束（`onTurnEnded` → `endRounds`）：它收下过的请求都算它做完了（`roundsTakenIn`：提示被收下，或请求被读过），然后 `settleRound` 决定这一轮接下来怎么办；被告知回答的 bot 这一轮结束，这一轮就结束。
+  - `settleRound`：还有人在做就什么都不做；第一个上手的 bot 失败了就让等着的加入，否则等着的记成没轮到；回答过了就结束；`board_finish` 来的就让调用者回答（结果里直接说）；否则挑最后一个没失败的叫醒它回答；都失败了记一条只给你看的系统消息。决定的部分里没有 `await`，两个 bot 同时做完也不会选出两个回答者。
+  - bot 回复请求（`post` 里 `reply_to` 指向一轮的请求）就记为回答。
+  - 发言前检查在看板群里顶层不做「第一次碰」，数新消息只数有叫醒原因的记录（`freshnessRows`）。
+  - 重启（`resume`）：看板群的座位和 leader 群的成员一样不补课，没被收下的提示重发；还没加入的计时按请求发出时间接着算。
+  - 换协作方式：座位的聊天带一个标签（`GROUP_COORDINATION_LABEL`）记它按哪种方式开始；不一样了，下次叫醒时换新座位，简报里说明原因（`recast`）。
 
 ---
 
@@ -560,6 +585,7 @@ timeline         chat_id, key, seq_start, seq_end, turn_id, ts, item(JSON)   -- 
 turns            chat_id, turn_id, started_at, ended_at, outcome, error, usage
 timeline_fts     FTS5 trigram：单聊里你和 bot 的消息
 groups … group_reminder_events、group_messages_fts   -- 见 §6.2；groups.extra_folders 是群的额外文件夹（JSON 数组）
+group_board、group_rounds、group_round_members        -- 共享看板（§6.10）；groups.coordination 是群的协作方式
 ```
 
 搜索（⌘K、聊天里的 ⌘F）用两张 FTS5 trigram 表：群消息发出时就进索引；单聊的回复是一点点流进来的，所以 `timeline_fts` 不在写入时维护，而是每次搜索前把各聊天新增的条目补进去。trigram 能查词的任意一部分和中文；不到三个字的词改成在命中的行里过滤。

@@ -11,6 +11,7 @@ import {
   citationWeights,
   citersOf,
   claimKey,
+  claimsOverlap,
   namesRef,
   parseBoardRef,
   rankBoard,
@@ -62,6 +63,14 @@ describe("board refs and the rules for publishing", () => {
   it("keeps one claim per piece however it's written", () => {
     expect(claimKey("  src/Slugify.ts ")).toBe("src/slugify.ts");
     expect(claimKey("Part  ONE")).toBe("part one");
+    // Seen in a live run: two bots took src/duration.js under different names.
+    const key = (claim: string) => claimKey(claim);
+    expect(claimsOverlap(key("src/duration.js (parseDuration + formatDuration) and test/duration.test.js"), key("src/duration.js"))).toBe(true);
+    expect(claimsOverlap(key("duration.js"), key("src/duration.js"))).toBe(true);
+    expect(claimsOverlap(key("src/wrap.js"), key("the wrap module, src/wrap.js"))).toBe(true);
+    expect(claimsOverlap(key("parser"), key("parser tests"))).toBe(true);
+    expect(claimsOverlap(key("src/duration.js"), key("src/semver.js"))).toBe(false);
+    expect(claimsOverlap(key("port + owning-team contradictions (all services)"), key("datastore + region contradictions (all services)"))).toBe(false);
   });
 });
 

@@ -35,10 +35,11 @@ export const BOARD_CITE_STEP = 0.3;
 /** Every published entry decays every weight by this factor (the paper's γ, per step of the board). */
 export const BOARD_DECAY = 0.98;
 /**
- * An open request goes to one bot first; the others join when it publishes to the board or, if it's
- * still working, after this long (1 minute) from the request.
+ * An open request goes to one bot first; the others join when it claims a piece on the board or, if
+ * it's still working, after this long (3 minutes) from the request. A minute brought everyone in on
+ * work one bot finishes in three, and each bot that joins starts from nothing.
  */
-export const BOARD_FAN_OUT_MS = 60_000;
+export const BOARD_FAN_OUT_MS = 3 * 60_000;
 
 export const BoardEntrySchema = z.object({
   /** B1, B2…: numbered per group, never reused. */
@@ -110,6 +111,25 @@ export function boardEntryProblem(input: { subTask: string; artifact: string; ra
  */
 export function claimKey(claim: string): string {
   return claim.normalize("NFKC").toLowerCase().trim().replace(/\s+/g, " ");
+}
+
+const PATH = /[\p{L}\p{N}_-]+(?:[./][\p{L}\p{N}_-]+)+/gu;
+const words = (key: string) => new Set(key.split(/[^\p{L}\p{N}]+/u).filter(Boolean));
+
+/**
+ * Whether two claims (claimKey) take the same piece, however differently they're written: the same
+ * key; a file in common ("src/duration.js" and "duration.js (parse + format)"); or every word of one
+ * in the other ("src/wrap.js" and "src/wrap.js and test/wrap.test.js"). Bots name a piece in their
+ * own words, so equal keys alone let two of them take it.
+ */
+export function claimsOverlap(a: string, b: string): boolean {
+  if (a === b) return true;
+  const files = (key: string) => new Set((key.match(PATH) ?? []).flatMap((path) => [path, path.split("/").at(-1)!]));
+  const fa = files(a);
+  if ([...files(b)].some((file) => fa.has(file))) return true;
+  const [wa, wb] = [words(a), words(b)];
+  const within = (x: Set<string>, y: Set<string>) => x.size > 0 && [...x].every((word) => y.has(word));
+  return within(wa, wb) || within(wb, wa);
 }
 
 // ---------------------------------------------------------------- ranking
@@ -227,13 +247,14 @@ export function boardSection(subAgents: boolean): string {
   return [
     "How this group works: through a shared board, not by talking to each other.",
     "- The user's requests go to the bots, which work on them in parallel and never message each other: the board is how your work reaches the other bots, and theirs reaches you. Nobody assigns work; what each bot takes on comes from the board. Your group messages reach only the user.",
-    "- An open request goes to one bot first. If it's quick, that bot just answers it. If it's worth sharing, it publishes the pieces on the board, and the other bots join once something is there (or after a minute).",
+    "- An open request goes to one bot first, which does it alone unless it has several substantial pieces that can run in parallel: every bot that joins starts from nothing and reads the context again, so splitting small work costs more than it saves. To split, it publishes the plan and claims its own piece, and the other bots join.",
     "- READ BEFORE YOU WRITE: before starting a piece, board_search its wording and the names of what you'd work on (files, functions, subjects). Work an entry records is DONE: build on it and take uncovered ground.",
-    "- CLAIM, THEN WORK: when you take on a piece, publish that first, with claim: the piece's name (a file you'll change, a part of the request). The first claim wins: a piece claimed for the request is refused to anyone else, so pick another. Leave files another bot has claimed alone.",
+    "- CLAIM, THEN WORK: when you take on a piece, publish that first, with claim: the piece's name as the plan gives it (a file you'll change, one part of the request; never the whole request). The first claim wins: a piece that overlaps one already claimed for the request is refused, so pick another.",
+    "- STAY IN YOUR CLAIM: do your piece, not the others'. Don't redo or re-verify a piece whose entry gives its evidence, and leave files another bot claimed alone; if you doubt an entry, check that one thing and publish what you found.",
     "- Publish as you go, mostly intermediate work: partial results, leads, dead ends, what you ruled out. Work you don't publish is lost to the others.",
     '- An entry (board_publish): sub_task, what you did in the present perfect, in the words someone would search for ("I\'ve checked the retry limits in api.md"); artifact, the result itself, reusable without redoing the work, with how you checked it (the test or command and its outcome; label unchecked claims as such); rationale, briefly how you got it, naming every ref and what it gave ("B3 listed the files"); refs, the entries (B3) and group messages (#12) you used. A ref must exist and the rationale must name it, or the entry is refused. Cite what you used. Build on a result whose evidence holds; when you find an entry wrong, publish that, citing it.',
     "- board_search returns at most 8 entries, ranked by relevance and by how much others built on them, never by who wrote them. board_visit fetches entries by number, such as an entry's refs or the entries citing it.",
-    "- When your part of a request is done, publish its result and call board_finish with the request's number: the last bot to finish answers the user, and board_finish tells you whether that's you. The answer is a group_send with reply_to: the request, built from the board, not only your part: the outcome first, what was done and found, what was checked, and what's left open. Otherwise stop: don't post progress or results in the group.",
+    "- When your part of a request is done, publish its result and call board_finish with the request's number: the last bot to finish answers the user, and board_finish tells you whether that's you. The answer is a group_send with reply_to: the request, built from the board, not only your part: the outcome first, what was done and found, what was checked, and what's left open; if the request has an overall check (a test suite, a build), the one answering runs it once. Otherwise stop: don't post progress or results in the group.",
     ...(subAgents ? ["- Do your pieces yourself: the other bots already work in parallel, and a sub-agent starts from nothing and can't use the board."] : []),
   ].join("\n");
 }
@@ -241,7 +262,7 @@ export function boardSection(subAgents: boolean): string {
 /** One request a seat is woken for, and its part in it. */
 export type RoundNotice =
   | { kind: "first"; seq: number; waiting: number }
-  | { kind: "join"; seq: number; starter: string | null; others: readonly string[]; position: number; joining: number }
+  | { kind: "join"; seq: number; starter: string | null; others: readonly string[]; position: number; joining: number; taken: readonly string[] }
   | { kind: "together"; seq: number; others: readonly string[] }
   | { kind: "solo"; seq: number }
   | { kind: "report"; seq: number };
@@ -252,11 +273,12 @@ export function roundNoticeText(notice: RoundNotice): string {
   const finish = `Call board_finish with request: ${seq} when your part is done; the last bot to finish answers the user.`;
   switch (notice.kind) {
     case "first":
-      return `You're first on #${seq}; ${notice.waiting} other bot${notice.waiting === 1 ? " is" : "s are"} waiting. If you can do it alone in a few steps, do it and answer (group_send with reply_to: ${seq}), without publishing. If it's bigger, publish its pieces on the board first: the others join as soon as the board has an entry of yours (or in a minute). ${finish}`;
+      return `You're first on #${seq}; ${notice.waiting} other bot${notice.waiting === 1 ? " is" : "s are"} waiting. If one bot can do it in a few minutes, do it alone and answer (group_send with reply_to: ${seq}), without claiming anything: answering is all it takes. Split it only when it has several substantial pieces that can run in parallel: publish the plan with its pieces, then claim yours; your claim brings the others in (so does still working on it after 3 minutes). ${finish}`;
     case "join": {
       const started = notice.starter ? `${notice.starter} started on #${seq}, and you` : "You";
       const company = notice.others.length ? ` join it with ${notice.others.join(", ")}` : " join it";
-      return `${started}${company}: you're ${notice.position} of ${notice.joining} joining now. Search the board first (board_search), then claim a piece nobody has claimed (when several are free, try number ${notice.position} of them first) and publish as you go. ${finish}`;
+      const taken = notice.taken.length ? ` Claimed so far: ${notice.taken.join("; ")}.` : "";
+      return `${started}${company}: you're ${notice.position} of ${notice.joining} joining now.${taken} Search the board first (board_search), then claim a piece nobody has claimed (when several are free, try number ${notice.position} of them first), do only that piece and publish as you go. ${finish}`;
     }
     case "together":
       return `The user asked you and ${notice.others.join(", ")} on #${seq}: work on it together through the board (board_search first, then publish as you go). ${finish}`;
@@ -276,7 +298,7 @@ export function finishText(input: { seq: number } & ({ state: "not_working" } | 
     case "others":
       return `Noted: your part of #${seq} is done. Still working: ${input.working.join(", ")}. The last one to finish answers the user, so stop here.`;
     case "last":
-      return `You're the last on #${seq}: answer the user now, with group_send reply_to: ${seq}. Build it from the board (board_search it: the others' work isn't in your context): the outcome first, what was done and found, what was checked, and what's left open.`;
+      return `You're the last on #${seq}: answer the user now, with group_send reply_to: ${seq}. Build it from the board (board_search it: the others' work isn't in your context); if the request has an overall check (a test suite, a build), run it once first. The outcome first, then what was done and found, what was checked, and what's left open.`;
     case "answered":
       return `#${seq} was answered in #${input.answer} before you finished. If your part changes or adds to that answer, reply to #${input.answer} with just that; otherwise stop here.`;
   }

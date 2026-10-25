@@ -330,6 +330,7 @@ export class GroupChats {
   /**
    * What a seat's prompt says about its group: the name, and with a leader, the seat's part: the
    * leader, with what each member it hands work to does and runs on, or a member, with its leader.
+   * A board group's seats all get the board's part instead.
    */
   async seatGroup(groupId: string, botId: string | null): Promise<{ name: string; lead?: GroupLead; board?: boolean } | null> {
     const group = this.store.group(groupId);
@@ -405,7 +406,8 @@ export class GroupChats {
   async update(groupId: string, input: { name?: string | null; memberIds?: string[] | null; wakeMode?: WakeMode | null; leaderId?: string | null; cwd?: string | null; extraFolders?: string[]; coordination?: Coordination | null }): Promise<void> {
     const group = this.require(groupId);
     const coordination = input.coordination ?? group.coordination;
-    if (coordination === "board" && (input.leaderId ?? (input.leaderId === undefined ? this.store.leader(groupId) : null))) throw new RequestError(BOARD_NO_LEADER);
+    const leaderAfter = input.leaderId === undefined ? this.store.leader(groupId) : input.leaderId;
+    if (coordination === "board" && leaderAfter) throw new RequestError(BOARD_NO_LEADER);
     // Checked before anything changes, so a folder that isn't there changes nothing.
     const cwd = input.cwd === undefined ? undefined : input.cwd?.trim() ? await workFolder(input.cwd) : null;
     const folders = input.extraFolders === undefined ? undefined : await extraFolders(input.extraFolders, cwd === undefined ? group.cwd : cwd);
@@ -1314,7 +1316,7 @@ export class GroupChats {
 
   /**
    * board_publish: an entry on the group's board, under the request the bot is working on. The
-   * first bot on an open request publishing means the work is worth sharing: the others join it now.
+   * first bot on an open request claiming a piece means it split the work: the others join it now.
    */
   async boardPublish(bot: Bot, groupId: string, input: { subTask: string; artifact: string; rationale: string; refs: readonly string[]; claim?: string | null }): Promise<string> {
     this.requireBoard(groupId, bot.id);
@@ -1323,7 +1325,7 @@ export class GroupChats {
     if ("problem" in result) return `Not published: ${result.problem}`;
     this.changed(groupId);
     const joined: string[] = [];
-    for (const round of working) if (round.starterId === bot.id && !round.fannedOut) joined.push(...this.fanOutNow(groupId, round.seq));
+    if (result.entry.claim) for (const round of working) if (round.starterId === bot.id && !round.fannedOut) joined.push(...this.fanOutNow(groupId, round.seq));
     const bots = await this.allBots();
     const names = [...new Set(joined)].map((id) => bots.get(id)?.name ?? id);
     return `Published as B${result.entry.number}.${names.length ? ` ${names.join(", ")} join${names.length === 1 ? "s" : ""} the request now, and will find it on the board.` : ""}`;
@@ -1490,7 +1492,8 @@ export class GroupChats {
       else if (round.starterId === botId) notices.push({ kind: "first", seq, waiting: others.filter((member) => member.state === "waiting").length });
       else if (round.starterId) {
         const joining = round.members.filter((member) => member.position > 0);
-        notices.push({ kind: "join", seq, starter: name(round.starterId), others: joining.filter((member) => member.botId !== botId).map((member) => name(member.botId)), position: me.position, joining: joining.length });
+        const taken = this.store.boardClaims(groupId, seq).map((claim) => claim.claim);
+        notices.push({ kind: "join", seq, starter: name(round.starterId), others: joining.filter((member) => member.botId !== botId).map((member) => name(member.botId)), position: me.position, joining: joining.length, taken });
       } else notices.push({ kind: "together", seq, others: others.map((member) => name(member.botId)) });
     }
     for (const seq of reports) notices.push({ kind: "report", seq });

@@ -24,7 +24,7 @@ import {
   type WakeMode,
   type WakeReason,
 } from "../shared/group-chat";
-import { BOARD_ENTRIES_MAX, boardEntryProblem, claimKey, type BoardEntry, type Coordination } from "../shared/group-board";
+import { BOARD_ENTRIES_MAX, boardEntryProblem, claimKey, claimsOverlap, type BoardEntry, type Coordination } from "../shared/group-board";
 import type { Db } from "./db";
 import { RequestError } from "./errors";
 import { ftsFilter, type GroupSearchHit } from "./search";
@@ -713,9 +713,11 @@ export class GroupStore {
       if (problem) return { problem };
       const claim = input.claim ? claimKey(input.claim) : null;
       if (claim) {
-        const holder = this.db.get<{ number: number; author_id: string }>("SELECT number, author_id FROM group_board WHERE group_id = ? AND COALESCE(round_seq, 0) = ? AND claim = ?", groupId, round ?? 0, claim);
-        if (holder && holder.author_id !== authorId) return { problem: `"${claim}" is already taken (B${holder.number}): take another piece, and publish without that claim.` };
-        if (holder) return { problem: `You already took "${claim}" in B${holder.number}: publish your progress on it without the claim.` };
+        const claims = this.boardClaims(groupId, round);
+        const holder = claims.find((taken) => claimsOverlap(taken.claim, claim));
+        const others = claims.filter((taken) => taken.authorId !== authorId).map((taken) => `"${taken.claim}" (B${taken.number})`);
+        if (holder && holder.authorId !== authorId) return { problem: `"${claim}" overlaps "${holder.claim}", already claimed in B${holder.number}: take another piece, and publish without that claim. Claimed for this request: ${others.join("; ")}.` };
+        if (holder) return { problem: `You already claimed "${holder.claim}" in B${holder.number}: publish your progress on it without a claim.` };
       }
       if (last >= BOARD_ENTRIES_MAX) return { problem: `The board is full (${BOARD_ENTRIES_MAX} entries) and nothing is ever removed from it: tell the user, and carry on without publishing.` };
       const number = last + 1;
@@ -734,6 +736,13 @@ export class GroupStore {
       );
       return { entry: boardEntryOf(this.db.get<BoardRow>("SELECT * FROM group_board WHERE group_id = ? AND number = ?", groupId, number)!) };
     });
+  }
+
+  /** The pieces claimed on the board for a request (or outside any), in the order they were claimed. */
+  boardClaims(groupId: string, round: number | null): { number: number; authorId: string; claim: string }[] {
+    return this.db
+      .all<{ number: number; author_id: string; claim: string }>("SELECT number, author_id, claim FROM group_board WHERE group_id = ? AND COALESCE(round_seq, 0) = ? AND claim IS NOT NULL ORDER BY number", groupId, round ?? 0)
+      .map((row) => ({ number: Number(row.number), authorId: row.author_id, claim: row.claim }));
   }
 
   /** A user's request starts a round: the bots it woke work on it; for an open one, the rest wait to join. */

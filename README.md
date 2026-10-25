@@ -13,6 +13,7 @@ The docs below are written in Chinese:
 - How it is built (components, communication, agents, bots, group chats): [docs/design.md](docs/design.md)
 - How several bots work together in a group chat (full rules and examples): [docs/group-chats.md](docs/group-chats.md)
 - The group chat protocol (for developers: how messages flow, what each step reads and writes, who receives what in each combination): [docs/group-protocol.md](docs/group-protocol.md)
+- The shared board, the third way for a group's bots to work together (why, related work, experiments): [docs/group-board.md](docs/group-board.md)
 
 > **About Claude**: Claude is driven through the Claude Agent SDK, using the `claude` installed on your machine and your own claude.ai login. Anthropic does not allow third-party products to offer claude.ai login to other people, so this part is for your personal use only.
 
@@ -161,7 +162,7 @@ When an agent calls back into pocket-bots (⑦–⑧):
 
 The webhooks in the Relay box are not called by agents: another program POSTs to `http://127.0.0.1:<relay port>/hooks/<routineId>/<secret>`, and the backend opens a new chat to run that routine, following the same flow from ②. The relay listens only on 127.0.0.1, so the caller must be on the same computer.
 
-Group chats use the same channels. Each bot has a **seat** in the group, which is an ordinary chat going through ②–⑥. A bot can read and write the group only through group chat tools (⑦⑧); text it outputs directly in its seat does not go into the group. When there are new messages, the backend sends a hint into the seat through ②, saying only where and how many new messages there are, and the bot calls `group_read` itself to read them. Before a bot's `group_send` goes through, the backend checks that it has not missed new messages; when several bots split the work, each claims a task with `group_claim` before starting. See [docs/group-chats.md](docs/group-chats.md) for the full rules, [docs/group-protocol.md](docs/group-protocol.md) for how messages flow, and [docs/design.md](docs/design.md) for details on components and communication.
+Group chats use the same channels. Each bot has a **seat** in the group, which is an ordinary chat going through ②–⑥. A bot can read and write the group only through group chat tools (⑦⑧); text it outputs directly in its seat does not go into the group. When there are new messages, the backend sends a hint into the seat through ②, saying only where and how many new messages there are, and the bot calls `group_read` itself to read them. Before a bot's `group_send` goes through, the backend checks that it has not missed new messages; when several bots split the work, each claims a task with `group_claim` before starting. A group can instead work through a shared board: the bots don't message each other, they publish what they did to a board and search it, and the last one to finish answers. See [docs/group-chats.md](docs/group-chats.md) for the full rules, [docs/group-protocol.md](docs/group-protocol.md) for how messages flow, and [docs/design.md](docs/design.md) for details on components and communication.
 
 ## Development
 

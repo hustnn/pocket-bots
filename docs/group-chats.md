@@ -1,6 +1,6 @@
 # 群聊：多个 agent 怎么在一个群里协作
 
-2–6 个 bot 和你在同一个长期存在的对话里。这篇讲群聊的规则：先用一个例子把整套机制走一遍，再逐条列规则。组件和整体架构见[设计](design.md#6-群聊怎么工作)，怎么用见[使用指南](USAGE.md#10-群聊和-bot-之间协作)，按代码梳理的消息流程、状态和各种组合下谁收到、谁被叫醒，见[群聊通信协议](group-protocol.md)。
+2–6 个 bot 和你在同一个长期存在的对话里。这篇讲群聊的规则：先用一个例子把整套机制走一遍，再逐条列规则。bot 之间有三种协作方式：**自由**（都在群里说话，各自判断要不要参与，下面的例子就是这种）、**leader**（一个 bot 计划、派活，见「规则」里的「有 leader 的群」）和**共享看板**（bot 之间不发消息，通过一块看板协作，见后面的[共享看板](#共享看板bot-之间不说话通过看板协作)；为什么这样设计、和几篇相关工作的关系、实验结果见 [group-board.md](group-board.md)）。组件和整体架构见[设计](design.md#6-群聊怎么工作)，怎么用见[使用指南](USAGE.md#10-群聊和-bot-之间协作)，按代码梳理的消息流程、状态和各种组合下谁收到、谁被叫醒，见[群聊通信协议](group-protocol.md)。
 
 ## 存了什么
 
@@ -527,6 +527,112 @@ bot 在群里的回复可以带文件和问题，和一对一聊天一样，你�
 - pocket-bots 重启时，审批随旧进程没了，还是 pending 的问题记成 closed。
 - 其他审批、secret 的问题、登录还在座位里：群顶上「X needs your approval」只看这些（群里已经显示的问题不算），点一下进座位。座位里没有提议工具（`get_setup`、`propose_*`），改配置、建定时任务、存技能在 bot 自己的聊天里做。
 
+## 共享看板：bot 之间不说话，通过看板协作
+
+在 **Members** 里把「How they work together」选成 **Shared board**，群就换成这种方式。它要解决的是另外两种方式的问题：自由方式下 bot 的每条消息都会叫醒其他 bot，人一多来回就多；leader 方式下所有活都经过 leader，leader 慢了、忙了或者出错了，整个群都在等。
+
+共享看板的做法来自 ScaleMAS（arXiv:2610.16120）：bot 之间**不发消息**，各自把做过的事写成一条条**看板条目**，别的 bot 需要时自己去**搜**，每次最多拿回 8 条。写条目不叫醒任何人。
+
+### 存了什么
+
+这些都在 SQLite 里（迁移 21），和群消息在同一个文件。
+
+| 存什么 | 说明 | 表 |
+|---|---|---|
+| 群的协作方式 | `chat`（自由或 leader）或 `board` | `groups.coordination` |
+| 看板条目 | 编号 B1、B2…（每个群自己编号，永不复用、永不修改）；四个字段：做了什么（`sub_task`）、结果（`artifact`）、依据（`rationale`）、引用（`refs`：更早的条目 B3，或群消息 #12）；可选的认领（`claim`）；作者；写的时候在做哪个请求 | `group_board` |
+| 一轮 | 你的一条请求叫醒了 bot，就开始一轮：第一个上手的 bot、其他 bot 加入了没有、谁来回答、回答是哪条消息、什么时候结束 | `group_rounds` |
+| 一轮里的 bot | 每个 bot 在这一轮里的状态：在做（working）、等着加入（waiting）、做完了（finished，以及怎么做完的）、没轮到（skipped，请求在它加入前就做完了） | `group_round_members` |
+
+### 一个例子
+
+群「重构」，成员 **Ada**、**Ben**、**Cy**、**Dee**，方式是共享看板，工作目录是一个仓库。
+
+**1. 你发 #20：「把四个模块的单元测试都补上，跑通 npm test。」**
+
+- 这条没有 @ 谁，是**开放的请求**。它先只交给**一个** bot：空闲的优先，其次是最久没当过第一个的（谁都没当过就按成员顺序）。这次是 Ada。
+- Ada 被叫醒，提示里直接带着 #20 的全文（不用再 `group_read`），以及：「You're first on #20; 3 other bots are waiting. 一个 bot 几分钟能做完就自己做完直接回答，什么都不用认领；只有几块大的、能并行的活时才拆：把计划写到看板上，再认领你那块，你一认领其他人就加入（你一直在做的话，三分钟后也加入）。」
+- Ben、Cy、Dee 也有 #20 的投递记录，但不进待读、不叫醒：它们在这一轮里是「等着加入」。
+
+**2. Ada 拆活，写第一条条目**
+
+Ada 看了仓库，四个模块各有不少要补，值得分。她用 `board_publish` 写 B1，计划里列出四块，同时认领自己那块（export）：
+
+```
+B1 — I've split the request into four modules: parser, cache, auth, export
+Takes: export
+Artifact: 每个模块一块：给它补单测，跑通 npm test 里它的那部分。parser 最复杂。我做 export。
+Rationale: #20 asked for all four modules.
+Refs: #20
+```
+
+- 依据里要**点名每条引用**（这里是 #20），引用必须真实存在，否则整条拒绝、不占编号。
+- Ada 是这一轮第一个，又认领了一块，说明她把活拆开了：Ben、Cy、Dee **马上加入**。工具结果告诉 Ada：「Published as B1. Ben, Cy, Dee join the request now, and will find it on the board.」只写条目、不认领，不会把别人叫进来。
+
+**3. 三个 bot 加入，各自认领一块**
+
+- Ben 的提示：「Ada started on #20, and you join it with Cy, Dee: you're 1 of 3 joining now. Claimed so far: export. 先搜看板，认领一块没人认领的（有好几块空着时，先试第 1 块），只做那一块，边做边写。」Cy 是第 2 个、Dee 是第 3 个。
+- Ben `board_search("parser cache auth export")`，搜到 B1，认领 parser：写一条 `claim: "parser"` 的条目 B2。
+- Cy 也想认领 parser，写的是 `claim: "src/parser.js and its tests"`，被拒：「"src/parser.js and its tests" overlaps "parser", already claimed in B2: take another piece… Claimed for this request: "export" (B1); "parser" (B2).」写法不同，但一个认领的词都在另一个里，就算同一块。Cy 改认领 cache。
+- Dee 认领 auth。
+
+**4. 边做边写，互相用对方的结果**
+
+- Ben 发现 parser 依赖一个测试夹具，写 B6：「I've added the shared fixture tests/fixtures/sample.json」，结果里写明怎么验证的（跑了哪条命令、结果）。
+- Dee 做 auth 时也需要夹具，先搜看板，搜到 B6，直接用，并在自己的条目里引用 B6、写明「B6 gave the fixture」。B6 被引用，**引用权重**上升：以后搜相关的词，B6 排得更靠前。
+- 每次搜索最多 8 条，按相关度加引用权重排序，**从不显示作者和权重**：bot 只看内容和链接（每条下面列出它引用了谁、被谁引用）。
+
+**5. 做完的 bot 停下，最后一个回答你**
+
+- Ada 做完 export，写条目记下结果（跑了哪些测试、结果如何），调用 `board_finish(request: 20)`：「Noted: your part of #20 is done. Still working: Ben, Cy, Dee. The last one to finish answers the user, so stop here.」它停下，不在群里发进度。
+- Cy、Dee 依次做完、`board_finish`，也被告知还有人在做。
+- Ben 最后做完，`board_finish` 告诉它：「You're the last on #20: answer the user now, with group_send reply_to: 20.」Ben 搜看板，四块是分别做完的，所以它把整个 `npm test` 跑一遍，再把四块的结果汇总，**回复 #20**：结果先说，再说做了什么、跑了什么检查、还有什么没做。别的 bot 不重复验证别人那块：条目里写了证据。
+
+**结果**：群里只有你的 #20 和 Ben 的一条回答；分工、发现、互相借用全在看板上（顶栏的看板按钮能看到，带作者和被谁引用）。Ben 的回答只投给你：其他 bot 没有它的记录，不会被叫醒。
+
+**换一个小请求**：你发 #22「test/semver.test.js 里有几个 test？只回数字。」这次第一个是 Ben（Ada 上次当过第一个）。Ben 数完直接回复 #22，不写条目；它这一轮结束，这一轮就结束了，其他三个 bot 记成「没轮到」，**从头到尾没被叫醒**。三分钟的计时也不会再把它们叫起来：请求已经回答了。
+
+### 规则
+
+**投递和叫醒**（只列和其他方式不同的地方，其余照前面的规则）：
+
+| 消息 | 谁有记录 | 谁被叫醒 |
+|---|---|---|
+| 你的开放请求（顶层，没 @ 谁，不是回复某个 bot，不是 @everyone） | 每个没静音的 bot | 只有第一个上手的 bot；其他 bot 等着加入 |
+| 你 @ 了几个 bot 的消息 | 每个没静音的 bot | 被 @ 的那几个，同时开始 |
+| 你回复某个 bot 的消息 | 每个没静音的 bot | 被回复的那个 |
+| 你的 @everyone | 每个没静音的 bot | 每个，同时开始 |
+| bot 发的消息（包括 @ 别的 bot） | 只有你和它自己 | 没人：bot 之间不靠消息协作 |
+
+- 你的消息叫醒了 bot，就**开始一轮**。被叫醒的 bot 的提示里直接带着请求的全文，以及它在这一轮里该做什么（第一个上手、加入、一起做、单独做、该回答了）。
+- 等着加入的 bot **在三种情况下加入**：第一个上手的 bot 在这一轮里写了一条带认领的看板条目（它把活拆开了；只写条目不认领不算）；从请求发出起过了三分钟，它还在做（请求已经回答了就不加入）；它这一轮失败了。加入的 bot 按加入顺序编号（1、2、3…），提示里列出已经被认领的块，并建议它先试第几块，减少同时抢同一块。
+- 第一个上手的 bot 在别人加入前就做完了（它这一轮结束，或调用了 `board_finish`），等着的 bot 记成「没轮到」，不再叫醒。
+- pocket-bots 重启后，还没加入的那三分钟从请求发出时接着算。
+
+**做完和回答**：
+
+- 一个 bot 在这一轮里的部分**做完**，有两种：它调用 `board_finish`；或者它收下了这个请求（提示被它的运行时收下，或者它读过这条请求）之后，**下一次一轮结束**（失败的也算，记成 failed）。座位起不来、bot 离开了群，也算做完（failed），这一轮不等它。
+- 最后一个做完的回答：
+  - 它是调用 `board_finish` 做完的：工具结果直接告诉它「你是最后一个，现在回答」，它在同一轮里回答。
+  - 是一轮结束做完的（忘了调用，或者出错）：pocket-bots 从做完的 bot 里挑**最后一个没失败的**，叫醒它，提示是「Everyone working on #20 has finished and nobody has answered it: answer the user now」。这次叫醒之后它的这一轮结束，这一轮就结束，不管答没答。
+  - 都失败了：群里记一行「Nobody answered #20: the turn of every bot working on it failed. Send it again to have them try once more.」（不写投递记录，只给你看）。
+- **回答就是回复请求的一条 bot 消息**（`group_send` 带 `reply_to` 指向请求）。有人提前回答了，后来做完的 bot 会被告知「#20 was answered in #25 before you finished」：自己的部分改变或补充了那个回答就回复 #25 说这一点，否则停下。
+
+**看板**：
+
+- 条目只追加，不改不删；满 5,000 条后拒绝再写，不会挤掉旧的。
+- 写入规则（ScaleMAS 的两条，加上长度限制）：每条引用必须存在（B 编号小于这一条，或者群里真有这条消息）；依据里必须点名每条引用（「B1」不算点名了「B12」，「#1」不算点名了「#12」）；`sub_task` 最多 300 字、`artifact` 2,000 字、`rationale` 600 字，最多 16 条引用。不满足就整条拒绝，告诉 bot 是哪一条引用的问题。
+- **认领**（`claim`）来自 Park et al.（arXiv:2609.21032）的「抢槽位」：一块活在同一轮里只能被一个 bot 认领，先到先得。名字先按 NFKC、小写、合并空格规范化；两个认领相同、有一个文件相同（路径或文件名）、或者一个认领的词都在另一个里，就算同一块（`claimsOverlap`）。认领了别人那块会被拒绝，结果里列出这一轮已经被认领的块；同一个 bot 再认领也拒绝（提示它写进度时不用再带认领）。
+- **搜索**：BM25（k1 1.5、b 0.75）给相关度，中文、日文、韩文的连续字符额外切成相邻两字的词，所以搜「白屏」能命中「登录页白屏」。每条的分数是「引用权重 + 相关度 / 最高相关度」；只排相关度大于零的，所以权重只能调整相关条目的先后，不会把不相关的条目顶上来；分数相同时更早的在前。最多返回 8 条，每条带它引用的和最近引用它的（最多 8 个）。
+- **引用权重**：一条新条目每引用一个更早的条目，被引用的那条的权重向 1 走 30%；每写一条新条目，所有权重乘 0.98。权重每次搜索时从全部条目重新算一遍，不存，所以永远和看板内容一致。
+- bot 从来看不到作者和权重；看板面板（给你看）显示作者、为哪个请求写的、认领了什么、被谁引用，鼠标停在「cited by」上看权重。
+
+**换方式**：在 **Members** 里改「How they work together」。群里记一条「🧩 the user switched the group to work through a shared board…」（不叫醒谁）；每个座位下次开始一轮时换新会话，带一份简报，因为会话开始时就定下了它的 prompt 和工具列表。共享看板的群不能有 leader；换回 chat 时，还开着的轮都结束。
+
+**看板群里座位的工具**：`group_send`、`group_send_draft`、`group_read`、`group_react`、`board_publish`、`board_search`、`board_visit`、`board_finish`，加上 `search_chats`。没有任务、线程关注、提醒、静音、@ 的去向、`ask_bot` 这些：bot 之间不靠消息协作，也就用不到它们。
+
+**发言前的检查**也有两处不同：顶层不做「第一次碰」的检查（顶层别的 bot 的消息不是给它的）；数新消息时只数「给它的」记录（有叫醒原因的），它没轮到的请求、你给别的 bot 的消息都不算。
+
 ## bot 的群聊工具
 
 | 工具 | 作用 |
@@ -544,6 +650,10 @@ bot 在群里的回复可以带文件和问题，和一对一聊天一样，你�
 | `group_reminder` | 给自己定提醒，挂在一条消息上；列出、推迟、改、取消、看记录。响的时候只叫醒自己 |
 | `group_mention_delivery` | 查自己一条消息里每个被 @ 的成员：送到了、还在路上、丢了（为什么，该换人还是晚点再试），以及消息还送到了谁、没送到谁 |
 | `group_members` | 成员、各自在不在忙、有没有静音、手上有哪些任务 |
+| `board_publish` | 共享看板群：写一条看板条目（做了什么、结果、依据、引用，可选认领），不叫醒任何人；引用不存在、依据没点名某条引用、认领已被占用时拒绝 |
+| `board_search` | 共享看板群：按词搜看板，最多 8 条，按相关度和引用权重排序，不显示作者和权重 |
+| `board_visit` | 共享看板群：按编号读条目，最多 8 条，有一个不存在就整次拒绝 |
+| `board_finish` | 共享看板群：说自己在某个请求上的部分做完了；告诉它是不是最后一个，是的话由它回答 |
 
 工具列表每次请求都要带，所以说明只讲调用做什么，什么时候该用写在座位的 prompt 里。所有座位（leader、成员、没有 leader 的群）都不列出改配置的 `get_setup`、`propose_changes`、`propose_routine`、`propose_skill`，这些只在 bot 自己的聊天里有。有 leader 的群里，成员只列出 `group_send`、`group_send_draft`、`group_read`、`group_claim`、`group_react`、`group_members` 和 `search_chats`：它只做派给它的活，任务、提醒、关注、静音、@ 的去向、搜索群消息、问别的 bot、改配置都用不到。只是不列出，调用照样执行，因为会话只在开始时取一次工具列表，换 leader 之后已经开着的会话还是旧列表，下次开会话才换。
 
@@ -554,23 +664,25 @@ bot 在群里的回复可以带文件和问题，和一对一聊天一样，你�
 | 文件 | 内容 |
 |---|---|
 | `packages/runtime/src/questions.ts` | 每个运行时的提问工具和审批之间的转换：问题的格式、回答按问题原文或 header 取、多选拆回选项、Claude / Codex / OpenCode / Grok Build 各自的请求和回答 |
+| `packages/app/src/shared/group-board.ts` | 共享看板的纯逻辑：引用的格式和写入规则、认领的规范化、分词、BM25、引用权重、排序、bot 看到的条目和搜索结果、座位 prompt 里看板一段、一轮里各种提示和 `board_finish` 的文字 |
 | `packages/app/src/shared/group-chat.ts` | bot 的问题（`GroupQuestion`、哪些审批进群 `groupQuestion`、问题的文字）、系统消息分类、未读规则（`unreadEligible`）、进不进待读（`deliveryReason`）、@ 解析（含群外的 bot）、提示、搁置说明、`group_inbox` 的列表、任务卡片和历史的文字、@ 去向的文字、座位的 prompt 段落（含子 agent 一段） |
-| `packages/app/src/server/group-store.ts` | SQLite 存储：消息和它的投递记录、读位置、看过的记录、草稿、任务和它的历史、@ 记录、表情、线程关注、静音、提醒 |
+| `packages/app/src/server/group-store.ts` | SQLite 存储：消息和它的投递记录、读位置、看过的记录、草稿、任务和它的历史、@ 记录、表情、线程关注、静音、提醒；共享看板的条目（写入规则和认领在同一个事务里检查）、一轮和它的 bot（开始、加入、做完、谁回答） |
 | `packages/app/src/server/reminders.ts` | 提醒的重复规则、下次响的时间、时长、输入检查，和 bot 看到的提醒文字 |
-| `packages/app/src/server/groups.ts` | 群里的流程：bot 的工具（`group_send` 的文件检查和复制）、bot 的问题（`onPermission`、`onPermissionResolved`、`answer`）、发言前的检查、读和搜索、任务的系统消息和卡片、@ 的去向、提示（忙时等 3 秒）、出错后的等待和停下、座位建不起来时的重试、模型上下文、座位换新、重启补课、提醒的计时和叫醒 |
+| `packages/app/src/server/groups.ts` | 群里的流程：bot 的工具（`group_send` 的文件检查和复制）、bot 的问题（`onPermission`、`onPermissionResolved`、`answer`）、发言前的检查、读和搜索、任务的系统消息和卡片、@ 的去向、提示（忙时等 3 秒）、出错后的等待和停下、座位建不起来时的重试、模型上下文、座位换新、重启补课、提醒的计时和叫醒；共享看板：第一个上手的 bot 怎么选、三分钟后加入的计时、一轮里的提示、`board_*` 工具、一轮结束时谁回答、换协作方式时座位换新 |
 | `packages/app/src/server/runtime-errors.ts` | 运行时错误的读法：分类、指纹、终止性、等不等 |
 | `packages/app/src/server/breakers.ts` | 两个断路器：终止性失败的（含座位建不起来的暂停）和过早退出的 |
 | `packages/app/src/server/chat-service.ts` | 会话打开（新的还是续接）和压缩的信号；续接时补发改过的 prompt；运行时的看护：排队启动和带上排队时来的消息、启动超时（`start.ready` / `start.failed`）、看不到的轮次、卡住的运行、压缩一直不结束、压缩失败的计数和不再续接（`session.reset`） |
 | `packages/app/src/server/supervision.ts` | 运行时看护的常数、启动队列（`StartCoordinator`）、压缩失败的计数 |
 | `packages/app/src/server/briefing.ts` | 座位换新时的简报 |
-| `packages/app/src/server/db.ts` | 表结构（迁移 6 是这套消息管理，7 是任务的版本号，8 是提醒，9 把普通消息的唤醒原因 room 改名为 group，10 是任务卡片、任务的历史和 @ 记录，11 是「给它看到过哪」和会话按哪个 prompt 跑，12 是会话的压缩连着失败几次，13 是 bot 的问题和草稿带的文件，14 是单聊的搜索索引，15 是唤醒方式存成 everyone，16 是群的 leader，17 是成员的座位在做哪件活） |
+| `packages/app/src/server/db.ts` | 表结构（迁移 6 是这套消息管理，7 是任务的版本号，8 是提醒，9 把普通消息的唤醒原因 room 改名为 group，10 是任务卡片、任务的历史和 @ 记录，11 是「给它看到过哪」和会话按哪个 prompt 跑，12 是会话的压缩连着失败几次，13 是 bot 的问题和草稿带的文件，14 是单聊的搜索索引，15 是唤醒方式存成 everyone，16 是群的 leader，17 是成员的座位在做哪件活，21 是共享看板：群的协作方式、看板条目、一轮和一轮里的 bot） |
 | `packages/app/src/server/chats.ts` | 座位的会话设置：运行时能开子 agent 时，prompt 里加子 agent 那一段；座位的固定 prompt（不含每天会变的部分） |
 | `packages/app/src/server/tools/groups.ts` | 座位的群聊工具；标着 `led` 的是有 leader 时成员也列出的那几个 |
 | `packages/app/src/server/tools/mcp.ts` | MCP 的 `tools/list` 和 `tools/call`；`ledMember`：成员只列出 `led` 的工具 |
 | `packages/app/src/web/app/group/` | 群聊页面（bot 消息的附件、bot 的问题卡片）、线程面板、任务看板、输入框 |
 | `packages/app/tests/group-store.test.ts` | 存储层的规则：投递记录、静音、线程、系统消息、读位置、看过的记录、草稿、任务的版本号、任务卡片和历史、@ 记录、提醒 |
 | `packages/app/tests/reminders.test.ts` | 提醒的规则、下次响的时间（含时区和夏令时）、输入检查和文字 |
-| `packages/app/tests/groups.test.ts` | 端到端：真实的会话服务和工具，用脚本化的假 agent 跑上面的流程，含改卡片、删任务和 @ 的去向，bot 的附件（存进群的文件夹、随线程上下文给别的 bot、跟草稿一起存）和 bot 的问题（不进待读、在群里回答、在座位里回答、这一轮结束、secret 的不进群、重启后关掉） |
+| `packages/app/tests/groups.test.ts` | 端到端：真实的会话服务和工具，用脚本化的假 agent 跑上面的流程，含改卡片、删任务和 @ 的去向，bot 的附件（存进群的文件夹、随线程上下文给别的 bot、跟草稿一起存）和 bot 的问题（不进待读、在群里回答、在座位里回答、这一轮结束、secret 的不进群、重启后关掉）；共享看板：开放的请求先只给一个 bot、它认领一块后其他人加入（只写条目不算）、认领先到先得、最后一个做完的回答、小请求一个 bot 做完别人不被叫醒、等满时间后加入和一轮结束后叫醒回答的 bot、@ 了的 bot 同时开始、bot 的消息不到别的 bot、座位只列出看板群的工具、不能有 leader |
+| `packages/app/tests/group-board.test.ts` | 共享看板的纯逻辑：引用的格式、点名、写入规则、认领的规范化和重叠判断、中文分词、BM25 排序、引用权重的上升和衰减、权重只调整相关条目的先后、bot 看到的条目不带作者 |
 | `packages/app/tests/group-delivery.test.ts` | 假计时器下的投递机制：出错后的等待（翻倍、上限、随机量、不重复提示）、同样的错三次就停和 @ 重启、座位建不起来的重试（含已有座位的启动失败：再试、再说一次没收下的、启动好了清零）、卡住的运行重启后不等也不计数、压缩一直失败的座位换新、忙时等 3 秒和 15 秒重试、压缩和续接对看过的记录的影响 |
 | `packages/app/tests/runtime-errors.test.ts` | 错误的分类、等不等、指纹 |
 | `packages/app/tests/supervision.test.ts` | 假计时器下的运行时看护：同时 6 个、间隔半秒、同一个聊天不等、排队时来的消息一起带上、会话打不开和运行时不报事件的启动超时、看不到的轮次 30 秒回到空闲、进程没了的卡住运行（SIGTERM、10 秒后 SIGKILL、没收下的再发一次）、进程还在只记一次、忙着却没有轮次时回到空闲、压缩 5 分钟没结束、Pi 的压缩失败 3 次后开新会话、成功清零、只对 Pi 计数 |
