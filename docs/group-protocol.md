@@ -372,17 +372,16 @@ full 模式在 personal 判断之后、`open` 之前插入：bot 的 @everyone�
 
 ### 7.6 full 模式：只按义务叫醒
 
-`workbench_mode = 'full'` 的群（没有 leader）把「谁必须回应」当成叫醒的唯一理由。它不改变 `off`/`board` 的现有规则；关掉就回到 Everyone / Only who it's for：
+`workbench_mode = 'full'` 的群（没有 leader）把「谁必须回应」当成叫醒的唯一理由。它不改变 `off` 的现有规则；关掉就回到 Everyone / Only who it's for：
 
 | 消息 | 谁被叫醒 |
 |---|---|
 | 用户顶层，没点名、不是 @everyone、没回复成员 | 所有成员（`open`） |
 | 用户 @ 某人（或者用户回复某人的消息） | 只叫醒被 @ / 被回复的人；用户 @everyone 叫醒所有人 |
-| bot 顶层，没点名、没回复 | 没有人：它是工作板材料 |
+| bot 顶层，没点名、没回复 | 没有人：它是普通材料 |
 | bot @everyone | 没有人（只有用户的 @everyone 是广播） |
 | bot 回复某条消息 | 被回复的 bot；但回复链深度到 3 后，这条回复不再叫醒作者 |
 | 任务指派回执 / 系统消息点名 | 被点名的人（`assigned` / `mention`） |
-| 笔记发布、检索、访问 | 没有人 |
 
 送达上另有两道闸（只在 full 模式）：
 

@@ -44,17 +44,6 @@ export const GROUP_READ_FULL_MAX = 20_000;
 export const GROUP_TASK_TITLE_MAX = 200;
 export const GROUP_TASK_DESCRIPTION_MAX = 8_000;
 export const GROUP_TASK_LIST_MAX = 20;
-/** The quiet board: notes are small, bounded, and never wake anyone by themselves. */
-export const NOTE_KINDS = ["finding", "decision", "dead_end", "answer", "plan", "review"] as const;
-export type NoteKind = (typeof NOTE_KINDS)[number];
-export const NOTE_TITLE_MAX = 120;
-export const NOTE_BODY_MAX = 4_000;
-export const NOTE_REFS_MAX = 16;
-export const NOTE_SEARCH_K = 8;
-export const NOTE_VISIT_MAX = 8;
-export const NOTE_CAPACITY = 2_000;
-export const NOTE_DIGEST_MAX = 5;
-export const NOTE_CITED_BY_MAX = 8;
 /** Full mode: a reply chain this deep stops waking the bot it answers (a handoff still does). */
 export const WAKE_HOPS_MAX = 3;
 /** A bot's task lease: no task change for this long, plus a grace period, makes it stale. */
@@ -196,49 +185,6 @@ export const GroupMessageSchema = z.object({
 });
 export type GroupMessage = z.infer<typeof GroupMessageSchema>;
 
-/** One thing a note builds on: another note, or a group message. */
-export const GroupNoteRefSchema = z.object({
-  note: z.number().int().positive().optional(),
-  message: z.number().int().positive().optional(),
-});
-export type GroupNoteRef = z.infer<typeof GroupNoteRefSchema>;
-
-export const GroupNoteSchema = z.object({
-  id: z.number().int().positive(),
-  authorId: z.string(),
-  authorName: z.string(),
-  kind: z.enum(NOTE_KINDS),
-  title: z.string(),
-  body: z.string(),
-  refs: z.array(GroupNoteRefSchema).default([]),
-  task: z.number().int().positive().nullable().default(null),
-  thread: z.number().int().positive().nullable().default(null),
-  supersedes: z.number().int().positive().nullable().default(null),
-  supersededBy: z.number().int().positive().nullable().default(null),
-  pinned: z.boolean().default(false),
-  createdAt: z.string(),
-});
-export type GroupNote = z.infer<typeof GroupNoteSchema>;
-
-/** What a board list or search shows: no body, no weight. */
-export const GroupNoteSummarySchema = GroupNoteSchema.pick({ id: true, authorName: true, kind: true, title: true, refs: true, task: true, thread: true, supersedes: true, pinned: true, createdAt: true }).extend({
-  snippet: z.string(),
-});
-export type GroupNoteSummary = z.infer<typeof GroupNoteSummarySchema>;
-
-/** The token a body writes to name a ref: "note #4" or "#12". */
-export function noteRefToken(ref: GroupNoteRef): string {
-  return ref.note ? `note #${ref.note}` : `#${ref.message}`;
-}
-
-/** Whether a note's body names a ref, as the publish rule requires. */
-export function noteNamesRef(body: string, ref: GroupNoteRef): boolean {
-  if (ref.note) return new RegExp(`(?:^|[^\\p{L}\\p{N}_])note\\s*#${ref.note}(?!\\d)`, "iu").test(body);
-  if (!ref.message) return false;
-  // "note #12" also contains "#12"; a message ref must be a bare #12.
-  return new RegExp(`(?:^|[^\\p{L}\\p{N}_#])#${ref.message}(?!\\d)`, "u").test(body.replace(/note\s*#\d+/giu, ""));
-}
-
 export const WakeReasonSchema = z.enum(["mention", "reply", "everyone", "open", "group", "handoff", "thread", "assigned"]);
 /** Why a message wakes a bot. */
 export type WakeReason = z.infer<typeof WakeReasonSchema>;
@@ -247,11 +193,8 @@ export const WakeModeSchema = z.enum(["everyone", "addressed"]);
 /** everyone: every message wakes every unmuted bot. addressed: bots wake only for messages aimed at them. */
 export type WakeMode = z.infer<typeof WakeModeSchema>;
 
-export const WorkbenchModeSchema = z.enum(["off", "board", "full"]);
-/**
- * off: the existing group chat. board: notes/tools are on, wake rules are unchanged. full: the
- * obligation wake matrix is on as well (Stage 3); a leader still takes precedence.
- */
+export const WorkbenchModeSchema = z.enum(["off", "full"]);
+/** off: the existing group chat. full: the obligation wake matrix; a leader group stays off. */
 export type WorkbenchMode = z.infer<typeof WorkbenchModeSchema>;
 
 /** A group as the web UI lists it. */
@@ -264,7 +207,7 @@ export const GroupSummarySchema = z.object({
   /** The user's read position at the top level. */
   readSeq: z.number(),
   wakeMode: WakeModeSchema,
-  /** off, board only, or board plus obligation wakes. */
+  /** off, or obligation wakes. */
   workbenchMode: WorkbenchModeSchema.default("off"),
   /** The member that plans and hands out the work; the others take only what it (or the user) hands them. */
   leaderId: z.string().nullable().default(null),
@@ -531,7 +474,7 @@ export function deliveryReason(input: DeliveryInput): WakeReason | null {
   if (input.full) {
     // Only the user can broadcast; a bot's @everyone is an ordinary message.
     if (message.kind === "bot" && message.everyone) return null;
-    // A bot's top-level message with nobody named is board material, not a wake.
+    // A bot's top-level message with nobody named is material, not a wake.
     if (message.kind === "bot" && input.conv === 0 && !input.repliedTo) return null;
     // A bot's thread chatter wakes nobody unless it answers someone (and the chain isn't a loop).
     if (message.kind === "bot" && input.conv !== 0 && !input.repliedTo) return null;
@@ -1170,8 +1113,8 @@ export function inboxText(places: readonly UnreadPlace[], meId: string, options:
  * or a line of the member's rules). `questionTool`: the runtime's own tool for asking the user,
  * whose questions the group shows. `lead`: the group has a leader, and this seat is it (with the
  * members it hands work to) or one of the members it leads, which gets only its own rules and the
- * tools for its piece (see leadSection and the `led` tools). `workbenchMode`: board/full adds the
- * board rules; a leader group never gets them.
+ * tools for its piece (see leadSection and the `led` tools). `workbenchMode: full` adds the
+ * obligation wake rules. A leader group never gets them.
  */
 export function groupPrompt(groupName: string, options: { subAgents?: boolean; questionTool?: string; lead?: GroupLead; workbenchMode?: WorkbenchMode } = {}): string {
   const role = options.lead?.role ?? null;
@@ -1187,18 +1130,11 @@ export function groupPrompt(groupName: string, options: { subAgents?: boolean; q
       "- If group_send holds your message as a draft because of messages you hadn't seen, choose: send revised text with group_send, send it unchanged with group_send_draft, or let it go. Not sending is a valid outcome when it's no longer needed.",
       "- Make one group tool call at a time, and read its result before the next.",
     ]),
-    ...(options.workbenchMode && options.workbenchMode !== "off" && !options.lead
+    ...(options.workbenchMode === "full" && !options.lead
       ? [
-          section("The board:", [
-            "- Before work someone else may have done, search the board with group_note_search; read a hit with group_note_visit. It is where findings, decisions, dead ends and answers stay reusable.",
-            "- group_note publishes one, with refs to the messages or notes it builds on. It wakes nobody: don't also announce it in chat. A later wake lists new note titles; read the ones that matter.",
-            "- A ref is a checked dependency, so the body must name it ('#12', or 'note #3'). Building on a note raises its rank; supersede an old note rather than leaving two answers.",
-            ...(options.workbenchMode === "full"
-              ? [
-                  "- Full mode: only obligations wake. A bot's top-level message wakes nobody unless it @mentions someone or replies; only the user's @everyone reaches everyone. Ask for work with an @mention or a task.",
-                  "- Notices are batched and capped (30 an hour per seat). A third bot reply in a row stops waking its author: summarize and hand off instead of replying again.",
-                ]
-              : []),
+          section("Obligation wakes:", [
+            "- Only obligations wake. A bot's top-level message wakes nobody unless it @mentions someone or replies; only the user's @everyone reaches everyone. Ask for work with an @mention or a task.",
+            "- Notices are batched and capped (30 an hour per seat). A third bot reply in a row stops waking its author: summarize and hand off instead of replying again.",
           ]),
         ]
       : []),

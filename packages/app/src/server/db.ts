@@ -491,6 +491,30 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE group_metrics ADD COLUMN note_visits INTEGER NOT NULL DEFAULT 0;
     `);
   },
+  // 23: separate the board from obligation wakes. full no longer implies notes; board_enabled is
+  // an internal experiment switch, and the old board-only mode becomes off because it did not earn
+  // a user-facing place. This migration stays for databases upgrading through 23.
+  (db) => {
+    db.exec(`
+      ALTER TABLE groups ADD COLUMN board_enabled INTEGER NOT NULL DEFAULT 0;
+      UPDATE groups SET workbench_mode = 'off' WHERE workbench_mode = 'board';
+    `);
+  },
+  // 24: the board experiment is over. A/B showed no benefit and lower turns/bytes without it, so
+  // drop its tables, cursors, switch and metrics; full keeps only obligation wakes.
+  (db) => {
+    db.exec(`
+      DROP TABLE IF EXISTS group_notes_fts;
+      DROP TABLE IF EXISTS group_note_refs;
+      DROP TABLE IF EXISTS group_notes;
+      ALTER TABLE group_members DROP COLUMN last_note_id;
+      ALTER TABLE groups DROP COLUMN last_note_id;
+      ALTER TABLE groups DROP COLUMN board_enabled;
+      ALTER TABLE group_metrics DROP COLUMN notes_published;
+      ALTER TABLE group_metrics DROP COLUMN note_searches;
+      ALTER TABLE group_metrics DROP COLUMN note_visits;
+    `);
+  },
 ];
 
 /** How much of one message the search index takes: a long pasted attachment doesn't need all of it. */

@@ -6,30 +6,18 @@ import {
   GROUP_TASK_DESCRIPTION_MAX,
   GROUP_TASK_TITLE_MAX,
   GROUP_USER_ID,
-  NOTE_BODY_MAX,
-  NOTE_CAPACITY,
-  NOTE_CITED_BY_MAX,
-  NOTE_DIGEST_MAX,
-  NOTE_REFS_MAX,
-  NOTE_SEARCH_K,
-  NOTE_TITLE_MAX,
   TASK_LEASE_GRACE_MS,
   TASK_LEASE_MS,
   TASK_TRANSITIONS,
   deliveryReason,
-  noteNamesRef,
   fromLead,
   isSkipSubtype,
   unreadEligible,
   type GroupAttachment,
   type GroupMessage,
-  type GroupNote,
-  type GroupNoteRef,
-  type GroupNoteSummary,
   type GroupQuestion,
   type GroupSender,
   type GroupTask,
-  type NoteKind,
   type PendingMessage,
   type SystemSubtype,
   type DeliveryFailure,
@@ -43,7 +31,6 @@ import {
 import type { Db } from "./db";
 import { RequestError } from "./errors";
 import { ftsFilter, type GroupSearchHit } from "./search";
-import { searchTerms } from "../shared/search";
 import { computeNextFire, type Recurrence, type Reminder, type ReminderEvent, type ReminderStatus } from "./reminders";
 
 // A group chat's storage and its message management, all in SQLite. A
@@ -71,10 +58,8 @@ export interface GroupRow {
   cwd: string | null;
   /** JSON list of the extra folders its seats may use besides the working folder. */
   extra_folders: string;
-  /** off | board | full. A leader still takes precedence. */
-  workbench_mode: "off" | "board" | "full";
-  /** The board's latest note id; 0 when it has none. */
-  last_note_id: number;
+  /** off | full. A leader still takes precedence. */
+  workbench_mode: "off" | "full";
   last_seq: number;
   created_at: string;
   updated_at: string;
@@ -89,38 +74,7 @@ export interface MemberRow {
   muted_from_seq: number | null;
   /** In a group with a leader, the piece of work the member's seat session is for: its top-level message. */
   seat_task: number | null;
-  /** The newest board note the member's model has been told about. */
-  last_note_id: number;
 }
-
-interface NoteRow {
-  group_id: string;
-  id: number;
-  author_id: string;
-  author_name: string;
-  kind: NoteKind;
-  title: string;
-  body: string;
-  task_seq: number | null;
-  thread_seq: number | null;
-  supersedes: number | null;
-  superseded_by: number | null;
-  pinned: number;
-  weight: number;
-  created_at: string;
-}
-
-export interface NotePublishInput {
-  kind: NoteKind;
-  title: string;
-  body: string;
-  refs?: readonly GroupNoteRef[];
-  task?: number | null;
-  thread?: number | null;
-  supersedes?: number | null;
-}
-
-export type NotePublishResult = { ok: true; note: GroupNote } | { ok: false; reason: string };
 
 interface MessageRow {
   group_id: string;
@@ -288,7 +242,7 @@ export interface AppendInput {
   mentionHandles?: Record<string, string>;
 }
 
-export type GroupMetricField = "wake_calls" | "woken_bots" | "notices" | "read_bytes" | "bot_messages" | "user_messages" | "claims" | "notes_published" | "note_searches" | "note_visits";
+export type GroupMetricField = "wake_calls" | "woken_bots" | "notices" | "read_bytes" | "bot_messages" | "user_messages" | "claims";
 
 export interface GroupMetricRow {
   wake_calls: number;
@@ -298,12 +252,9 @@ export interface GroupMetricRow {
   bot_messages: number;
   user_messages: number;
   claims: number;
-  notes_published: number;
-  note_searches: number;
-  note_visits: number;
 }
 
-const METRIC_ZERO: GroupMetricRow = { wake_calls: 0, woken_bots: 0, notices: 0, read_bytes: 0, bot_messages: 0, user_messages: 0, claims: 0, notes_published: 0, note_searches: 0, note_visits: 0 };
+const METRIC_ZERO: GroupMetricRow = { wake_calls: 0, woken_bots: 0, notices: 0, read_bytes: 0, bot_messages: 0, user_messages: 0, claims: 0 };
 
 export class GroupStore {
   constructor(private readonly db: Db) {}
@@ -325,198 +276,7 @@ export class GroupStore {
 
   /** The day's counters for a group; a group with no activity reads as zeroes. */
   metrics(groupId: string, day = new Date().toISOString().slice(0, 10)): GroupMetricRow {
-    return this.db.get<GroupMetricRow>("SELECT wake_calls, woken_bots, notices, read_bytes, bot_messages, user_messages, claims, notes_published, note_searches, note_visits FROM group_metrics WHERE group_id = ? AND day = ?", groupId, day) ?? { ...METRIC_ZERO };
-  }
-
-  // ---------------------------------------------------------------- the quiet board
-
-  private noteRefs(groupId: string, noteId: number): GroupNoteRef[] {
-    return this.db
-      .all<{ ref_kind: "note" | "message"; ref_id: number }>("SELECT ref_kind, ref_id FROM group_note_refs WHERE group_id = ? AND note_id = ? ORDER BY ref_kind DESC, ref_id", groupId, noteId)
-      .map((row) => (row.ref_kind === "note" ? { note: Number(row.ref_id) } : { message: Number(row.ref_id) }));
-  }
-
-  private noteOf(row: NoteRow): GroupNote {
-    return {
-      id: Number(row.id),
-      authorId: row.author_id,
-      authorName: row.author_name,
-      kind: row.kind,
-      title: row.title,
-      body: row.body,
-      refs: this.noteRefs(row.group_id, row.id),
-      task: row.task_seq === null ? null : Number(row.task_seq),
-      thread: row.thread_seq === null ? null : Number(row.thread_seq),
-      supersedes: row.supersedes === null ? null : Number(row.supersedes),
-      supersededBy: row.superseded_by === null ? null : Number(row.superseded_by),
-      pinned: !!row.pinned,
-      createdAt: row.created_at,
-    };
-  }
-
-  note(groupId: string, id: number): GroupNote | null {
-    const row = this.db.get<NoteRow>("SELECT * FROM group_notes WHERE group_id = ? AND id = ?", groupId, id);
-    return row ? this.noteOf(row) : null;
-  }
-
-  /** Notes by id in the order asked for, or null when any is missing (visit is all or nothing). */
-  notesByIds(groupId: string, ids: readonly number[]): GroupNote[] | null {
-    const found = new Map(this.db.all<NoteRow>(`SELECT * FROM group_notes WHERE group_id = ? AND id IN (${ids.map(() => "?").join(",")})`, groupId, ...ids).map((row) => [Number(row.id), row]));
-    if (ids.some((id) => !found.has(id))) return null;
-    return ids.map((id) => this.noteOf(found.get(id)!));
-  }
-
-  noteCount(groupId: string): number {
-    return Number(this.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM group_notes WHERE group_id = ?", groupId)?.n ?? 0);
-  }
-
-  private noteSummary(note: GroupNote): GroupNoteSummary {
-    const body = note.body.replace(/\s+/g, " ").trim();
-    return {
-      id: note.id,
-      authorName: note.authorName,
-      kind: note.kind,
-      title: note.title,
-      refs: note.refs,
-      task: note.task,
-      thread: note.thread,
-      supersedes: note.supersedes,
-      pinned: note.pinned,
-      createdAt: note.createdAt,
-      snippet: body.length > 180 ? `${body.slice(0, 180)}…` : body,
-    };
-  }
-
-  /** The newest notes, newest first, for the user's board and a wake's digest. */
-  recentNoteSummaries(groupId: string, limit = 20): GroupNoteSummary[] {
-    return this.db
-      .all<NoteRow>("SELECT * FROM group_notes WHERE group_id = ? AND superseded_by IS NULL ORDER BY id DESC LIMIT ?", groupId, Math.max(1, Math.min(limit, 100)))
-      .map((row) => this.noteSummary(this.noteOf(row)));
-  }
-
-  /** Notes published after `afterId`, oldest first: what a seat's next wake can mention. */
-  newNoteSummaries(groupId: string, afterId: number, limit = NOTE_DIGEST_MAX): GroupNoteSummary[] {
-    return this.db
-      .all<NoteRow>("SELECT * FROM group_notes WHERE group_id = ? AND id > ? AND superseded_by IS NULL ORDER BY id LIMIT ?", groupId, afterId, Math.max(1, Math.min(limit, NOTE_DIGEST_MAX)))
-      .map((row) => this.noteSummary(this.noteOf(row)));
-  }
-
-  markNotesSeen(groupId: string, botId: string, noteId: number): void {
-    this.db.run("UPDATE group_members SET last_note_id = MAX(last_note_id, ?) WHERE group_id = ? AND bot_id = ?", noteId, groupId, botId);
-  }
-
-  /**
-   * Publishes one note. Every ref must resolve and be named in the body (the paper's rule: a
-   * reference is a checked dependency, not a mention), the board must have room, and the write is
-   * one transaction. A refused publish allocates no address and updates no weight.
-   */
-  publishNote(groupId: string, author: { id: string; name: string }, input: NotePublishInput): NotePublishResult {
-    const title = input.title.trim();
-    const body = input.body.trim();
-    if (!title) return { ok: false, reason: "a note needs a title" };
-    if (title.length > NOTE_TITLE_MAX) return { ok: false, reason: `the title is longer than ${NOTE_TITLE_MAX} characters` };
-    if (!body) return { ok: false, reason: "a note needs a body" };
-    if (body.length > NOTE_BODY_MAX) return { ok: false, reason: `the body is longer than ${NOTE_BODY_MAX} characters` };
-    const refs: GroupNoteRef[] = [];
-    const seen = new Set<string>();
-    for (const ref of input.refs ?? []) {
-      if (!!ref.note === !!ref.message) return { ok: false, reason: "each ref is either {note: N} or {message: N}" };
-      const key = ref.note ? `note:${ref.note}` : `message:${ref.message}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      refs.push(ref);
-    }
-    if (refs.length > NOTE_REFS_MAX) return { ok: false, reason: `a note has at most ${NOTE_REFS_MAX} refs` };
-    return this.db.tx(() => {
-      if (this.noteCount(groupId) >= NOTE_CAPACITY) return { ok: false as const, reason: `the board is full (${NOTE_CAPACITY} notes); no note was published` };
-      for (const ref of refs) {
-        if (ref.note && !this.db.get("SELECT id FROM group_notes WHERE group_id = ? AND id = ?", groupId, ref.note)) return { ok: false as const, reason: `note #${ref.note} doesn't exist` };
-        if (ref.message && !this.db.get("SELECT seq FROM group_messages WHERE group_id = ? AND seq = ?", groupId, ref.message)) return { ok: false as const, reason: `message #${ref.message} doesn't exist` };
-        if (!noteNamesRef(body, ref)) return { ok: false as const, reason: `the body must name every ref (write "note #${ref.note ?? "N"}" or "#${ref.message ?? "N"}")` };
-      }
-      if (input.supersedes) {
-        const old = this.note(groupId, input.supersedes);
-        if (!old) return { ok: false as const, reason: `note #${input.supersedes} doesn't exist` };
-        if (old.supersededBy !== null) return { ok: false as const, reason: `note #${input.supersedes} is already superseded by note #${old.supersededBy}` };
-      }
-      if (input.task && !this.task(groupId, { number: input.task })) return { ok: false as const, reason: `task #${input.task} doesn't exist` };
-      if (input.thread && !this.messageAt(groupId, input.thread)) return { ok: false as const, reason: `thread #${input.thread} doesn't exist` };
-      const id = this.db.get<{ last_note_id: number }>("UPDATE groups SET last_note_id = last_note_id + 1 WHERE id = ? RETURNING last_note_id", groupId)?.last_note_id;
-      if (id === undefined) return { ok: false as const, reason: "the group no longer exists" };
-      const at = now();
-      this.db.run(
-        "INSERT INTO group_notes (group_id, id, author_id, author_name, kind, title, body, task_seq, thread_seq, supersedes, pinned, weight, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)",
-        groupId,
-        id,
-        author.id,
-        author.name,
-        input.kind,
-        title,
-        body,
-        input.task ?? null,
-        input.thread ?? null,
-        input.supersedes ?? null,
-        at,
-      );
-      for (const ref of refs) this.db.run("INSERT INTO group_note_refs (group_id, note_id, ref_kind, ref_id) VALUES (?, ?, ?, ?)", groupId, id, ref.note ? "note" : "message", (ref.note ?? ref.message)!);
-      this.db.run("INSERT INTO group_notes_fts (title, body, group_id, note_id) VALUES (?, ?, ?, ?)", title, body, groupId, id);
-      if (input.supersedes) this.db.run("UPDATE group_notes SET superseded_by = ? WHERE group_id = ? AND id = ?", id, groupId, input.supersedes);
-      // The citation weight: every citing note adds once, decayed lazily every ten notes.
-      if (id % 10 === 0) this.db.run("UPDATE group_notes SET weight = weight * 0.98 WHERE group_id = ?", groupId);
-      for (const ref of refs) {
-        if (ref.note) this.db.run("UPDATE group_notes SET weight = MIN(0.999, weight + 0.3 * (1 - weight)) WHERE group_id = ? AND id = ?", groupId, ref.note);
-      }
-      return { ok: true as const, note: this.note(groupId, id)! };
-    });
-  }
-
-  /**
-   * Search the board: a trigram FTS prefilter, then the paper's score (citation weight plus
-   * normalized relevance). Only positive relevance ranks; ties go to the older note; weight is
-   * never returned. Superseded notes stay readable by visit but don't rank.
-   */
-  searchNotes(groupId: string, query: string, limit = NOTE_SEARCH_K): GroupNoteSummary[] {
-    const terms = searchTerms(query);
-    if (terms.length === 0) return [];
-    const long = terms.filter((term) => [...term].length >= 3);
-    let rows: (NoteRow & { rank?: number })[];
-    if (long.length) {
-      rows = this.db.all<NoteRow & { rank: number }>(
-        `SELECT n.*, bm25(group_notes_fts) AS rank FROM group_notes_fts JOIN group_notes n ON n.rowid = group_notes_fts.rowid
-         WHERE n.group_id = ? AND group_notes_fts MATCH ? AND n.superseded_by IS NULL ORDER BY rank LIMIT 64`,
-        groupId,
-        long.map((term) => `"${term.replace(/"/g, '""')}"`).join(" "),
-      );
-    } else {
-      const where = terms.map(() => "(instr(lower(title), ?) > 0 OR instr(lower(body), ?) > 0)").join(" AND ");
-      rows = this.db.all<NoteRow>(`SELECT * FROM group_notes WHERE group_id = ? AND superseded_by IS NULL AND ${where} ORDER BY id DESC LIMIT 64`, groupId, ...terms.flatMap((term) => [term, term]));
-    }
-    const lowered = (row: NoteRow) => `${row.title}\n${row.body}`.toLowerCase();
-    rows = rows.filter((row) => terms.every((term) => lowered(row).includes(term)));
-    if (rows.length === 0) return [];
-    const relevance = rows.map((row) => {
-      if (row.rank !== undefined) return Math.max(0, -Number(row.rank));
-      return terms.reduce((count, term) => count + Math.max(0, lowered(row).split(term).length - 1), 0);
-    });
-    const maxRel = Math.max(...relevance);
-    const ranked = rows
-      .map((row, index) => ({ row, rel: relevance[index] ?? 0, score: Number(row.weight) + (maxRel > 0 ? (relevance[index] ?? 0) / maxRel : 0) }))
-      .filter((entry) => entry.rel > 0)
-      .sort((a, b) => b.score - a.score || a.row.id - b.row.id)
-      .slice(0, Math.max(1, Math.min(limit, NOTE_SEARCH_K)));
-    return ranked.map((entry) => this.noteSummary(this.noteOf(entry.row)));
-  }
-
-  /** Notes that cite this one, newest first (at most eight). */
-  citedBy(groupId: string, noteId: number, limit = NOTE_CITED_BY_MAX): GroupNoteSummary[] {
-    const rows = this.db.all<NoteRow>(
-      `SELECT n.* FROM group_note_refs r JOIN group_notes n ON n.group_id = r.group_id AND n.id = r.note_id
-       WHERE r.group_id = ? AND r.ref_kind = 'note' AND r.ref_id = ? ORDER BY r.note_id DESC LIMIT ?`,
-      groupId,
-      noteId,
-      Math.max(1, Math.min(limit, NOTE_CITED_BY_MAX)),
-    );
-    return rows.map((row) => this.noteSummary(this.noteOf(row)));
+    return this.db.get<GroupMetricRow>("SELECT wake_calls, woken_bots, notices, read_bytes, bot_messages, user_messages, claims FROM group_metrics WHERE group_id = ? AND day = ?", groupId, day) ?? { ...METRIC_ZERO };
   }
 
   // ---------------------------------------------------------------- groups
@@ -554,7 +314,7 @@ export class GroupStore {
 
   deleteGroup(groupId: string): void {
     this.db.tx(() => {
-      for (const table of ["group_members", "group_messages", "group_tasks", "group_task_events", "group_mentions", "group_reactions", "group_drafts", "group_thread_follows", "group_inbox", "group_read_cursors", "group_seen", "group_reminders", "group_reminder_events", "group_messages_fts", "group_notes", "group_note_refs", "group_notes_fts"]) this.db.run(`DELETE FROM ${table} WHERE group_id = ?`, groupId);
+      for (const table of ["group_members", "group_messages", "group_tasks", "group_task_events", "group_mentions", "group_reactions", "group_drafts", "group_thread_follows", "group_inbox", "group_read_cursors", "group_seen", "group_reminders", "group_reminder_events", "group_messages_fts"]) this.db.run(`DELETE FROM ${table} WHERE group_id = ?`, groupId);
       this.db.run("DELETE FROM groups WHERE id = ?", groupId);
     });
   }
@@ -582,11 +342,10 @@ export class GroupStore {
     const last = group?.last_seq ?? 0;
     this.db.tx(() => {
       this.db.run(
-        "INSERT INTO group_members (group_id, bot_id, joined_seq, last_note_id) VALUES (?, ?, ?, ?) ON CONFLICT (group_id, bot_id) DO UPDATE SET active = 1, joined_seq = excluded.joined_seq, last_note_id = MAX(last_note_id, excluded.last_note_id)",
+        "INSERT INTO group_members (group_id, bot_id, joined_seq) VALUES (?, ?, ?) ON CONFLICT (group_id, bot_id) DO UPDATE SET active = 1, joined_seq = excluded.joined_seq",
         groupId,
         botId,
         last,
-        group?.last_note_id ?? 0,
       );
       this.markRead(groupId, botId, 0, last);
     });

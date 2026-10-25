@@ -204,12 +204,6 @@ export function rpcHandlers(services: Services): Map<string, RpcRegistration> {
     return { ok: true };
   });
   handle(rpc.groupTasksRpc, async ({ groupId }) => ({ tasks: await groups.listTasks(groupId) }));
-  handle(rpc.groupNotesRpc, async ({ groupId, limit }) => ({ notes: await groups.listNotes(groupId, limit ?? 50) }));
-  handle(rpc.groupNoteRpc, async ({ groupId, id }) => {
-    const detail = await groups.noteDetail(groupId, id);
-    if (!detail) throw new RequestError(`There's no note #${id} in this group.`);
-    return detail;
-  });
   handle(rpc.groupRemindersRpc, async ({ groupId }) => ({ reminders: await groups.listReminders(groupId) }));
   handle(rpc.groupReactRpc, async ({ groupId, seq, emoji }) => {
     await groups.userReact(groupId, seq, emoji);

@@ -162,105 +162,17 @@ describe("group chats", () => {
     expect(await group.groups.task(alpha, group.id, { action: "amend", task: 1, description: "d".repeat(GROUP_TASK_DESCRIPTION_MAX + 1) })).toContain(`longer than ${GROUP_TASK_DESCRIPTION_MAX}`);
   }, 20_000);
 
-  it("turns the board on only when asked, and lists its tools only then", async () => {
-    const group = await setup(() => null);
-    stop = group.stop;
-    const { answerMcp } = await import("../src/server/tools/mcp");
-    const { BOT_TOOLS } = await import("../src/server/tools");
-    const seat = async () => ({ bot: (await group.host.bot("alpha"))!, agentId: "seat", host: group.host, relay: null as never, groups: group.groups, groupId: group.id });
-    const listed = async () => ((await answerMcp({ jsonrpc: "2.0", id: 1, method: "tools/list" }, BOT_TOOLS, await seat())) as { result: { tools: { name: string }[] } }).result.tools.map((tool) => tool.name);
-    expect(await listed()).not.toContain("group_note");
-    expect(group.groups.boardEnabled(group.id)).toBe(false);
-
-    await group.groups.update(group.id, { workbenchMode: "board" });
-    expect(group.groups.boardEnabled(group.id)).toBe(true);
-    // Another edit (a rename) leaves the board as it was.
-    await group.groups.update(group.id, { name: "Renamed" });
-    expect(group.groups.boardEnabled(group.id)).toBe(true);
-    const names = await listed();
-    expect(names).toContain("group_note");
-    expect(names).toContain("group_note_search");
-    expect(names).toContain("group_note_visit");
-
-    // A leader group has no board, and a group with a leader can't turn it on.
-    await expect(group.groups.update(group.id, { leaderId: "alpha" })).rejects.toThrow(/can't use the board/);
-    await group.groups.update(group.id, { leaderId: "alpha", workbenchMode: "off" });
-    expect(group.groups.boardEnabled(group.id)).toBe(false);
-    expect(await listed()).not.toContain("group_note");
-  });
-
-  it("starts a seat over when the board mode changes, so its new prompt and tools take effect", async () => {
-    const group = await setup(() => null, ["alpha", "beta"]);
+  it("starts a seat over when the workbench switches change, so its new prompt and tools take effect", async () => {
+    const group = await setup(() => null, ["alpha", "beta"], { idleNoticeDelayMs: 10 });
     stop = group.stop;
     const alpha = (await group.host.bot("alpha"))!;
     await group.groups.postFromUser(group.id, { text: "Start the seats." });
     await settle(group);
     const seatId = group.store.member(group.id, alpha.id)?.seat_chat_id;
     expect(seatId).toBeTruthy();
-    await group.groups.update(group.id, { workbenchMode: "board" });
+    await group.groups.update(group.id, { workbenchMode: "full" });
     expect(group.store.member(group.id, alpha.id)?.seat_chat_id).toBeNull();
     expect(group.chats.get(seatId!)?.archivedAt).toBeTruthy();
-  });
-
-  it("publishes, ranks and visits notes without waking anyone", async () => {
-    const group = await setup(() => null);
-    stop = group.stop;
-    const alpha = (await group.host.bot("alpha"))!;
-    const beta = (await group.host.bot("beta"))!;
-    await group.groups.update(group.id, { workbenchMode: "board" });
-    const seq = await group.groups.postFromUser(group.id, { text: "Investigate caching." });
-    await settle(group);
-    const wakes = group.store.metrics(group.id).wake_calls;
-
-    expect(await group.groups.publishNote(alpha, group.id, { kind: "finding", title: "Cache plan", body: `Use SQLite FTS. #${seq}`, refs: [{ message: seq }] })).toContain("Published note #1");
-    expect(await group.groups.publishNote(beta, group.id, { kind: "decision", title: "Cache follow-up", body: `Builds on note #1 and #${seq}.`, refs: [{ note: 1 }, { message: seq }] })).toContain("Published note #2");
-    await settle(group);
-    // Publishing is a board write, not a message: nobody is woken for it.
-    expect(group.store.metrics(group.id).wake_calls).toBe(wakes);
-
-    const search = await group.groups.searchNotes(alpha, group.id, { query: "cache" });
-    expect(search).toContain("note #1");
-    expect(search).toContain("note #2");
-    // Note #1 is cited by #2, so citation weight puts it ahead of the newer note.
-    expect(search.indexOf("note #1")).toBeLessThan(search.indexOf("note #2"));
-    const visit = await group.groups.visitNotes(alpha, group.id, { notes: [1, 2] });
-    expect(visit).toContain("Cache plan");
-    expect(visit).toContain("Use SQLite FTS.");
-    expect(visit).toContain(`Refs: note #1, #${seq}`);
-    expect(visit).toContain('Cited by: note #2 "Cache follow-up"');
-    // All-or-nothing: one missing id returns nothing and records no visit.
-    const visits = group.store.metrics(group.id).note_visits;
-    expect(await group.groups.visitNotes(alpha, group.id, { notes: [1, 999] })).toContain("Not read");
-    expect(group.store.metrics(group.id).note_visits).toBe(visits);
-    expect(group.store.metrics(group.id)).toMatchObject({ notes_published: 2, note_searches: 1, note_visits: 1 });
-
-    // A ref must resolve and be named in the body; a refusal publishes nothing.
-    expect(await group.groups.publishNote(alpha, group.id, { kind: "finding", title: "Bad", body: "#999", refs: [{ message: 999 }] })).toContain("doesn't exist");
-    expect(await group.groups.publishNote(alpha, group.id, { kind: "finding", title: "Bad", body: "no refs here", refs: [{ message: seq }] })).toContain("must name every ref");
-    expect(group.store.noteCount(group.id)).toBe(2);
-  });
-
-  it("mentions new notes in the next wake only, never as a wake of their own", async () => {
-    const wakes: string[] = [];
-    const group = await setup((turn) => {
-      if (delivered(turn)) wakes.push(turn.text);
-      return null;
-    });
-    stop = group.stop;
-    const alpha = (await group.host.bot("alpha"))!;
-    await group.groups.update(group.id, { workbenchMode: "board" });
-    await group.groups.publishNote(alpha, group.id, { kind: "plan", title: "Cache plan", body: "Start with the read path." });
-    expect(wakes).toHaveLength(0);
-
-    await group.groups.postFromUser(group.id, { text: "Status?" });
-    await settle(group);
-    expect(wakes.join("\n")).toContain("Board — 1 new note");
-    expect(wakes.join("\n")).toContain("note #1 · plan: Cache plan");
-
-    const before = wakes.length;
-    await group.groups.postFromUser(group.id, { text: "Again?" });
-    await settle(group);
-    expect(wakes.slice(before).join("\n")).not.toContain("Board —");
   });
 
   it("in full mode delivers only obligations: a bot's plain message wakes nobody, a user's @mention only its target", async () => {
@@ -285,11 +197,11 @@ describe("group chats", () => {
     await group.groups.read(beta, group.id, { unread: true });
 
     wakes.length = 0;
-    await group.groups.send(alpha, group.id, { text: "A note for the board, not a wake." });
+    await group.groups.send(alpha, group.id, { text: "A plain status note, not a wake." });
     await settle(group);
     expect(wakes).toEqual([]);
     expect(group.store.pending(group.id, "beta")).toHaveLength(0);
-    expect((await group.texts()).at(-1)).toContain("A note for the board");
+    expect((await group.texts()).at(-1)).toContain("A plain status note");
 
     await group.groups.send(alpha, group.id, { text: "@everyone status?" });
     await settle(group);
@@ -1287,14 +1199,13 @@ describe("a group with a leader", () => {
     expect(prompts.get("alpha")).toContain("Setup changes, routines and skills aren't proposed from a group");
     expect((await group.groups.list())[0]!.leaderId).toBe("alpha");
 
-    // The leader is listed every tool but the setup and board ones (a leader group has no board); a member only those for its piece, though a call to another still runs.
+    // The leader is listed every tool but the setup ones; a member only those for its piece, though a call to another still runs.
     const { answerMcp } = await import("../src/server/tools/mcp");
     const { BOT_TOOLS } = await import("../src/server/tools");
     const seat = async (botId: string) => ({ bot: (await group.host.bot(botId))!, agentId: "seat", host: group.host, relay: null as never, groups: group.groups, groupId: group.id });
     const listed = async (botId: string) => ((await answerMcp({ jsonrpc: "2.0", id: 1, method: "tools/list" }, BOT_TOOLS, await seat(botId))) as { result: { tools: { name: string }[] } }).result.tools.map((tool) => tool.name);
     const setupTools = ["get_setup", "propose_skill", "propose_routine", "propose_changes"];
-    const boardTools = ["group_note", "group_note_search", "group_note_visit"];
-    expect(await listed("alpha")).toEqual(BOT_TOOLS.map((tool) => tool.name).filter((name) => !setupTools.includes(name) && !boardTools.includes(name)));
+    expect(await listed("alpha")).toEqual(BOT_TOOLS.map((tool) => tool.name).filter((name) => !setupTools.includes(name)));
     expect(await listed("beta")).toEqual(["group_send", "group_send_draft", "group_read", "group_claim", "group_react", "group_members", "search_chats"]);
     const tasks = (await answerMcp({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "group_task", arguments: { action: "list" } } }, BOT_TOOLS, await seat("beta"))) as { result: { isError?: boolean } };
     expect(tasks.result.isError).toBeUndefined();

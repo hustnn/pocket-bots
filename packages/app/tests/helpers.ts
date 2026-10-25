@@ -6,14 +6,9 @@ export const NOW = "2026-09-27T00:00:00.000Z";
 /** Drops the experiment tables/columns so a migration test can replay their migrations. */
 export function dropExperimentSchema(db: { raw: { exec(sql: string): void } }): void {
   db.raw.exec(`
-    DROP TABLE IF EXISTS group_notes_fts;
-    DROP TABLE IF EXISTS group_note_refs;
-    DROP TABLE IF EXISTS group_notes;
     DROP TABLE IF EXISTS group_metrics;
     ALTER TABLE group_messages DROP COLUMN wake_depth;
-    ALTER TABLE group_members DROP COLUMN last_note_id;
     ALTER TABLE groups DROP COLUMN workbench_mode;
-    ALTER TABLE groups DROP COLUMN last_note_id;
   `);
 }
 

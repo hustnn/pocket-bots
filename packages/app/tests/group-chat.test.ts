@@ -123,7 +123,7 @@ describe("unread and delivery", () => {
   });
 
   it("in full mode wakes only obligations: named, assigned, replied to, or the user's broadcast", () => {
-    // A bot's unnamed top-level message is board material, not a wake; the user's still reaches the group.
+    // A bot's unnamed top-level message is material, not a wake; the user's still reaches the group.
     expect(reason({ full: true, message: { senderId: "r", kind: "bot" } })).toBeNull();
     expect(reason({ full: true })).toBe("open");
     expect(reason({ full: true, message: { senderId: "r", kind: "bot", mentions: ["w"] }, personal: true })).toBe("handoff");
@@ -429,15 +429,13 @@ describe("the seat prompt", () => {
     expect(groupPrompt("Launch", { lead: { role: "member", leader: "Lead" } })).not.toContain("Do the piece yourself");
   });
 
-  it("adds the board rules only when the board is on, and never for a leader group", () => {
+  it("adds obligation rules only in full mode, and never for a leader group", () => {
     const plain = groupPrompt("Launch");
-    expect(plain).not.toContain("The board:");
-    const board = groupPrompt("Launch", { workbenchMode: "board" });
-    expect(board).toContain("The board:");
-    expect(board).toContain("group_note_search");
-    expect(board).toContain("It wakes nobody");
-    expect(groupPrompt("Launch", { workbenchMode: "full" })).toContain("The board:");
-    expect(groupPrompt("Launch", { workbenchMode: "board", lead: { role: "member", leader: "Lead" } })).not.toContain("The board:");
+    expect(plain).not.toContain("Obligation wakes:");
+    const full = groupPrompt("Launch", { workbenchMode: "full" });
+    expect(full).toContain("Obligation wakes:");
+    expect(full).not.toContain("group_note");
+    expect(groupPrompt("Launch", { workbenchMode: "full", lead: { role: "member", leader: "Lead" } })).not.toContain("Obligation wakes:");
     // Off groups keep the same prompt bytes: the experiment adds nothing to existing groups.
     expect(groupPrompt("Launch", { workbenchMode: "off" })).toBe(plain);
   });

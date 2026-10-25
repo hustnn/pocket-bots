@@ -11,7 +11,7 @@ import { Icon } from "../../components/icons";
 import { Markdown } from "../../components/Markdown";
 import { Button, CopyButton, IconButton, Menu, MenuButton, Modal, useFeedback, type MenuItems } from "../../components/ui";
 import { errorText, rpc } from "../../lib/api";
-import { useAllChats, useGroupMessages, useGroupNote, useGroupNotes, useGroupReminders, useGroups, useGroupTasks, useStoreDoc } from "../../lib/data";
+import { useAllChats, useGroupMessages, useGroupReminders, useGroups, useGroupTasks, useStoreDoc } from "../../lib/data";
 import { markTermsIn, pendingTermsFor, placeKey } from "../../lib/highlight";
 import { MOD, useShortcut } from "../../lib/keys";
 import { navigate, replaceRoute } from "../../lib/router";
@@ -636,87 +636,6 @@ function TaskBoard({ groupId, onPick, onClose }: { groupId: string; onPick: (tar
 }
 
 /**
- * The quiet board: reusable notes, newest first. A note opens in place with its body, refs and
- * citers; a ref to a message jumps to it. Read-only: only bots publish, through group_note.
- */
-function NoteBoard({ groupId, onPick, onClose }: { groupId: string; onPick: (target: { seq: number; thread: number | null }) => void; onClose: () => void }) {
-  const notes = useGroupNotes(groupId, true);
-  const [open, setOpen] = useState<number | null>(null);
-  const detail = useGroupNote(groupId, open);
-  const note = detail.data?.note ?? null;
-  const openRef = (ref: { note?: number; message?: number }) => {
-    if (ref.note) setOpen(ref.note);
-    else if (ref.message) onPick({ seq: ref.message, thread: null });
-  };
-  return (
-    <aside className="group-thread" aria-label="Board">
-      <div className="topbar">
-        <div className="title">
-          {note ? `Note #${note.id}` : "Board"}
-          <span className="subtitle"> · {note ? note.kind : `${notes.data?.length ?? 0} notes`}</span>
-        </div>
-        {note ? <IconButton icon="chevronLeft" title="Back to the board" onClick={() => setOpen(null)} /> : null}
-        <IconButton icon="x" title="Close the board" onClick={onClose} />
-      </div>
-      <div className="stream">
-        <div className="stream-inner group-board">
-          {note ? (
-            <>
-              <h3 style={{ margin: "4px 0" }}>{note.title}</h3>
-              <p className="hint" style={{ margin: 0 }}>
-                {note.authorName} · {relativeTime(note.createdAt)}
-                {note.task ? ` · task #${note.task}` : ""}
-                {note.thread ? ` · thread #${note.thread}` : ""}
-              </p>
-              <p className="group-note-body">{note.body}</p>
-              {note.refs.length ? (
-                <section className="group-board-section">
-                  <div className="group-thread-divider">Builds on</div>
-                  {note.refs.map((ref) => (
-                    <button key={ref.note ? `note-${ref.note}` : `message-${ref.message}`} type="button" className="group-search-hit" onClick={() => openRef(ref)}>
-                      <strong>{ref.note ? `note #${ref.note}` : `#${ref.message}`}</strong>
-                      <span className="hint">{ref.note ? "another note" : "a message"}</span>
-                    </button>
-                  ))}
-                </section>
-              ) : null}
-              {detail.data?.citedBy.length ? (
-                <section className="group-board-section">
-                  <div className="group-thread-divider">Cited by · {detail.data.citedBy.length}</div>
-                  {detail.data.citedBy.map((entry) => (
-                    <button key={entry.id} type="button" className="group-search-hit" onClick={() => setOpen(entry.id)}>
-                      <strong>note #{entry.id} · {entry.kind}</strong>
-                      <span className="truncate">{entry.title}</span>
-                    </button>
-                  ))}
-                </section>
-              ) : null}
-              {note.supersededBy ? <p className="hint">Superseded by note #{note.supersededBy}.</p> : null}
-            </>
-          ) : (
-            <>
-              {notes.isPending ? <span className="spinner" /> : null}
-              {!notes.isPending && notes.data?.length === 0 ? <p className="hint">No notes yet. Bots publish findings and decisions with group_note; publishing never wakes anyone.</p> : null}
-              {notes.data?.map((entry) => (
-                <button key={entry.id} type="button" className="group-search-hit" onClick={() => setOpen(entry.id)}>
-                  <span className="row small" style={{ gap: 6 }}>
-                    <strong>note #{entry.id}</strong>
-                    <span className="badge">{entry.kind}</span>
-                    <span className="hint">· {entry.authorName} · {relativeTime(entry.createdAt)}</span>
-                  </span>
-                  <span>{entry.title}</span>
-                  <span className="truncate hint">{entry.snippet}</span>
-                </button>
-              ))}
-            </>
-          )}
-        </div>
-      </div>
-    </aside>
-  );
-}
-
-/**
  * What the members are doing: working (with the way to their side of the group), or waiting for an
  * approval that stays in the seat (a question the group shows is answered there instead).
  */
@@ -828,10 +747,8 @@ export function GroupView({ groupId, at, atThread }: { groupId: string; at?: num
   const pendingJump = useRef<number | null>(null);
   const [thread, setThread] = useState<{ seq: number; focus: number | null } | null>(null);
   const [board, setBoard] = useState(false);
-  const [notesPanel, setNotesPanel] = useState(false);
   const openThread = useCallback((seq: number) => {
     setBoard(false);
-    setNotesPanel(false);
     setThread({ seq, focus: null });
   }, []);
   const threadFocused = useCallback(() => setThread((current) => (current ? { ...current, focus: null } : current)), []);
@@ -989,7 +906,7 @@ export function GroupView({ groupId, at, atThread }: { groupId: string; at?: num
     const chatId = seats[bot.id];
     return chatId ? [{ label: `${bot.name}'s side`, icon: "bot" as const, onSelect: () => navigate({ page: "bot", botId: bot.id, chatId }) }] : [];
   });
-  const setWorkbench = (mode: "off" | "board" | "full") => {
+  const setWorkbench = (mode: "off" | "full") => {
     void rpc(groupUpdateRpc, { groupId, workbenchMode: mode }).catch((failure: unknown) => feedback.error(errorText(failure)));
   };
   const menu: MenuItems = [
@@ -1000,9 +917,8 @@ export function GroupView({ groupId, at, atThread }: { groupId: string; at?: num
       ? []
       : [
           "divider" as const,
-          { label: "Board: off", icon: "library" as const, trailing: group.workbenchMode === "off" ? "current" : undefined, onSelect: () => setWorkbench("off") },
-          { label: "Board only", icon: "library" as const, trailing: group.workbenchMode === "board" ? "current" : undefined, onSelect: () => setWorkbench("board") },
-          { label: "Board + obligation wakes", icon: "library" as const, trailing: group.workbenchMode === "full" ? "current" : undefined, onSelect: () => setWorkbench("full") },
+          { label: "Obligation wakes: off", icon: "sparkles" as const, trailing: group.workbenchMode === "off" ? "current" : undefined, onSelect: () => setWorkbench("off") },
+          { label: "Obligation wakes: on", icon: "sparkles" as const, trailing: group.workbenchMode === "full" ? "current" : undefined, onSelect: () => setWorkbench("full") },
         ]),
     "divider",
     { label: "Delete group", icon: "trash", danger: true, onSelect: () => void remove() },
@@ -1029,21 +945,9 @@ export function GroupView({ groupId, at, atThread }: { groupId: string; at?: num
           title="Tasks"
           onClick={() => {
             setThread(null);
-            setNotesPanel(false);
             setBoard((open) => !open);
           }}
         />
-        {group.workbenchMode !== "off" && !group.leaderId ? (
-          <IconButton
-            icon="library"
-            title="Board"
-            onClick={() => {
-              setThread(null);
-              setBoard(false);
-              setNotesPanel((open) => !open);
-            }}
-          />
-        ) : null}
         <IconButton icon="users" title="Members" onClick={() => setEditingMembers(true)} />
         <MenuButton title="Group actions" entries={menu} />
       </div>
@@ -1188,19 +1092,6 @@ export function GroupView({ groupId, at, atThread }: { groupId: string; at?: num
               setThread({ seq: target.thread, focus: target.seq });
             }}
             onClose={() => setBoard(false)}
-          />
-        ) : notesPanel ? (
-          <NoteBoard
-            groupId={groupId}
-            onPick={(target) => {
-              if (!target.thread) {
-                setNotesPanel(false);
-                return show(target.seq);
-              }
-              setNotesPanel(false);
-              setThread({ seq: target.thread, focus: target.seq });
-            }}
-            onClose={() => setNotesPanel(false)}
           />
         ) : null}
       </div>

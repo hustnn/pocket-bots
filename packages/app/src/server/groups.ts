@@ -20,10 +20,6 @@ import {
   GROUP_TASK_LIST_MAX,
   GROUP_USER,
   GROUP_USER_ID,
-  NOTE_CITED_BY_MAX,
-  NOTE_DIGEST_MAX,
-  NOTE_SEARCH_K,
-  NOTE_VISIT_MAX,
   WorkbenchModeSchema,
   groupQuestion,
   HELD_SHOWN,
@@ -51,14 +47,10 @@ import {
   type GroupAttachment,
   type GroupLead,
   type GroupMessage,
-  type GroupNote,
-  type GroupNoteRef,
-  type GroupNoteSummary,
   type GroupQuestion,
   type GroupSender,
   type GroupSummary,
   type GroupTask,
-  type NoteKind,
   type WorkbenchMode,
   type HeldInput,
   type Member,
@@ -302,8 +294,8 @@ export class GroupChats {
   private readonly idleNoticeDelayMs: number;
   /** Per seat: when its recent notices went out, for the full mode's soft cap. */
   private readonly noticeTimes = new Map<string, number[]>();
-  /** Seats whose board mode changed while they were busy: reset when their turn ends. */
-  private readonly boardResets = new Set<string>();
+  /** Seats whose workbench mode changed while they were busy: reset when their turn ends. */
+  private readonly workbenchResets = new Set<string>();
   private reminderTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
 
@@ -406,7 +398,7 @@ export class GroupChats {
     const folders = input.extraFolders === undefined ? undefined : await extraFolders(input.extraFolders, cwd === undefined ? group.cwd : cwd);
     const workbenchMode = input.workbenchMode === undefined ? undefined : input.workbenchMode === null ? "off" : WorkbenchModeSchema.parse(input.workbenchMode);
     const nextLeader = input.leaderId !== undefined ? input.leaderId : group.leader_id;
-    if (nextLeader && (workbenchMode ?? group.workbench_mode) !== "off") throw new RequestError("A group with a leader can't use the board; clear the leader first.");
+    if (nextLeader && (workbenchMode ?? group.workbench_mode) !== "off") throw new RequestError("A group with a leader can't use obligation wakes; clear the leader first.");
     if (input.name !== undefined && input.name !== null && input.name.trim()) this.store.updateGroup(groupId, { name: input.name.trim() });
     if (input.wakeMode) this.store.updateGroup(groupId, { wakeMode: input.wakeMode });
     const modeChanged = workbenchMode !== undefined && workbenchMode !== group.workbench_mode;
@@ -444,21 +436,21 @@ export class GroupChats {
       this.note(groupId, cwd ? `📁 the user set the group's working folder to ${cwd}: each bot's next turn here runs there.` : "📁 the user removed the group's working folder: each bot's next turn here runs in its own folder.", "group.folder", USER_ID);
     }
     if (folders !== undefined && JSON.stringify(folders) !== JSON.stringify(this.extraFoldersOf(group))) await this.setExtraFolders(groupId, folders);
-    if (modeChanged) {
-      // The board changes the seat's prompt and the tools it is offered. A running session keeps
-      // both from its start, so each seat starts over once the mode changes; a busy one waits for
-      // its turn to end.
-      for (const member of this.store.members(groupId)) {
-        const seat = member.seat_chat_id ? this.host.chats.get(member.seat_chat_id) : null;
-        if (seat && isBusy(seat.status)) {
-          this.boardResets.add(this.key(groupId, member.bot_id));
-          continue;
-        }
-        if (seat) await this.host.chats.archive(seat.id).catch(() => undefined);
-        this.store.setSeat(groupId, member.bot_id, null);
-      }
-    }
+    if (modeChanged) await this.resetSeatsForWorkbench(groupId);
     this.changed(groupId);
+  }
+
+  /** The seat prompt and offered tools come from the workbench switches, so a change starts each seat over. */
+  private async resetSeatsForWorkbench(groupId: string): Promise<void> {
+    for (const member of this.store.members(groupId)) {
+      const seat = member.seat_chat_id ? this.host.chats.get(member.seat_chat_id) : null;
+      if (seat && isBusy(seat.status)) {
+        this.workbenchResets.add(this.key(groupId, member.bot_id));
+        continue;
+      }
+      if (seat) await this.host.chats.archive(seat.id).catch(() => undefined);
+      this.store.setSeat(groupId, member.bot_id, null);
+    }
   }
 
   private extraFoldersOf(group: GroupRow): string[] {
@@ -666,85 +658,6 @@ export class GroupChats {
   async searchMessages(groupId: string, query: string): Promise<GroupMessage[]> {
     this.require(groupId);
     return this.store.search(groupId, query, 50);
-  }
-
-  // ---------------------------------------------------------------- the quiet board
-
-  /** The board is on for a group that opted in and has no leader. */
-  boardEnabled(groupId: string): boolean {
-    const group = this.store.group(groupId);
-    return !!group && group.workbench_mode !== "off" && this.store.leader(groupId) === null;
-  }
-
-  private requireBoard(groupId: string): void {
-    if (!this.boardEnabled(groupId)) throw new RequestError("The board is off for this group (or it has a leader). Use the group chat, or ask the user to turn on the board.");
-  }
-
-  private noteRefText(ref: GroupNoteRef): string {
-    return ref.note ? `note #${ref.note}` : `#${ref.message}`;
-  }
-
-  /** One note as visit returns it: the body, its refs, and the notes that cite it. */
-  private noteText(note: GroupNote, citedBy: readonly GroupNoteSummary[] = []): string {
-    const lines = [
-      `## Note #${note.id} · ${note.kind} · by ${note.authorName} · ${note.createdAt}`,
-      note.title,
-      "",
-      note.body,
-    ];
-    if (note.refs.length) lines.push("", `Refs: ${note.refs.map((ref) => this.noteRefText(ref)).join(", ")}`);
-    if (note.task) lines.push(`Task: #${note.task}`);
-    if (note.thread) lines.push(`Thread: #${note.thread}`);
-    if (note.supersedes) lines.push(`Supersedes: note #${note.supersedes}`);
-    if (note.supersededBy) lines.push(`Superseded by: note #${note.supersededBy}`);
-    if (citedBy.length) lines.push(`Cited by: ${citedBy.map((entry) => `note #${entry.id} "${entry.title}"`).join(", ")}`);
-    return lines.join("\n");
-  }
-
-  /** group_note: publish a reusable note. It wakes nobody; a wake's digest mentions it. */
-  async publishNote(bot: Bot, groupId: string, input: { kind: NoteKind; title: string; body: string; refs?: readonly GroupNoteRef[]; task?: number | null; thread?: number | null; supersedes?: number | null }): Promise<string> {
-    this.requireMember(groupId, bot.id);
-    this.requireBoard(groupId);
-    const result = this.store.publishNote(groupId, { id: bot.id, name: bot.name }, input);
-    if (!result.ok) return `Not published: ${result.reason}.`;
-    this.store.bumpMetric(groupId, "notes_published");
-    this.changed(groupId);
-    return `Published note #${result.note.id} (${result.note.kind}). It woke nobody; the next wake can list it in its board digest.`;
-  }
-
-  /** group_note_search: bounded, relevance plus citation weight; never returns the body. */
-  async searchNotes(bot: Bot, groupId: string, input: { query: string; limit?: number }): Promise<string> {
-    this.requireMember(groupId, bot.id);
-    this.requireBoard(groupId);
-    const notes = this.store.searchNotes(groupId, input.query, input.limit ?? NOTE_SEARCH_K);
-    this.store.bumpMetric(groupId, "note_searches");
-    if (notes.length === 0) return `No notes matched "${input.query.trim()}". Publish what you learned with group_note, or search the chat with group_search.`;
-    return [`Board search for "${input.query.trim()}" (${notes.length}):`, ...notes.map((note) => `- note #${note.id} · ${note.kind} · ${note.authorName}: ${note.title}${note.refs.length ? `\n  refs: ${note.refs.map((ref) => (ref.note ? `note #${ref.note}` : `#${ref.message}`)).join(", ")}` : ""}\n  ${note.snippet}`), "", "Read one with group_note_visit (up to 8)."].join("\n");
-  }
-
-  /** group_note_visit: all-or-nothing; returns bodies, refs and recent citers, not weights. */
-  async visitNotes(bot: Bot, groupId: string, input: { notes: readonly number[] }): Promise<string> {
-    this.requireMember(groupId, bot.id);
-    this.requireBoard(groupId);
-    const ids = [...new Set(input.notes)].slice(0, NOTE_VISIT_MAX);
-    if (ids.length === 0) throw new RequestError("Which notes? Give note ids (notes: [3, 4]).");
-    const notes = this.store.notesByIds(groupId, ids);
-    if (!notes) return `Not read: at least one of ${ids.map((id) => `#${id}`).join(", ")} doesn't exist. Nothing was returned; check the ids with group_note_search.`;
-    this.store.bumpMetric(groupId, "note_visits");
-    return notes.map((note) => this.noteText(note, this.store.citedBy(groupId, note.id, NOTE_CITED_BY_MAX))).join("\n\n---\n\n");
-  }
-
-  /** The user's board list: recent notes, newest first. */
-  async listNotes(groupId: string, limit = 50): Promise<GroupNoteSummary[]> {
-    this.require(groupId);
-    return this.store.recentNoteSummaries(groupId, limit);
-  }
-
-  /** The user opens one note, with its citers. */
-  async noteDetail(groupId: string, id: number): Promise<{ note: GroupNote; citedBy: GroupNoteSummary[] } | null> {
-    this.require(groupId);
-    const note = this.store.note(groupId, id);
-    return note ? { note, citedBy: this.store.citedBy(groupId, id) } : null;
   }
 
   /** The user's search across groups (search.ts): messages with every term, newest first. */
@@ -1525,7 +1438,7 @@ export class GroupChats {
     this.noticeTimers.clear();
     this.sweepTimers.clear();
     this.noticeTimes.clear();
-    this.boardResets.clear();
+    this.workbenchResets.clear();
   }
 
   // ---------------------------------------------------------------- reminders firing
@@ -1592,7 +1505,7 @@ export class GroupChats {
     if (!groupId || isBusy(agent.status)) return;
     const member = this.store.memberBySeat(agent.id);
     if (!member || member.group_id !== groupId) return;
-    if (this.boardResets.delete(this.key(groupId, member.bot_id))) {
+    if (this.workbenchResets.delete(this.key(groupId, member.bot_id))) {
       void this.serial(groupId, async () => {
         await this.host.chats.archive(agent.id).catch(() => undefined);
         this.store.setSeat(groupId, member.bot_id, null);
@@ -2044,7 +1957,7 @@ export class GroupChats {
   /** A member left (or its group was deleted): nothing of its seat's waits stays. */
   private forgetSeat(groupId: string, botId: string): void {
     const key = this.key(groupId, botId);
-    this.boardResets.delete(key);
+    this.workbenchResets.delete(key);
     this.clearBackoff(key);
     this.clearNotice(key);
     const spawn = this.spawnBackoffs.get(key);
@@ -2300,12 +2213,7 @@ export class GroupChats {
       // A led member's session is for one piece: its other tasks come back with their threads.
       owed: seat || piece ? [] : this.store.tasks(groupId, { statuses: OPEN_TASKS, assigneeId: botId }),
     });
-    // The board rides on a wake that was happening anyway: at most five new titles, never a wake of its own.
-    const boardNotes = this.boardEnabled(groupId) ? this.store.newNoteSummaries(groupId, member.last_note_id, NOTE_DIGEST_MAX) : [];
-    const digest = boardNotes.length
-      ? `\n\nBoard — ${boardNotes.length} new note${boardNotes.length === 1 ? "" : "s"} since your last wake:\n${boardNotes.map((note) => `- note #${note.id} · ${note.kind}: ${note.title}`).join("\n")}\nSearch with group_note_search; read with group_note_visit. Publishing one wakes nobody.`
-      : "";
-    const promptText = text + digest;
+    const promptText = text;
     const files = await this.deliveryFiles([...joins.flatMap((join) => [join.parent, ...join.recent, join.trigger]), ...handed], botId);
     const clientMessageId = randomUUID();
     const told = pending.map((entry) => entry.message.seq);
@@ -2356,11 +2264,12 @@ export class GroupChats {
       this.store.markNoticed(groupId, botId, told);
       this.store.bumpMetric(groupId, "notices");
       if (group.workbench_mode === "full" && leaderId === null) this.recordNotice(key);
-      if (boardNotes.length) this.store.markNotesSeen(groupId, botId, boardNotes.at(-1)!.id);
       this.store.markRemindersWoken(reminders.map((reminder) => reminder.id));
       if (piece && piece.work !== null) this.store.setSeatTask(groupId, botId, piece.work);
     } catch (error) {
       this.deliveries.delete(clientMessageId);
+      // A start that fails while pocket-bots is shutting down writes nothing: the database may be gone.
+      if (this.closed) return;
       const detail = error instanceof Error ? error.message : String(error);
       if (!seat) {
         // A new seat that couldn't start. (A seat that exists and couldn't start is told by

@@ -1994,13 +1994,6 @@ pre {
   flex-direction: column;
 }
 
-.group-note-body {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-size: 13px;
-  line-height: 1.5;
-  margin: 10px 0;
-}
 
 .badge.task-badge.closed {
   text-decoration: line-through;
