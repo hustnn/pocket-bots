@@ -2,7 +2,7 @@ import type { ChatSnapshot, ProvidersSnapshot, TimelinePage } from "./chat-types
 import { z } from "zod";
 import { BotMcpServerSchema, BotSchema, McpServerConfigSchema, McpToolSchema, StoreSchema } from "./bot";
 import { MAX_EXTRA_FOLDERS } from "./extra-folders";
-import { GROUP_MAX_BOTS, GROUP_NAME_MAX, GroupMessageSchema, GroupSummarySchema, GroupTaskSchema, TaskStatusSchema, USER_TEXT_MAX, WakeModeSchema } from "./group-chat";
+import { GROUP_MAX_BOTS, GROUP_NAME_MAX, GroupMessageSchema, GroupSummarySchema, GroupTaskSchema, TaskStatusSchema, USER_TEXT_MAX, WakeModeSchema, WorkbenchModeSchema } from "./group-chat";
 import { ProposalSchema } from "./proposals";
 import { defineRpc } from "./rpc-core";
 
@@ -665,6 +665,8 @@ export const groupUpdateRpc = defineRpc({
     name: z.string().max(GROUP_NAME_MAX).nullable().optional(),
     memberIds: MemberIds.nullable().optional(),
     wakeMode: WakeModeSchema.nullable().optional(),
+    /** off, or full obligation wakes; a leader group can't turn it on. */
+    workbenchMode: WorkbenchModeSchema.nullable().optional(),
     /** A member to lead the group, or null for no leader; left out, the leader stays. */
     leaderId: z.string().min(1).nullable().optional(),
     /** The group's working folder, or null for each bot's own; left out, it stays. */

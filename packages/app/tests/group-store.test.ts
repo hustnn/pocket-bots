@@ -1,5 +1,5 @@
 // A group's message management at the storage layer: delivery records,
-// mute, threads, notes, read positions and the model-seen ledger.
+// mute, threads, read positions and the model-seen ledger.
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Db } from "../src/server/db";
 import { GroupStore, isSeen } from "../src/server/group-store";
 import { GROUP_USER, type GroupSender } from "../src/shared/group-chat";
+import { dropExperimentSchema } from "./helpers";
 
 let dir: string;
 let db: Db;
@@ -566,7 +567,8 @@ describe("task statuses", () => {
     store.claimTask(G, { seq: second.seq }, cody);
     db.run("UPDATE group_tasks SET status = 'in_review', completed_at = NULL, updated_at = '2026-10-01T00:00:00.000Z' WHERE number = ?", second.seq);
     db.run("INSERT INTO group_task_events (group_id, number, event, actor_kind, actor_id, actor_name, payload, created_at) VALUES (?, ?, 'status_changed', 'bot', 'cody', 'Cody', ?, '2026-10-01T00:00:00.000Z')", G, second.seq, JSON.stringify({ from: "in_progress", to: "in_review", forced: false }));
-    // (Migration 20 is undone too, or it would add its columns again.)
+    // (Migrations 20–23 are undone too, or they would add their columns again.)
+    dropExperimentSchema(db);
     db.raw.exec("ALTER TABLE chats DROP COLUMN extra_folders; ALTER TABLE chats DROP COLUMN folders_told; ALTER TABLE groups DROP COLUMN extra_folders");
     db.run("UPDATE schema_version SET version = 18");
     db.close();
@@ -575,5 +577,19 @@ describe("task statuses", () => {
     expect(store.task(G, { number: second.seq })).toMatchObject({ status: "done", assignee: { id: "cody" } });
     expect(db.get<{ completed_at: string }>("SELECT completed_at FROM group_tasks WHERE number = ?", second.seq)!.completed_at).toBe("2026-10-01T00:00:00.000Z");
     expect(store.taskEvents(G, second.seq).at(-1)).toMatchObject({ event: "status_changed", payload: { from: "in_progress", to: "in_review" } });
+  });
+});
+
+describe("migration 24", () => {
+  it("drops the board tables and columns", () => {
+    const tables = db.all<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table'").map((row) => row.name);
+    expect(tables).not.toContain("group_notes");
+    expect(tables).not.toContain("group_note_refs");
+    expect(tables).not.toContain("group_notes_fts");
+    const groupColumns = db.all<{ name: string }>("PRAGMA table_info(groups)").map((row) => row.name);
+    expect(groupColumns).not.toContain("last_note_id");
+    expect(groupColumns).not.toContain("board_enabled");
+    const memberColumns = db.all<{ name: string }>("PRAGMA table_info(group_members)").map((row) => row.name);
+    expect(memberColumns).not.toContain("last_note_id");
   });
 });

@@ -3,7 +3,11 @@ import type { SQLInputValue } from "node:sqlite";
 import {
   DRAFT_TTL_MS,
   FRESHNESS_EXEMPT_SUBTYPES,
+  GROUP_TASK_DESCRIPTION_MAX,
+  GROUP_TASK_TITLE_MAX,
   GROUP_USER_ID,
+  TASK_LEASE_GRACE_MS,
+  TASK_LEASE_MS,
   TASK_TRANSITIONS,
   deliveryReason,
   fromLead,
@@ -54,6 +58,8 @@ export interface GroupRow {
   cwd: string | null;
   /** JSON list of the extra folders its seats may use besides the working folder. */
   extra_folders: string;
+  /** off | full. A leader still takes precedence. */
+  workbench_mode: "off" | "full";
   last_seq: number;
   created_at: string;
   updated_at: string;
@@ -86,6 +92,8 @@ interface MessageRow {
   question: string | null;
   system_subtype: string | null;
   causal_actor_id: string | null;
+  /** How many bot replies deep this message is; full mode stops waking a reply chain at WAKE_HOPS_MAX. */
+  wake_depth: number;
   created_at: string;
 }
 
@@ -130,6 +138,7 @@ interface TaskRow {
   title: string;
   description: string | null;
   created_by: string;
+  updated_at: string;
   /** The latest amendment's (TASK_SELECT joins it). */
   amended_at: string | null;
   amended_kind: TaskEvent["actor"]["kind"] | null;
@@ -142,6 +151,7 @@ const TASK_SELECT =
   "SELECT t.*, a.created_at AS amended_at, a.actor_kind AS amended_kind, a.actor_id AS amended_by_id, a.actor_name AS amended_by FROM group_tasks t LEFT JOIN group_task_events a ON a.id = (SELECT MAX(e.id) FROM group_task_events e WHERE e.group_id = t.group_id AND e.number = t.number AND e.event = 'amended')";
 
 function taskOf(row: TaskRow): GroupTask {
+  const stale = row.status === "in_progress" && row.assignee_kind === "bot" && !!row.assignee_id && Date.parse(row.updated_at) <= Date.now() - (TASK_LEASE_MS + TASK_LEASE_GRACE_MS);
   return {
     number: Number(row.number),
     seq: Number(row.seq),
@@ -151,6 +161,8 @@ function taskOf(row: TaskRow): GroupTask {
     title: row.title ?? "",
     description: row.description ?? null,
     createdBy: row.created_by ?? "",
+    updatedAt: row.updated_at,
+    stale,
     amended: row.amended_at ? { at: row.amended_at, by: row.amended_kind === "user" ? "the user" : (row.amended_by ?? row.amended_by_id ?? "?"), byId: row.amended_by_id } : null,
   };
 }
@@ -230,8 +242,42 @@ export interface AppendInput {
   mentionHandles?: Record<string, string>;
 }
 
+export type GroupMetricField = "wake_calls" | "woken_bots" | "notices" | "read_bytes" | "bot_messages" | "user_messages" | "claims";
+
+export interface GroupMetricRow {
+  wake_calls: number;
+  woken_bots: number;
+  notices: number;
+  read_bytes: number;
+  bot_messages: number;
+  user_messages: number;
+  claims: number;
+}
+
+const METRIC_ZERO: GroupMetricRow = { wake_calls: 0, woken_bots: 0, notices: 0, read_bytes: 0, bot_messages: 0, user_messages: 0, claims: 0 };
+
 export class GroupStore {
   constructor(private readonly db: Db) {}
+
+  // ---------------------------------------------------------------- experiment metrics
+
+  /** Adds to one of the day's counters. Observation only: no wake or delivery reads it. */
+  bumpMetric(groupId: string, field: GroupMetricField, amount = 1): void {
+    if (amount <= 0) return;
+    const day = new Date().toISOString().slice(0, 10);
+    this.db.run(
+      `INSERT INTO group_metrics (group_id, day, ${field}) VALUES (?, ?, ?)
+       ON CONFLICT (group_id, day) DO UPDATE SET ${field} = ${field} + excluded.${field}`,
+      groupId,
+      day,
+      amount,
+    );
+  }
+
+  /** The day's counters for a group; a group with no activity reads as zeroes. */
+  metrics(groupId: string, day = new Date().toISOString().slice(0, 10)): GroupMetricRow {
+    return this.db.get<GroupMetricRow>("SELECT wake_calls, woken_bots, notices, read_bytes, bot_messages, user_messages, claims FROM group_metrics WHERE group_id = ? AND day = ?", groupId, day) ?? { ...METRIC_ZERO };
+  }
 
   // ---------------------------------------------------------------- groups
 
@@ -251,9 +297,10 @@ export class GroupStore {
     });
   }
 
-  updateGroup(groupId: string, patch: { name?: string; wakeMode?: WakeMode; leaderId?: string | null; cwd?: string | null; extraFolders?: string[] }): void {
+  updateGroup(groupId: string, patch: { name?: string; wakeMode?: WakeMode; workbenchMode?: GroupRow["workbench_mode"]; leaderId?: string | null; cwd?: string | null; extraFolders?: string[] }): void {
     if (patch.name !== undefined) this.db.run("UPDATE groups SET name = ?, updated_at = ? WHERE id = ?", patch.name, now(), groupId);
     if (patch.wakeMode !== undefined) this.db.run("UPDATE groups SET wake_mode = ? WHERE id = ?", patch.wakeMode, groupId);
+    if (patch.workbenchMode !== undefined) this.db.run("UPDATE groups SET workbench_mode = ? WHERE id = ?", patch.workbenchMode, groupId);
     if (patch.leaderId !== undefined) this.db.run("UPDATE groups SET leader_id = ? WHERE id = ?", patch.leaderId, groupId);
     if (patch.cwd !== undefined) this.db.run("UPDATE groups SET cwd = ? WHERE id = ?", patch.cwd, groupId);
     if (patch.extraFolders !== undefined) this.db.run("UPDATE groups SET extra_folders = ? WHERE id = ?", JSON.stringify(patch.extraFolders), groupId);
@@ -291,9 +338,15 @@ export class GroupStore {
    * history with group_read), so its top-level read position starts at the group's latest message.
    */
   addMember(groupId: string, botId: string): void {
-    const last = this.group(groupId)?.last_seq ?? 0;
+    const group = this.group(groupId);
+    const last = group?.last_seq ?? 0;
     this.db.tx(() => {
-      this.db.run("INSERT INTO group_members (group_id, bot_id, joined_seq) VALUES (?, ?, ?) ON CONFLICT (group_id, bot_id) DO UPDATE SET active = 1, joined_seq = excluded.joined_seq", groupId, botId, last);
+      this.db.run(
+        "INSERT INTO group_members (group_id, bot_id, joined_seq) VALUES (?, ?, ?) ON CONFLICT (group_id, bot_id) DO UPDATE SET active = 1, joined_seq = excluded.joined_seq",
+        groupId,
+        botId,
+        last,
+      );
       this.markRead(groupId, botId, 0, last);
     });
   }
@@ -333,8 +386,11 @@ export class GroupStore {
       }
       const seq = this.db.get<{ last_seq: number }>("UPDATE groups SET last_seq = last_seq + 1, updated_at = ? WHERE id = ? RETURNING last_seq", now(), groupId)?.last_seq;
       if (seq === undefined) throw new RequestError("That group no longer exists.");
+      // A bot reply to a bot is one hop deeper; a message to the user or a fresh topic is 0.
+      const parentDepth = input.replyTo ? (this.db.get<{ wake_depth: number }>("SELECT wake_depth FROM group_messages WHERE group_id = ? AND seq = ?", groupId, input.replyTo)?.wake_depth ?? 0) : 0;
+      const wakeDepth = from.kind === "bot" ? parentDepth + 1 : 0;
       this.db.run(
-        `INSERT INTO group_messages (group_id, seq, id, sender_kind, sender_id, sender_name, text, reply_to, thread_seq, everyone, mentions, attachments, question, idempotency_key, system_subtype, causal_actor_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO group_messages (group_id, seq, id, sender_kind, sender_id, sender_name, text, reply_to, thread_seq, everyone, mentions, attachments, question, idempotency_key, system_subtype, causal_actor_id, wake_depth, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         groupId,
         seq,
         randomUUID(),
@@ -351,9 +407,12 @@ export class GroupStore {
         input.idempotencyKey ?? null,
         input.subtype ?? null,
         input.causalActor ?? null,
+        wakeDepth,
         now(),
       );
       if (input.text.trim()) this.db.run("INSERT INTO group_messages_fts (text, group_id, seq) VALUES (?, ?, ?)", input.text, groupId, seq);
+      if (from.kind === "bot") this.bumpMetric(groupId, "bot_messages");
+      else if (from.kind === "user") this.bumpMetric(groupId, "user_messages");
       if (from.kind !== "system") this.recordMentions(groupId, seq, input);
       const row = this.db.get<MessageRow>("SELECT * FROM group_messages WHERE group_id = ? AND seq = ?", groupId, seq)!;
       const message = this.message(row);
@@ -388,6 +447,8 @@ export class GroupStore {
     const conv = message.thread ?? 0;
     const senderId = row.sender_id ?? row.sender_kind;
     const leaderId = group.leader_id && memberIds.has(group.leader_id) ? group.leader_id : null;
+    // A leader group keeps its existing rules even if a stale mode says full.
+    const full = group.workbench_mode === "full" && leaderId === null;
     const lead = !leaderId || fromLead(leaderId, { kind: row.sender_kind, senderId, causalActor: row.causal_actor_id });
     /** A member the leader leads, which this message may only reach as work. */
     const led = (id: string) => leaderId !== null && id !== leaderId && id !== GROUP_USER_ID && id !== senderId;
@@ -441,6 +502,8 @@ export class GroupStore {
           ? null
           : deliveryReason({
               mode: group.wake_mode,
+              full,
+              depth: Number(row.wake_depth ?? 0),
               receiverId: id,
               conv,
               message: { senderId, kind: row.sender_kind, everyone: message.everyone, mentions: message.mentions, repliesTo: repliedMember, subtype: row.system_subtype },
@@ -448,6 +511,9 @@ export class GroupStore {
               repliedTo: repliedBot === id,
               eligible,
             });
+      // Full mode delivers only to those with an obligation: a bot's ordinary chatter doesn't
+      // grow every other bot's unread inbox. The sender and the user keep their records.
+      if (full && id !== GROUP_USER_ID && id !== senderId && reason === null) continue;
       this.db.run(
         "INSERT OR IGNORE INTO group_inbox (group_id, receiver_id, seq, conv, personal_mention, unread_eligible, wake_reason, reactivated, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         groupId,
@@ -1132,7 +1198,7 @@ export class GroupStore {
         assignee?.kind ?? null,
         assignee?.id ?? null,
         assignee?.name ?? null,
-        text,
+        text.slice(0, GROUP_TASK_TITLE_MAX),
         by.id,
         at,
         at,
@@ -1159,8 +1225,10 @@ export class GroupStore {
       }
       if (task.status === "closed") return { ok: false as const, reason: "task is closed; reopen it before claiming", task };
       if (task.status === "done") return { ok: false as const, reason: "task is done", task };
-      if (task.assignee && task.assignee.id !== claimant.id) return { ok: false as const, reason: `already assigned to ${task.assignee.name}`, task };
-      if (task.assignee && task.status !== "todo") return { ok: false as const, reason: "already claimed by you", task };
+      const group = this.group(groupId);
+      const full = group?.workbench_mode === "full" && !group.leader_id;
+      if (task.assignee && task.assignee.id !== claimant.id && !(full && task.stale)) return { ok: false as const, reason: `already assigned to ${task.assignee.name}`, task };
+      if (task.assignee?.id === claimant.id && task.status !== "todo") return { ok: false as const, reason: "already claimed by you", task };
       const at = now();
       const next: TaskStatus = task.status === "todo" ? "in_progress" : task.status;
       this.db.run(
@@ -1176,6 +1244,7 @@ export class GroupStore {
       );
       this.taskEvent(groupId, task.number, "assignee_changed", claimant, { assigneeType: claimant.kind, assigneeId: claimant.id });
       if (next !== task.status) this.taskEvent(groupId, task.number, "status_changed", claimant, { from: task.status, to: next });
+      this.bumpMetric(groupId, "claims");
       return { ok: true as const, task: this.task(groupId, { number: task.number })!, created };
     });
   }
@@ -1265,6 +1334,8 @@ export class GroupStore {
     return this.db.tx(() => {
       const task = this.task(groupId, { number });
       if (!task) return { ok: false as const, reason: `there's no task #${number}` };
+      if (patch.title !== undefined && patch.title.length > GROUP_TASK_TITLE_MAX) return { ok: false as const, reason: `the title is longer than ${GROUP_TASK_TITLE_MAX} characters` };
+      if (patch.description !== undefined && patch.description !== null && patch.description.length > GROUP_TASK_DESCRIPTION_MAX) return { ok: false as const, reason: `the description is longer than ${GROUP_TASK_DESCRIPTION_MAX} characters` };
       const changes: Partial<Record<"title" | "description", { from: string | null; to: string | null }>> = {};
       if (patch.title !== undefined && patch.title !== task.title) changes.title = { from: task.title, to: patch.title };
       if (patch.description !== undefined && patch.description !== task.description) changes.description = { from: task.description, to: patch.description };

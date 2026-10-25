@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { FakeAdapter, type FakeScript, type FakeStep, type FakeTurn } from "@pocket-bots/runtime";
+import { GROUP_READ_TOTAL_MAX, GROUP_TASK_DESCRIPTION_MAX, GROUP_TASK_LIST_MAX, TASK_LEASE_GRACE_MS, TASK_LEASE_MS } from "../src/shared/group-chat";
 import { fakeHost, makeBot } from "./helpers";
 
 type BotScript = (turn: FakeTurn, step: number, botId: string) => FakeStep | null;
@@ -59,7 +60,7 @@ async function setup(script: BotScript, bots = ["alpha", "beta"], options: impor
     db.close();
     await rm(dir, { recursive: true, force: true });
   };
-  return { groups, chats, id, texts, idle, stop, fake, store, host };
+  return { groups, chats, id, texts, idle, stop, fake, store, host, db };
 }
 
 let stop: (() => Promise<void>) | null = null;
@@ -101,6 +102,174 @@ const settle = async (group: { idle: () => boolean }) => {
 };
 
 describe("group chats", () => {
+  it("records the day's wakes, notices, reads and posts without changing delivery", async () => {
+    const group = await setup(() => null);
+    stop = group.stop;
+    const alpha = (await group.host.bot("alpha"))!;
+    await group.groups.postFromUser(group.id, { text: "metrics check" });
+    await settle(group);
+    // A direct send is the same path as group_send after the bot's own read.
+    await group.groups.read(alpha, group.id, { unread: true });
+    await group.groups.send(alpha, group.id, { text: "Alpha read it." });
+    await settle(group);
+
+    const metrics = group.store.metrics(group.id);
+    expect(metrics.user_messages).toBe(1);
+    expect(metrics.bot_messages).toBe(1);
+    expect(metrics.wake_calls).toBeGreaterThanOrEqual(2); // the user's post and Alpha's reply
+    expect(metrics.woken_bots).toBeGreaterThanOrEqual(2);
+    expect(metrics.notices).toBeGreaterThanOrEqual(2);
+    expect(metrics.read_bytes).toBeGreaterThan(0);
+    expect(metrics.claims).toBe(0);
+  });
+
+  it("bounds a read page, points at full, and leaves omitted messages unread", async () => {
+    const group = await setup(() => null);
+    stop = group.stop;
+    const alpha = (await group.host.bot("alpha"))!;
+    for (let index = 1; index <= 10; index++) await group.groups.postFromUser(group.id, { text: `${"x".repeat(5_000)} tail-${index}` });
+    await settle(group);
+
+    const page = await group.groups.read(alpha, group.id, { unread: true });
+    expect(page.length).toBeLessThanOrEqual(GROUP_READ_TOTAL_MAX + 500);
+    expect(page).toContain("group_read full: ");
+    expect(group.store.pending(group.id, "alpha").length).toBeGreaterThan(0);
+    expect(group.store.pending(group.id, "alpha").length).toBeLessThan(10);
+
+    const before = group.store.cursor(group.id, "alpha", 0);
+    const full = await group.groups.read(alpha, group.id, { full: 10 });
+    expect(full).toContain("Full message #10");
+    expect(full).toContain("tail-10");
+    expect(full.length).toBeLessThanOrEqual(20_100);
+    expect(group.store.cursor(group.id, "alpha", 0)).toBe(before);
+  }, 15_000);
+
+  it("caps task cards and task lists", async () => {
+    const group = await setup(() => null);
+    stop = group.stop;
+    const alpha = (await group.host.bot("alpha"))!;
+    const titles = Array.from({ length: GROUP_TASK_LIST_MAX + 1 }, (_, index) => `task ${index + 1}`);
+    // group_task create takes ten titles per call, so make the list with a few calls.
+    for (let index = 0; index < titles.length; index += 10) {
+      await group.groups.task(alpha, group.id, { action: "create", titles: titles.slice(index, index + 10) });
+    }
+    await settle(group);
+
+    const list = await group.groups.task(alpha, group.id, { action: "list", filter: "all" });
+    expect(list.split("\n").filter((line) => line.startsWith("- task #"))).toHaveLength(GROUP_TASK_LIST_MAX);
+    expect(list).toContain(`(${titles.length - GROUP_TASK_LIST_MAX} more tasks not shown`);
+
+    expect(await group.groups.task(alpha, group.id, { action: "amend", task: 1, description: "d".repeat(GROUP_TASK_DESCRIPTION_MAX + 1) })).toContain(`longer than ${GROUP_TASK_DESCRIPTION_MAX}`);
+  }, 20_000);
+
+  it("starts a seat over when the workbench switches change, so its new prompt and tools take effect", async () => {
+    const group = await setup(() => null, ["alpha", "beta"], { idleNoticeDelayMs: 10 });
+    stop = group.stop;
+    const alpha = (await group.host.bot("alpha"))!;
+    await group.groups.postFromUser(group.id, { text: "Start the seats." });
+    await settle(group);
+    const seatId = group.store.member(group.id, alpha.id)?.seat_chat_id;
+    expect(seatId).toBeTruthy();
+    await group.groups.update(group.id, { workbenchMode: "full" });
+    expect(group.store.member(group.id, alpha.id)?.seat_chat_id).toBeNull();
+    expect(group.chats.get(seatId!)?.archivedAt).toBeTruthy();
+  });
+
+  it("in full mode delivers only obligations: a bot's plain message wakes nobody, a user's @mention only its target", async () => {
+    const wakes: string[] = [];
+    const group = await setup(
+      (turn) => {
+        if (delivered(turn)) wakes.push(botOf(turn));
+        return null;
+      },
+      ["alpha", "beta"],
+      { idleNoticeDelayMs: 10 },
+    );
+    stop = group.stop;
+    await group.groups.update(group.id, { workbenchMode: "full" });
+    const alpha = (await group.host.bot("alpha"))!;
+    const beta = (await group.host.bot("beta"))!;
+
+    await group.groups.postFromUser(group.id, { text: "A plain request." });
+    await settle(group);
+    expect([...wakes].sort()).toEqual(["alpha", "beta"]);
+    await group.groups.read(alpha, group.id, { unread: true });
+    await group.groups.read(beta, group.id, { unread: true });
+
+    wakes.length = 0;
+    await group.groups.send(alpha, group.id, { text: "A plain status note, not a wake." });
+    await settle(group);
+    expect(wakes).toEqual([]);
+    expect(group.store.pending(group.id, "beta")).toHaveLength(0);
+    expect((await group.texts()).at(-1)).toContain("A plain status note");
+
+    await group.groups.send(alpha, group.id, { text: "@everyone status?" });
+    await settle(group);
+    expect(wakes).toEqual([]);
+
+    wakes.length = 0;
+    await group.groups.postFromUser(group.id, { text: "@Beta do the next piece." });
+    await settle(group);
+    expect(wakes).toEqual(["beta"]);
+    expect(group.store.pending(group.id, "alpha")).toHaveLength(0);
+  });
+
+  it("stops a bot reply chain from waking after three hops, while an explicit handoff still reaches", async () => {
+    const group = await setup(() => null, ["alpha", "beta"], { idleNoticeDelayMs: 10 });
+    stop = group.stop;
+    await group.groups.update(group.id, { workbenchMode: "full" });
+    const send = (botId: "alpha" | "beta", text: string, replyTo?: number, mentions: string[] = []) =>
+      group.store.append(group.id, { kind: "bot", botId, name: botId[0]!.toUpperCase() + botId.slice(1) }, { text, mentions, ...(replyTo ? { replyTo } : {}) });
+    const one = send("alpha", "one");
+    const two = send("beta", "two", one.message.seq);
+    expect(two.woken).toEqual(["alpha"]);
+    const three = send("alpha", "three", two.message.seq);
+    expect(three.woken).toEqual([]);
+    const four = send("beta", "four", three.message.seq, ["alpha"]);
+    expect(four.woken).toEqual(["alpha"]);
+  });
+
+  it("holds a seat's notice when its full-mode budget is spent, leaving the messages pending", async () => {
+    const wakes: string[] = [];
+    const group = await setup(
+      (turn) => {
+        if (delivered(turn)) wakes.push(botOf(turn));
+        return null;
+      },
+      ["alpha", "beta"],
+      { idleNoticeDelayMs: 10, noticeBudget: 1, noticeWindowMs: 60_000 },
+    );
+    stop = group.stop;
+    await group.groups.update(group.id, { workbenchMode: "full" });
+    await group.groups.postFromUser(group.id, { text: "First." });
+    await settle(group);
+    expect(wakes).toHaveLength(2);
+
+    wakes.length = 0;
+    await group.groups.postFromUser(group.id, { text: "Second." });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(wakes).toEqual([]);
+    expect(group.store.pending(group.id, "alpha").length).toBeGreaterThan(0);
+  });
+
+  it("marks a bot's task stale after its lease and lets another bot claim it in full mode", async () => {
+    const group = await setup(() => null, ["alpha", "beta"], { idleNoticeDelayMs: 10 });
+    stop = group.stop;
+    await group.groups.update(group.id, { workbenchMode: "full" });
+    const alpha = (await group.host.bot("alpha"))!;
+    const beta = (await group.host.bot("beta"))!;
+    const seq = await group.groups.postFromUser(group.id, { text: "A long piece of work." });
+    await settle(group);
+    await group.groups.read(beta, group.id, { unread: true });
+    expect(await group.groups.claim(beta, group.id, seq)).toContain("You've claimed");
+    group.db.run("UPDATE group_tasks SET updated_at = ? WHERE group_id = ? AND number = ?", new Date(Date.now() - TASK_LEASE_MS - TASK_LEASE_GRACE_MS - 1_000).toISOString(), group.id, seq);
+    const listed = await group.groups.listTasks(group.id);
+    expect(listed.find((task) => task.number === seq)?.stale).toBe(true);
+    await group.groups.read(alpha, group.id, { unread: true });
+    expect(await group.groups.claim(alpha, group.id, seq)).toContain("You've claimed");
+    expect((await group.groups.listTasks(group.id)).find((task) => task.number === seq)?.assignee?.id).toBe("alpha");
+  });
+
   it("answers an open question once: the second bot's post is held, and it lets it go", async () => {
     // Both read the question at once; Alpha answers first, Beta (slower) after it.
     const group = await setup(
@@ -424,8 +593,14 @@ describe("group chats", () => {
       await group.groups.update(group.id, { cwd: null });
       expect((await group.groups.list())[0]!.cwd).toBeNull();
       await group.groups.postFromUser(group.id, { text: "third thing" });
-      await until(async () => (await seatOf()) !== after && group.idle());
-      expect(group.chats.get(await seatOf())?.cwd).toBe(join(home, "Bots", "alpha"));
+      const ownFolder = join(home, "Bots", "alpha");
+      // The new seat id is recorded before ChatService has registered the chat, so wait for
+      // the seat itself rather than just for a changed id.
+      await until(async () => {
+        const current = await seatOf();
+        return current !== after && group.chats.get(current)?.cwd === ownFolder;
+      });
+      expect(group.chats.get(await seatOf())?.cwd).toBe(ownFolder);
     } finally {
       await rm(repo, { recursive: true, force: true });
       await rm(other, { recursive: true, force: true });
@@ -500,7 +675,8 @@ describe("group chats", () => {
     await group.groups.userTask(group.id, { action: "status", number: 1, status: "done" });
     await group.groups.userReact(group.id, seq, "👍");
     let [message] = (await group.groups.messages(group.id)).messages;
-    expect(message!.task).toEqual({ number: 1, status: "done", assignee: { kind: "user", id: "user", name: "the user" }, revision: 2, title: "Draft the release notes for version two.", description: null, createdBy: "user", amended: null });
+    expect(message!.task).toMatchObject({ number: 1, status: "done", assignee: { kind: "user", id: "user", name: "the user" }, revision: 2, title: "Draft the release notes for version two.", description: null, createdBy: "user", amended: null, stale: false });
+    expect(message!.task!.updatedAt).toBeTruthy();
     expect(message!.reactions).toEqual([{ emoji: "👍", names: ["the user"], ids: ["user"] }]);
     // A second tap takes the reaction back. A done task can't be unclaimed, so it's reopened first; unclaiming
     // then leaves the status as it was (assignee and status are independent), and a second unclaim is refused;

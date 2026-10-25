@@ -432,6 +432,89 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE groups ADD COLUMN extra_folders TEXT NOT NULL DEFAULT '[]';
     `);
   },
+  // 21: per-group, per-day counters for the group-chat experiment. They are observations only:
+  // no behavior reads them, and a missing row means zero.
+  (db) => {
+    db.exec(`
+      CREATE TABLE group_metrics (
+        group_id TEXT NOT NULL,
+        day TEXT NOT NULL,
+        wake_calls INTEGER NOT NULL DEFAULT 0,
+        woken_bots INTEGER NOT NULL DEFAULT 0,
+        notices INTEGER NOT NULL DEFAULT 0,
+        read_bytes INTEGER NOT NULL DEFAULT 0,
+        bot_messages INTEGER NOT NULL DEFAULT 0,
+        user_messages INTEGER NOT NULL DEFAULT 0,
+        claims INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (group_id, day)
+      );
+    `);
+  },
+  // 22: the quiet board. A note is a reusable finding, decision or answer with typed references;
+  // publishing one wakes nobody. Notes are immutable and addressed per group; a newer note may
+  // supersede an older one. workbench_mode is off unless the group opts in.
+  (db) => {
+    db.exec(`
+      ALTER TABLE groups ADD COLUMN workbench_mode TEXT NOT NULL DEFAULT 'off';
+      ALTER TABLE groups ADD COLUMN last_note_id INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE group_members ADD COLUMN last_note_id INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE group_messages ADD COLUMN wake_depth INTEGER NOT NULL DEFAULT 0;
+      CREATE TABLE group_notes (
+        group_id TEXT NOT NULL,
+        id INTEGER NOT NULL,
+        author_id TEXT NOT NULL,
+        author_name TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        title TEXT NOT NULL,
+        body TEXT NOT NULL,
+        task_seq INTEGER,
+        thread_seq INTEGER,
+        supersedes INTEGER,
+        superseded_by INTEGER,
+        pinned INTEGER NOT NULL DEFAULT 0,
+        weight REAL NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (group_id, id)
+      );
+      CREATE INDEX group_notes_by_created ON group_notes (group_id, id);
+      CREATE TABLE group_note_refs (
+        group_id TEXT NOT NULL,
+        note_id INTEGER NOT NULL,
+        ref_kind TEXT NOT NULL,
+        ref_id INTEGER NOT NULL,
+        PRIMARY KEY (group_id, note_id, ref_kind, ref_id)
+      );
+      CREATE INDEX group_note_refs_by_target ON group_note_refs (group_id, ref_kind, ref_id);
+      CREATE VIRTUAL TABLE group_notes_fts USING fts5(title, body, group_id UNINDEXED, note_id UNINDEXED, tokenize = 'trigram');
+      ALTER TABLE group_metrics ADD COLUMN notes_published INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE group_metrics ADD COLUMN note_searches INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE group_metrics ADD COLUMN note_visits INTEGER NOT NULL DEFAULT 0;
+    `);
+  },
+  // 23: separate the board from obligation wakes. full no longer implies notes; board_enabled is
+  // an internal experiment switch, and the old board-only mode becomes off because it did not earn
+  // a user-facing place. This migration stays for databases upgrading through 23.
+  (db) => {
+    db.exec(`
+      ALTER TABLE groups ADD COLUMN board_enabled INTEGER NOT NULL DEFAULT 0;
+      UPDATE groups SET workbench_mode = 'off' WHERE workbench_mode = 'board';
+    `);
+  },
+  // 24: the board experiment is over. A/B showed no benefit and lower turns/bytes without it, so
+  // drop its tables, cursors, switch and metrics; full keeps only obligation wakes.
+  (db) => {
+    db.exec(`
+      DROP TABLE IF EXISTS group_notes_fts;
+      DROP TABLE IF EXISTS group_note_refs;
+      DROP TABLE IF EXISTS group_notes;
+      ALTER TABLE group_members DROP COLUMN last_note_id;
+      ALTER TABLE groups DROP COLUMN last_note_id;
+      ALTER TABLE groups DROP COLUMN board_enabled;
+      ALTER TABLE group_metrics DROP COLUMN notes_published;
+      ALTER TABLE group_metrics DROP COLUMN note_searches;
+      ALTER TABLE group_metrics DROP COLUMN note_visits;
+    `);
+  },
 ];
 
 /** How much of one message the search index takes: a long pasted attachment doesn't need all of it. */

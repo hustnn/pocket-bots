@@ -4,7 +4,7 @@ import { selectPlaybooks } from "../shared/playbooks";
 import type { AppAccount, PromptApp } from "../shared/apps";
 import { accounts, catalog, readState } from "./composio";
 import { botSkills, composeSystemPrompt, promptSections, type Bot, type Library, type PromptContext } from "../shared/bot";
-import { groupPrompt, type GroupLead } from "../shared/group-chat";
+import { groupPrompt, type GroupLead, type WorkbenchMode } from "../shared/group-chat";
 import { linkBotSkills, skillSha } from "./library";
 import { injectedMemory, MAIN_MEMORY, memoryFolder, recentLogEntries } from "./memory";
 
@@ -31,6 +31,7 @@ export interface SeatGroupPrompt {
   subAgents?: boolean;
   questionTool?: string;
   lead?: GroupLead;
+  workbenchMode?: WorkbenchMode;
 }
 
 export interface ChatStart {
@@ -52,7 +53,7 @@ export interface ChatStart {
 export async function promptContext(bot: Bot, local: boolean, library: Library, start: ChatStart = {}): Promise<PromptContext> {
   // Playbooks live in the settings, so they travel with the bot to any host.
   const playbooks = selectPlaybooks(start.message ?? "", bot.playbooks);
-  const group = start.group ? groupPrompt(start.group.name, { subAgents: start.group.subAgents ?? false, ...(start.group.questionTool ? { questionTool: start.group.questionTool } : {}), ...(start.group.lead ? { lead: start.group.lead } : {}) }) : null;
+  const group = start.group ? groupPrompt(start.group.name, { subAgents: start.group.subAgents ?? false, ...(start.group.questionTool ? { questionTool: start.group.questionTool } : {}), ...(start.group.lead ? { lead: start.group.lead } : {}), ...(start.group.workbenchMode ? { workbenchMode: start.group.workbenchMode } : {}) }) : null;
   // Connected apps go through this host's relay, so bots on other hosts can't reach them.
   const folders = start.folders ?? [];
   if (!local) return { memory: "", memoryPath: null, recentWork: [], playbooks, group, skills: [], botTools: false, apps: [], folders };

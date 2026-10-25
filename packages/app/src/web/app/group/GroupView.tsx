@@ -597,6 +597,7 @@ function TaskBoard({ groupId, onPick, onClose }: { groupId: string; onPick: (tar
                     <span className="row small" style={{ gap: 6 }}>
                       <strong>task #{task.number}</strong>
                       <span className={`badge ${statusOf(task.status).badge}`}>{task.assignee ? (task.assignee.id === GROUP_USER_ID ? "You" : task.assignee.name) : "unassigned"}</span>
+                      {task.stale ? <span className="badge" title="No change for over 25 minutes; anyone may claim it in full mode">stale</span> : null}
                       {task.replies ? <span className="hint">· {task.replies} in thread</span> : null}
                     </span>
                     <span className="truncate">{task.preview}</span>
@@ -905,10 +906,20 @@ export function GroupView({ groupId, at, atThread }: { groupId: string; at?: num
     const chatId = seats[bot.id];
     return chatId ? [{ label: `${bot.name}'s side`, icon: "bot" as const, onSelect: () => navigate({ page: "bot", botId: bot.id, chatId }) }] : [];
   });
+  const setWorkbench = (mode: "off" | "full") => {
+    void rpc(groupUpdateRpc, { groupId, workbenchMode: mode }).catch((failure: unknown) => feedback.error(errorText(failure)));
+  };
   const menu: MenuItems = [
     { label: "Rename", icon: "edit", onSelect: () => void rename() },
     { label: "Members", icon: "users", onSelect: () => setEditingMembers(true) },
     ...(sides.length ? ["divider" as const, ...sides] : []),
+    ...(group.leaderId
+      ? []
+      : [
+          "divider" as const,
+          { label: "Obligation wakes: off", icon: "sparkles" as const, trailing: group.workbenchMode === "off" ? "current" : undefined, onSelect: () => setWorkbench("off") },
+          { label: "Obligation wakes: on", icon: "sparkles" as const, trailing: group.workbenchMode === "full" ? "current" : undefined, onSelect: () => setWorkbench("full") },
+        ]),
     "divider",
     { label: "Delete group", icon: "trash", danger: true, onSelect: () => void remove() },
   ];

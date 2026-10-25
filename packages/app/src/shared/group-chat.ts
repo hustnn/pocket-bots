@@ -35,6 +35,20 @@ export const DELIVERY_MAX = 40;
 export const GROUP_NAME_MAX = 80;
 export const USER_TEXT_MAX = 200_000;
 export const BOT_TEXT_MAX = 20_000;
+/** A group_read page: one rendered message, and the whole page, stay under these. */
+export const GROUP_READ_MESSAGE_MAX = 4_000;
+export const GROUP_READ_TOTAL_MAX = 32_000;
+/** group_read full: one message, rendered. */
+export const GROUP_READ_FULL_MAX = 20_000;
+/** Task cards: the title and details a bot sees in a list, and how many a list returns. */
+export const GROUP_TASK_TITLE_MAX = 200;
+export const GROUP_TASK_DESCRIPTION_MAX = 8_000;
+export const GROUP_TASK_LIST_MAX = 20;
+/** Full mode: a reply chain this deep stops waking the bot it answers (a handoff still does). */
+export const WAKE_HOPS_MAX = 3;
+/** A bot's task lease: no task change for this long, plus a grace period, makes it stale. */
+export const TASK_LEASE_MS = 20 * 60_000;
+export const TASK_LEASE_GRACE_MS = 5 * 60_000;
 
 export const GroupAttachmentSchema = z.object({
   kind: z.enum(["image", "text", "file"]),
@@ -132,15 +146,18 @@ export const GroupTaskSchema = z.object({
   description: z.string().nullable().default(null),
   /** Who made it a task: "user" or a bot's id. Only they or the user may delete it. */
   createdBy: z.string().default(""),
+  /** The last change; a task with a bot assignee and no change for the lease is stale. */
+  updatedAt: z.string().default(""),
+  stale: z.boolean().default(false),
   /** The card's latest amendment: its title and description now supersede the message's text, which never changes. */
   amended: z.object({ at: z.string(), by: z.string(), byId: z.string().nullable() }).nullable().default(null),
 });
 export type GroupTask = z.infer<typeof GroupTaskSchema>;
 
 /** How a task reads in text: "task #3 · in_progress · Ada". */
-export function taskLabel(task: Pick<GroupTask, "number" | "status" | "assignee">, meId?: string): string {
+export function taskLabel(task: Pick<GroupTask, "number" | "status" | "assignee"> & { stale?: boolean }, meId?: string): string {
   const who = task.assignee ? (task.assignee.id === meId ? "you" : task.assignee.name) : "unassigned";
-  return `task #${task.number} · ${task.status} · ${who}`;
+  return `task #${task.number} · ${task.status} · ${who}${task.stale ? " · stale" : ""}`;
 }
 
 export const GroupMessageSchema = z.object({
@@ -176,6 +193,10 @@ export const WakeModeSchema = z.enum(["everyone", "addressed"]);
 /** everyone: every message wakes every unmuted bot. addressed: bots wake only for messages aimed at them. */
 export type WakeMode = z.infer<typeof WakeModeSchema>;
 
+export const WorkbenchModeSchema = z.enum(["off", "full"]);
+/** off: the existing group chat. full: the obligation wake matrix; a leader group stays off. */
+export type WorkbenchMode = z.infer<typeof WorkbenchModeSchema>;
+
 /** A group as the web UI lists it. */
 export const GroupSummarySchema = z.object({
   id: z.string(),
@@ -186,6 +207,8 @@ export const GroupSummarySchema = z.object({
   /** The user's read position at the top level. */
   readSeq: z.number(),
   wakeMode: WakeModeSchema,
+  /** off, or obligation wakes. */
+  workbenchMode: WorkbenchModeSchema.default("off"),
   /** The member that plans and hands out the work; the others take only what it (or the user) hands them. */
   leaderId: z.string().nullable().default(null),
   /** The folder every member's session for the group works in; null: each works in its own. */
@@ -407,6 +430,10 @@ export function unreadEligible(message: UnreadSubject, receiverId: string, perso
 
 export interface DeliveryInput {
   mode: WakeMode;
+  /** Full mode: only an obligation wakes; bot chatter and a deep reply chain don't. */
+  full?: boolean;
+  /** How many bot replies deep this message is (a reply to a user is 1). */
+  depth?: number;
   receiverId: string;
   /** The conversation: 0 for the top level, else the thread's top message. */
   conv: number;
@@ -433,8 +460,9 @@ export interface DeliveryInput {
  * decided here. Everyone mode delivers every unread message; addressed mode only what's aimed at
  * the bot, and the user's messages that address nobody (no @mention, no @everyone, no reply to a
  * member). A note that names the bot is a task assigned to it only when it's an assignment
- * receipt; any other (the leader's appointment) is an @mention. There's no cap on how often bots
- * wake each other.
+ * receipt; any other (the leader's appointment) is an @mention. Full mode adds the obligation
+ * checks below (bot chatter, broadcasts and deep reply chains don't wake); the other modes have no
+ * cap on how often bots wake each other.
  */
 export function deliveryReason(input: DeliveryInput): WakeReason | null {
   const { message } = input;
@@ -442,6 +470,20 @@ export function deliveryReason(input: DeliveryInput): WakeReason | null {
   if (input.personal) {
     if (message.kind === "system") return message.subtype === "task.assignment_receipt" ? "assigned" : "mention";
     return message.kind === "bot" ? "handoff" : "mention";
+  }
+  if (input.full) {
+    // Only the user can broadcast; a bot's @everyone is an ordinary message.
+    if (message.kind === "bot" && message.everyone) return null;
+    // A bot's top-level message with nobody named is material, not a wake.
+    if (message.kind === "bot" && input.conv === 0 && !input.repliedTo) return null;
+    // A bot's thread chatter wakes nobody unless it answers someone (and the chain isn't a loop).
+    if (message.kind === "bot" && input.conv !== 0 && !input.repliedTo) return null;
+    if (input.repliedTo && (input.depth ?? 0) >= WAKE_HOPS_MAX) return null;
+    // A user's reply wakes the bot it answers (the depth guard above doesn't apply to the user's
+    // own reply); for everyone else it names that bot, so they stay quiet.
+    if (input.repliedTo) return "reply";
+    // A user's message that names someone is for them, not for the whole group.
+    if (message.kind === "user" && !message.everyone && (message.mentions.length > 0 || message.repliesTo)) return null;
   }
   if (input.repliedTo) return "reply";
   if (message.everyone) return "everyone";
@@ -810,7 +852,7 @@ const indentBody = (text: string, by: number) => text.replace(/\n/g, `\n${" ".re
 /** group_task show: one task's current card. `creator` is who made it a task. */
 export function taskShowText(task: GroupTask, meId: string, creator: string): string {
   return [
-    `${taskLabel(task, meId)} · rev=${task.revision} · made a task by ${creator}`,
+    `${taskLabel(task, meId)} · rev=${task.revision} · made a task by ${creator}${task.stale ? " · its lease is stale; anyone may claim it" : ""}`,
     `Current title: ${task.title}`,
     `Current description: ${task.description ?? "(none set)"}`,
   ].join("\n");
@@ -1071,9 +1113,10 @@ export function inboxText(places: readonly UnreadPlace[], meId: string, options:
  * or a line of the member's rules). `questionTool`: the runtime's own tool for asking the user,
  * whose questions the group shows. `lead`: the group has a leader, and this seat is it (with the
  * members it hands work to) or one of the members it leads, which gets only its own rules and the
- * tools for its piece (see leadSection and the `led` tools).
+ * tools for its piece (see leadSection and the `led` tools). `workbenchMode: full` adds the
+ * obligation wake rules. A leader group never gets them.
  */
-export function groupPrompt(groupName: string, options: { subAgents?: boolean; questionTool?: string; lead?: GroupLead } = {}): string {
+export function groupPrompt(groupName: string, options: { subAgents?: boolean; questionTool?: string; lead?: GroupLead; workbenchMode?: WorkbenchMode } = {}): string {
   const role = options.lead?.role ?? null;
   const member = role === "member";
   const section = (title: string, lines: readonly (string | false)[]) => [title, ...lines.filter((line): line is string => line !== false)].join("\n");
@@ -1087,6 +1130,14 @@ export function groupPrompt(groupName: string, options: { subAgents?: boolean; q
       "- If group_send holds your message as a draft because of messages you hadn't seen, choose: send revised text with group_send, send it unchanged with group_send_draft, or let it go. Not sending is a valid outcome when it's no longer needed.",
       "- Make one group tool call at a time, and read its result before the next.",
     ]),
+    ...(options.workbenchMode === "full" && !options.lead
+      ? [
+          section("Obligation wakes:", [
+            "- Only obligations wake. A bot's top-level message wakes nobody unless it @mentions someone or replies; only the user's @everyone reaches everyone. Ask for work with an @mention or a task.",
+            "- Notices are batched and capped (30 an hour per seat). A third bot reply in a row stops waking its author: summarize and hand off instead of replying again.",
+          ]),
+        ]
+      : []),
     ...(member
       ? []
       : [

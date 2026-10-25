@@ -1994,6 +1994,7 @@ pre {
   flex-direction: column;
 }
 
+
 .badge.task-badge.closed {
   text-decoration: line-through;
   opacity: 0.75;

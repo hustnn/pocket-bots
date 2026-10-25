@@ -195,8 +195,8 @@ export function rpcHandlers(services: Services): Map<string, RpcRegistration> {
 
   handle(rpc.groupsListRpc, async () => ({ groups: await groups.list() }));
   handle(rpc.groupCreateRpc, async ({ name, memberIds, leaderId, cwd, extraFolders }) => ({ groupId: (await groups.create({ name: name ?? null, memberIds, leaderId: leaderId ?? null, cwd: cwd ?? null, ...(extraFolders ? { extraFolders } : {}) })).id }));
-  handle(rpc.groupUpdateRpc, async ({ groupId, name, memberIds, wakeMode, leaderId, cwd, extraFolders }) => {
-    await groups.update(groupId, { name: name ?? null, memberIds: memberIds ?? null, wakeMode: wakeMode ?? null, ...(leaderId !== undefined ? { leaderId } : {}), ...(cwd !== undefined ? { cwd } : {}), ...(extraFolders !== undefined ? { extraFolders } : {}) });
+  handle(rpc.groupUpdateRpc, async ({ groupId, name, memberIds, wakeMode, workbenchMode, leaderId, cwd, extraFolders }) => {
+    await groups.update(groupId, { name: name ?? null, memberIds: memberIds ?? null, wakeMode: wakeMode ?? null, ...(workbenchMode !== undefined ? { workbenchMode } : {}), ...(leaderId !== undefined ? { leaderId } : {}), ...(cwd !== undefined ? { cwd } : {}), ...(extraFolders !== undefined ? { extraFolders } : {}) });
     return { ok: true };
   });
   handle(rpc.groupTaskRpc, async ({ groupId, action, seq, number, status, assignee, title, description }) => {

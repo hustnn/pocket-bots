@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { BOT_FILES_MAX, BOT_TEXT_MAX, TaskStatusSchema } from "../../shared/group-chat";
+import { BOT_FILES_MAX, BOT_TEXT_MAX, GROUP_TASK_DESCRIPTION_MAX, GROUP_TASK_TITLE_MAX, TaskStatusSchema } from "../../shared/group-chat";
 import { defineTool, type ToolCaller } from "./mcp";
 
 // A seat's tools for its group chat (see shared/group-chat.ts). Only a group's seats get these;
@@ -56,20 +56,21 @@ export const groupSendDraft = defineTool({
 export const groupRead = defineTool({
   name: "group_read",
   description:
-    "Read your group chat. unread: true reads your whole inbox (with thread or top_level, one place's unread); thread: N reads a thread; nothing reads the latest top-level messages; before: N pages back; around: N reads around message N.",
+    "Read your group chat. unread: true reads your whole inbox (with thread or top_level, one place's unread); thread: N reads a thread; nothing reads the latest top-level messages; before: N pages back; around: N reads around message N; full: N reads one message in full (a lookup: it doesn't move your read position). A page is bounded; truncated messages point at full: N.",
   input: z.object({
     unread: z.boolean().optional(),
     thread: Seq.optional().describe("A thread's top message, or any message in it."),
     top_level: z.boolean().optional(),
     before: Seq.optional(),
     around: Seq.optional(),
+    full: Seq.optional().describe("One message's full text, up to 20,000 characters; doesn't change what you've read."),
     limit: z.number().int().min(1).max(40).optional(),
   }),
   available: inGroup,
   led: true,
-  async run({ unread, thread, top_level, before, around, limit }, caller) {
+  async run({ unread, thread, top_level, before, around, full, limit }, caller) {
     const { groupId, groups } = seatOf(caller);
-    return groups.read(caller.bot, groupId, { unread: unread ?? false, thread: thread ?? null, topLevel: top_level ?? false, before: before ?? null, around: around ?? null, ...(limit ? { limit } : {}) });
+    return groups.read(caller.bot, groupId, { unread: unread ?? false, thread: thread ?? null, topLevel: top_level ?? false, before: before ?? null, around: around ?? null, full: full ?? null, ...(limit ? { limit } : {}) });
   },
 });
 
@@ -142,13 +143,13 @@ export const groupTask = defineTool({
     action: z.enum(["update", "create", "convert", "assign", "unclaim", "amend", "show", "history", "delete", "list"]),
     task: Seq.optional(),
     status: TaskStatusSchema.optional(),
-    titles: z.array(z.string().min(1).max(BOT_TEXT_MAX)).max(10).optional().describe("Independent pieces that can run in parallel."),
+    titles: z.array(z.string().min(1).max(GROUP_TASK_TITLE_MAX)).max(10).optional().describe("Independent pieces that can run in parallel."),
     assignee: z.string().max(100).optional().describe("With create, for every title: tasks for different owners go in separate calls."),
     filter: z.string().max(20).optional(),
     mine: z.boolean().optional(),
     expected_revision: z.number().int().min(0).optional(),
-    title: z.string().min(1).max(10_000).optional(),
-    description: z.string().max(50_000).optional(),
+    title: z.string().min(1).max(GROUP_TASK_TITLE_MAX).optional(),
+    description: z.string().max(GROUP_TASK_DESCRIPTION_MAX).optional(),
     clear_description: z.boolean().optional(),
   }),
   available: inGroup,
