@@ -41,6 +41,12 @@ export interface BotTool<Schema extends ZodType = ZodType> {
    * before the leader changed.
    */
   led?: boolean;
+  /**
+   * Listed for a seat in a group whose bots work through its board (boardSeat): its bots don't
+   * talk to each other, so it gets the board's tools and the few group tools it answers the user
+   * with, and none for tasks, threads, reminders or asking other bots.
+   */
+  board?: boolean;
   run(args: z.output<Schema>, caller: ToolCaller): Promise<string>;
 }
 
@@ -82,6 +88,11 @@ export function ledMember(caller: ToolCaller): boolean {
   return !!caller.groupId && !!caller.groups?.ledBy(caller.groupId, caller.bot.id);
 }
 
+/** A seat in a group whose bots work through its board: it gets only the tools marked `board`. */
+export function boardSeat(caller: ToolCaller): boolean {
+  return !!caller.groupId && !!caller.groups?.isBoard(caller.groupId);
+}
+
 function issues(error: z.ZodError): string {
   return error.issues.map((issue) => `${issue.path.join(".") || "input"}: ${issue.message}`).join("; ");
 }
@@ -110,7 +121,8 @@ export async function answerMcp(message: JsonRpcRequest, tools: readonly BotTool
       return ok({});
     case "tools/list": {
       const led = ledMember(caller);
-      return ok({ tools: (await offered()).filter((tool) => tool.led || !led).map((tool) => ({ name: tool.name, description: tool.description, inputSchema: inputSchema(tool.input) })) });
+      const board = boardSeat(caller);
+      return ok({ tools: (await offered()).filter((tool) => (board ? tool.board : tool.led || !led)).map((tool) => ({ name: tool.name, description: tool.description, inputSchema: inputSchema(tool.input) })) });
     }
     case "tools/call": {
       const tool = (await offered()).find((entry) => entry.name === message.params?.name);

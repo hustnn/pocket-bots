@@ -136,7 +136,7 @@ describe("chat timelines' index", () => {
     const id = await chatWith(chats, "ada", "the albatross report");
     await chats.stop();
     // Back to before the migration, with the timeline kept.
-    db.raw.exec("DROP TRIGGER timeline_fts_delete; DROP TABLE timeline_fts; ALTER TABLE chats DROP COLUMN indexed_seq; ALTER TABLE groups DROP COLUMN leader_id; ALTER TABLE group_members DROP COLUMN seat_task; ALTER TABLE groups DROP COLUMN cwd; ALTER TABLE chats DROP COLUMN extra_folders; ALTER TABLE chats DROP COLUMN folders_told; ALTER TABLE groups DROP COLUMN extra_folders; UPDATE schema_version SET version = 13");
+    db.raw.exec("DROP TRIGGER timeline_fts_delete; DROP TABLE timeline_fts; ALTER TABLE chats DROP COLUMN indexed_seq; ALTER TABLE groups DROP COLUMN leader_id; ALTER TABLE group_members DROP COLUMN seat_task; ALTER TABLE groups DROP COLUMN cwd; ALTER TABLE chats DROP COLUMN extra_folders; ALTER TABLE chats DROP COLUMN folders_told; ALTER TABLE groups DROP COLUMN extra_folders; ALTER TABLE groups DROP COLUMN coordination; DROP TABLE group_board; DROP TABLE group_rounds; DROP TABLE group_round_members; UPDATE schema_version SET version = 13");
     db.close();
     const reopened = new Db(join(dir, "bots.sqlite"));
     closers.push(() => reopened.close());

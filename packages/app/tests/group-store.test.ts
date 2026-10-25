@@ -567,7 +567,7 @@ describe("task statuses", () => {
     db.run("UPDATE group_tasks SET status = 'in_review', completed_at = NULL, updated_at = '2026-10-01T00:00:00.000Z' WHERE number = ?", second.seq);
     db.run("INSERT INTO group_task_events (group_id, number, event, actor_kind, actor_id, actor_name, payload, created_at) VALUES (?, ?, 'status_changed', 'bot', 'cody', 'Cody', ?, '2026-10-01T00:00:00.000Z')", G, second.seq, JSON.stringify({ from: "in_progress", to: "in_review", forced: false }));
     // (Migration 20 is undone too, or it would add its columns again.)
-    db.raw.exec("ALTER TABLE chats DROP COLUMN extra_folders; ALTER TABLE chats DROP COLUMN folders_told; ALTER TABLE groups DROP COLUMN extra_folders");
+    db.raw.exec("ALTER TABLE groups DROP COLUMN coordination; DROP TABLE group_board; DROP TABLE group_rounds; DROP TABLE group_round_members; ALTER TABLE chats DROP COLUMN extra_folders; ALTER TABLE chats DROP COLUMN folders_told; ALTER TABLE groups DROP COLUMN extra_folders");
     db.run("UPDATE schema_version SET version = 18");
     db.close();
     db = new Db(join(dir, "bots.sqlite"));

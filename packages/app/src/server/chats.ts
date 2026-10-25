@@ -109,7 +109,7 @@ export async function startChat(host: PocketHost, bot: Bot, input: StartChatInpu
 }
 
 /** What a seat's prompt says about its group: its name and, when the group has a leader, the seat's part in it. */
-export type SeatGroupLookup = (groupId: string, botId: string) => Promise<{ name: string; lead?: GroupLead } | null>;
+export type SeatGroupLookup = (groupId: string, botId: string) => Promise<{ name: string; lead?: GroupLead; board?: boolean } | null>;
 
 /**
  * The session setup for a bot's chat, rebuilt every time its session opens, so a resumed chat
@@ -132,7 +132,7 @@ export function chatSpecs(host: PocketHost, relay: Relay, seatGroup: SeatGroupLo
     const message = first?.type === "user_message" ? splitFoldersUpdate(splitStandingUpdate(first.text).text).text : (chat.title ?? "");
     // The chat's own list; a seat's is a copy of its group's (GroupChats keeps them equal). Never the working folder itself.
     const folders = [...new Set(chat.extraFolders)].filter((folder) => folder !== chat.cwd);
-    const { systemPrompt: system, standingPrompt } = await systemPrompt({ bot, message, folders, ...(group ? { group: { name: group.name, subAgents, ...(questionTool ? { questionTool } : {}), ...(group.lead ? { lead: group.lead } : {}) } } : {}) }, library);
+    const { systemPrompt: system, standingPrompt } = await systemPrompt({ bot, message, folders, ...(group ? { group: { name: group.name, subAgents, ...(questionTool ? { questionTool } : {}), ...(group.lead ? { lead: group.lead } : {}), ...(group.board ? { board: true } : {}) } } : {}) }, library);
     const mcpServers: Record<string, import("@pocket-bots/runtime").McpServerConfig> = { ...mcpServersRecord(botMcpServers(bot, library)) };
     const tools = await relay.mountTools(bot.id, chat.id, groupId);
     if (tools) mcpServers[TOOLS_MCP_NAME] = tools;

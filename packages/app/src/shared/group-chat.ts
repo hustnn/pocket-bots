@@ -2,6 +2,7 @@ import type { ApprovalRequest } from "@pocket-bots/runtime/types";
 import { questionsOf, type QuestionSpec } from "@pocket-bots/runtime/questions";
 import { z } from "zod";
 import { foldText } from "./activity";
+import { boardSection, CoordinationSchema } from "./group-board";
 
 // Group chats: two to six bots and the user in one long-lived conversation. Each bot takes part
 // through a seat: a chat of its own, with its own model, approvals and tools, that speaks in the
@@ -186,6 +187,8 @@ export const GroupSummarySchema = z.object({
   /** The user's read position at the top level. */
   readSeq: z.number(),
   wakeMode: WakeModeSchema,
+  /** How the bots work together: talking in the group, or through a shared board (shared/group-board.ts). */
+  coordination: CoordinationSchema.default("chat"),
   /** The member that plans and hands out the work; the others take only what it (or the user) hands them. */
   leaderId: z.string().nullable().default(null),
   /** The folder every member's session for the group works in; null: each works in its own. */
@@ -353,6 +356,13 @@ export const SYSTEM_SUBTYPES = {
    * seat moves at its next turn, and its briefing says so.
    */
   "group.folder": "skip",
+  /**
+   * The user changed how the group's bots work together (talking in the group, or through its
+   * board): for the record. Each seat starts over at its next turn, with the prompt and tools for it.
+   */
+  "group.coordination": "skip",
+  /** In a board group, every bot working on a request failed, so nobody answered it: for the user. */
+  "round.unanswered": "skip",
   "task.created_summary": "born-read",
   "task.assignment_receipt": "born-read",
   "task.converted_summary": "born-read",
@@ -663,6 +673,8 @@ export interface WakeInput {
    * it needn't read its inbox for them, and they count as read once its seat takes them in.
    */
   handed?: { messages: readonly GroupMessage[]; parents?: ReadonlyMap<number, GroupMessage> };
+  /** On a board, what it's to do about each request it's woken for (shared/group-board.ts roundNoticeText). */
+  rounds?: readonly string[];
 }
 
 /**
@@ -697,6 +709,7 @@ export function wakeText(input: WakeInput): string {
     lines.push("[For you, in full (already read):]", "");
     for (const message of input.handed.messages) lines.push(messageText(message, me, input.handed.parents), "");
   }
+  for (const round of input.rounds ?? []) lines.push(round, "");
   const count = input.pending.length;
   const unreadLines = (places: readonly UnreadPlace[]) => places.map((place) => `- ${place.conv ? `thread #${place.conv}` : "top level"}: ${place.count} unread`);
   if (input.catchUp?.messages.length) {
@@ -1073,7 +1086,8 @@ export function inboxText(places: readonly UnreadPlace[], meId: string, options:
  * members it hands work to) or one of the members it leads, which gets only its own rules and the
  * tools for its piece (see leadSection and the `led` tools).
  */
-export function groupPrompt(groupName: string, options: { subAgents?: boolean; questionTool?: string; lead?: GroupLead } = {}): string {
+export function groupPrompt(groupName: string, options: { subAgents?: boolean; questionTool?: string; lead?: GroupLead; board?: boolean } = {}): string {
+  if (options.board) return boardGroupPrompt(groupName, options);
   const role = options.lead?.role ?? null;
   const member = role === "member";
   const section = (title: string, lines: readonly (string | false)[]) => [title, ...lines.filter((line): line is string => line !== false)].join("\n");
@@ -1141,6 +1155,36 @@ export function groupPrompt(groupName: string, options: { subAgents?: boolean; q
       "- A constraint that makes you delay or withhold an otherwise allowed action must stay live. When you set one, say whose it is, its exact scope, where its current state can be checked and when it ends; when one you own changes or ends, tell the bots still relying on it. Right before withholding, check that state and the latest directive afresh: memory, old announcements, task descriptions and past status reports aren't live evidence. If you can't reach the source, hold for now, ask whoever is accountable and say what lifts the hold; a missing source never proves there's no constraint. If machine state and a current directive conflict, take the narrower hold for now and report the mismatch.",
       "- Don't infer approval, completion, release or permission from someone's role or an old announcement: an action not explicitly in scope stays out of scope, and one permission never implies later ones such as deployment, release, migration or production writes.",
     ]),
+  ].join("\n\n");
+}
+
+/**
+ * The prompt section for a seat in a group whose bots work through its board: the board's rules
+ * (boardSection) in place of the sections on threads, tasks, reminders, @mentions and etiquette,
+ * which are for bots that talk to each other in the group.
+ */
+function boardGroupPrompt(groupName: string, options: { subAgents?: boolean; questionTool?: string }): string {
+  return [
+    `This chat is your seat in the group chat "${groupName}" in Pocket Bots, shared by the user and other bots. Nobody else reads this chat: the user sees only what you send with group_send, and the other bots see only what you publish on the group's board. Approvals, sign-ins and anything private for the user stay here, outside the group.`,
+    boardSection(options.subAgents ?? false),
+    [
+      "Messages:",
+      "- pocket-bots wakes you with the request in full and what you're to do about it. Messages from the user that come in while you work are counted in a notice: group_read with unread: true reads them.",
+      "- If group_send holds your message as a draft because of messages you hadn't seen, read them and choose: send revised text with group_send, send it unchanged with group_send_draft, or let it go.",
+      "- Make one group tool call at a time, and read its result before the next.",
+    ].join("\n"),
+    [
+      "Writing in the group:",
+      "- Write the answer in the shortest useful form: the outcome first, then any material caveat. Don't paste logs or narrate routine commands; put long evidence in a Markdown file and send its path with a short summary. Refer to board entries by what they found, not their numbers: the user reads the answer, not the board.",
+      "- Write for the user: plain, complete sentences without internal shorthand, so someone who hasn't followed the work understands on first read.",
+      "- Attach a file (group_send's files, at most 6) only when the user needs the file itself, and say what each one is.",
+      ...(options.questionTool ? [`- When only the user can decide something (a choice between options, a fact you can't find), ask with your ${options.questionTool} tool: the question shows in the group as yours, and the answer comes back to you alone.`] : []),
+    ].join("\n"),
+    [
+      "Constraints and permissions:",
+      "- A constraint that makes you delay or withhold an otherwise allowed action must stay live. When you set one, publish whose it is, its exact scope, where its current state can be checked and when it ends. Right before withholding, check that state afresh: old entries and past reports aren't live evidence.",
+      "- Don't infer approval, completion, release or permission from an old entry or announcement: an action not explicitly in scope stays out of scope, and one permission never implies later ones such as deployment, release, migration or production writes.",
+    ].join("\n"),
   ].join("\n\n");
 }
 

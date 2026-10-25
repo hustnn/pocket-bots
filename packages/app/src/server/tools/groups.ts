@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { BOARD_ARTIFACT_MAX, BOARD_CLAIM_MAX, BOARD_RATIONALE_MAX, BOARD_REFS_MAX, BOARD_SUBTASK_MAX, BOARD_VISIT_MAX } from "../../shared/group-board";
 import { BOT_FILES_MAX, BOT_TEXT_MAX, TaskStatusSchema } from "../../shared/group-chat";
 import { defineTool, type ToolCaller } from "./mcp";
 
@@ -6,7 +7,9 @@ import { defineTool, type ToolCaller } from "./mcp";
 // the relay knows a seat by its tools address, which names the group. Every listed tool costs
 // tokens on each of a seat's requests, so descriptions say what a call does and leave the rules
 // for when to make it to the seat's prompt (groupPrompt). A member of a group with a leader is
-// listed only the tools marked `led`: reading, claiming, reacting and reporting.
+// listed only the tools marked `led`: reading, claiming, reacting and reporting. A seat in a board
+// group is listed only the tools marked `board`: the board's own (board_*) and the group tools it
+// answers the user with.
 
 /** The group a calling chat is a seat of, and the service, or an error the bot can show. */
 function seatOf(caller: ToolCaller) {
@@ -30,6 +33,7 @@ export const groupSend = defineTool({
     idempotency_key: z.string().max(100).optional().describe("Any unique string: a resend with the same key never posts twice."),
   }),
   available: inGroup,
+  board: true,
   led: true,
   async run({ text, files, reply_to, thread, idempotency_key }, caller) {
     const { groupId, groups } = seatOf(caller);
@@ -46,6 +50,7 @@ export const groupSendDraft = defineTool({
     discard: z.boolean().optional().describe("Drop the draft instead."),
   }),
   available: inGroup,
+  board: true,
   led: true,
   async run({ thread, anyway, discard }, caller) {
     const { groupId, groups } = seatOf(caller);
@@ -66,6 +71,7 @@ export const groupRead = defineTool({
     limit: z.number().int().min(1).max(40).optional(),
   }),
   available: inGroup,
+  board: true,
   led: true,
   async run({ unread, thread, top_level, before, around, limit }, caller) {
     const { groupId, groups } = seatOf(caller);
@@ -174,6 +180,7 @@ export const groupReact = defineTool({
   description: "React to a message with an emoji: an acknowledgment that wakes nobody.",
   input: z.object({ message: Seq, emoji: z.string().min(1).max(16).default("👍") }),
   available: inGroup,
+  board: true,
   led: true,
   async run({ message, emoji }, caller) {
     const { groupId, groups } = seatOf(caller);
@@ -228,5 +235,61 @@ export const groupMembers = defineTool({
   async run(_args, caller) {
     const { groupId, groups } = seatOf(caller);
     return groups.membersText(caller.bot, groupId);
+  },
+});
+
+const onBoard = (caller: ToolCaller) => !!caller.groupId && !!caller.groups?.isBoard(caller.groupId);
+
+export const boardPublish = defineTool({
+  name: "board_publish",
+  description: "Publish an entry on your group's board: something you did, for the other bots to find and build on. It wakes nobody. Refused, with the reason, if a ref doesn't exist, the rationale doesn't name a ref, or the claim is taken.",
+  input: z.object({
+    sub_task: z.string().min(1).max(BOARD_SUBTASK_MAX).describe("What you did, in the present perfect, in the words someone would search for."),
+    artifact: z.string().min(1).max(BOARD_ARTIFACT_MAX).describe("The result itself, reusable without redoing the work, with how you checked it."),
+    rationale: z.string().min(1).max(BOARD_RATIONALE_MAX).describe("Briefly how you got it, naming every ref and what it contributed."),
+    refs: z.array(z.string().max(16)).max(BOARD_REFS_MAX).optional().describe("Entries (B3) and group messages (#12) this builds on."),
+    claim: z.string().max(BOARD_CLAIM_MAX).optional().describe("The piece you take on (a file, a part of the request): first come, first served within the request."),
+  }),
+  available: onBoard,
+  board: true,
+  async run({ sub_task, artifact, rationale, refs, claim }, caller) {
+    const { groupId, groups } = seatOf(caller);
+    return groups.boardPublish(caller.bot, groupId, { subTask: sub_task, artifact, rationale, refs: refs ?? [], claim: claim ?? null });
+  },
+});
+
+export const boardSearch = defineTool({
+  name: "board_search",
+  description: "Search your group's board: at most 8 entries, best first, each with its refs and the entries citing it.",
+  input: z.object({ query: z.string().min(1).max(500).describe("The wording of the work, and the names of what it's about.") }),
+  available: onBoard,
+  board: true,
+  async run({ query }, caller) {
+    const { groupId, groups } = seatOf(caller);
+    return groups.boardSearch(caller.bot, groupId, query);
+  },
+});
+
+export const boardVisit = defineTool({
+  name: "board_visit",
+  description: "Read board entries by number (B3 is 3).",
+  input: z.object({ entries: z.array(z.number().int().positive()).min(1).max(BOARD_VISIT_MAX) }),
+  available: onBoard,
+  board: true,
+  async run({ entries }, caller) {
+    const { groupId, groups } = seatOf(caller);
+    return groups.boardVisit(caller.bot, groupId, entries);
+  },
+});
+
+export const boardFinish = defineTool({
+  name: "board_finish",
+  description: "Say your part of a request is done. Tells you whether you're the last one on it, and so the one to answer the user.",
+  input: z.object({ request: Seq.optional().describe("The request's message number; left out, your oldest.") }),
+  available: onBoard,
+  board: true,
+  async run({ request }, caller) {
+    const { groupId, groups } = seatOf(caller);
+    return groups.boardFinish(caller.bot, groupId, request ?? null);
   },
 });

@@ -356,7 +356,7 @@ export interface PromptContext {
    * which has no setup tools, and "led" for a member's seat in a group with a leader, which gets
    * only the tools for its piece.
    */
-  botTools: boolean | "seat" | "led";
+  botTools: boolean | "seat" | "led" | "board";
   /** The connected apps the bot may use; empty when it has none. */
   apps: PromptApp[];
   /** The chat's extra folders besides its working folder (extra-folders.ts). */

@@ -194,9 +194,9 @@ export function rpcHandlers(services: Services): Map<string, RpcRegistration> {
   // ------------------------------------------------------------ group chats
 
   handle(rpc.groupsListRpc, async () => ({ groups: await groups.list() }));
-  handle(rpc.groupCreateRpc, async ({ name, memberIds, leaderId, cwd, extraFolders }) => ({ groupId: (await groups.create({ name: name ?? null, memberIds, leaderId: leaderId ?? null, cwd: cwd ?? null, ...(extraFolders ? { extraFolders } : {}) })).id }));
-  handle(rpc.groupUpdateRpc, async ({ groupId, name, memberIds, wakeMode, leaderId, cwd, extraFolders }) => {
-    await groups.update(groupId, { name: name ?? null, memberIds: memberIds ?? null, wakeMode: wakeMode ?? null, ...(leaderId !== undefined ? { leaderId } : {}), ...(cwd !== undefined ? { cwd } : {}), ...(extraFolders !== undefined ? { extraFolders } : {}) });
+  handle(rpc.groupCreateRpc, async ({ name, memberIds, leaderId, cwd, extraFolders, coordination }) => ({ groupId: (await groups.create({ name: name ?? null, memberIds, leaderId: leaderId ?? null, cwd: cwd ?? null, ...(extraFolders ? { extraFolders } : {}), ...(coordination ? { coordination } : {}) })).id }));
+  handle(rpc.groupUpdateRpc, async ({ groupId, name, memberIds, wakeMode, leaderId, cwd, extraFolders, coordination }) => {
+    await groups.update(groupId, { name: name ?? null, memberIds: memberIds ?? null, wakeMode: wakeMode ?? null, ...(leaderId !== undefined ? { leaderId } : {}), ...(cwd !== undefined ? { cwd } : {}), ...(extraFolders !== undefined ? { extraFolders } : {}), ...(coordination ? { coordination } : {}) });
     return { ok: true };
   });
   handle(rpc.groupTaskRpc, async ({ groupId, action, seq, number, status, assignee, title, description }) => {
@@ -205,6 +205,7 @@ export function rpcHandlers(services: Services): Map<string, RpcRegistration> {
   });
   handle(rpc.groupTasksRpc, async ({ groupId }) => ({ tasks: await groups.listTasks(groupId) }));
   handle(rpc.groupRemindersRpc, async ({ groupId }) => ({ reminders: await groups.listReminders(groupId) }));
+  handle(rpc.groupBoardRpc, async ({ groupId }) => ({ entries: await groups.boardView(groupId) }));
   handle(rpc.groupReactRpc, async ({ groupId, seq, emoji }) => {
     await groups.userReact(groupId, seq, emoji);
     return { ok: true };

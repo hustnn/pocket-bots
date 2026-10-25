@@ -432,6 +432,50 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE groups ADD COLUMN extra_folders TEXT NOT NULL DEFAULT '[]';
     `);
   },
+  // 21: a group's shared board (shared/group-board.ts): how its bots work together ('chat' or
+  // 'board'), the board's entries, and the rounds a user's request goes through (who works on it,
+  // who's still waiting to join, who answers it).
+  (db) => {
+    db.exec(`
+      ALTER TABLE groups ADD COLUMN coordination TEXT NOT NULL DEFAULT 'chat';
+      CREATE TABLE group_board (
+        group_id TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        author_id TEXT NOT NULL,
+        round_seq INTEGER,
+        sub_task TEXT NOT NULL,
+        artifact TEXT NOT NULL,
+        rationale TEXT NOT NULL,
+        refs TEXT NOT NULL DEFAULT '[]',
+        claim TEXT,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (group_id, number)
+      );
+      CREATE UNIQUE INDEX group_board_claims ON group_board (group_id, COALESCE(round_seq, 0), claim) WHERE claim IS NOT NULL;
+      CREATE TABLE group_rounds (
+        group_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        starter_id TEXT,
+        fanned_out INTEGER NOT NULL DEFAULT 1,
+        reporter_id TEXT,
+        report_told INTEGER NOT NULL DEFAULT 0,
+        answer_seq INTEGER,
+        created_at TEXT NOT NULL,
+        closed_at TEXT,
+        PRIMARY KEY (group_id, seq)
+      );
+      CREATE TABLE group_round_members (
+        group_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        bot_id TEXT NOT NULL,
+        state TEXT NOT NULL,
+        position INTEGER NOT NULL DEFAULT 0,
+        finished_how TEXT,
+        finished_at TEXT,
+        PRIMARY KEY (group_id, seq, bot_id)
+      );
+    `);
+  },
 ];
 
 /** How much of one message the search index takes: a long pasted attachment doesn't need all of it. */

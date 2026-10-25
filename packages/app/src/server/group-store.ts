@@ -24,6 +24,7 @@ import {
   type WakeMode,
   type WakeReason,
 } from "../shared/group-chat";
+import { BOARD_ENTRIES_MAX, boardEntryProblem, claimKey, type BoardEntry, type Coordination } from "../shared/group-board";
 import type { Db } from "./db";
 import { RequestError } from "./errors";
 import { ftsFilter, type GroupSearchHit } from "./search";
@@ -48,6 +49,8 @@ export interface GroupRow {
   id: string;
   name: string;
   wake_mode: WakeMode;
+  /** How its bots work together: talking in the group, or through its board (shared/group-board.ts). */
+  coordination: Coordination;
   /** The member that hands out the work; the others take only what it or the user aims at them. */
   leader_id: string | null;
   /** The folder its seats work in; null: each bot's own. */
@@ -228,7 +231,67 @@ export interface AppendInput {
   causalActor?: string | null;
   /** Each @mentioned member's token as written, by id. */
   mentionHandles?: Record<string, string>;
+  /**
+   * In a board group, the bot an open request from the user goes to first (the others wait to join
+   * its round); left out, the first member it reaches.
+   */
+  boardStarter?: string | null;
 }
+
+/** Where a bot stands in a round: working on it, waiting to join, done, or left out (the request was done before it joined). */
+export type RoundState = "working" | "waiting" | "finished" | "skipped";
+
+/** A user's request in a board group and the bots on it (group_rounds, group_round_members). */
+export interface Round {
+  seq: number;
+  /** For an open request, the bot it went to first; null when the user named the bots. */
+  starterId: string | null;
+  /** The bots waiting to join have been woken (or there were none). */
+  fannedOut: boolean;
+  /** The bot told to answer once everyone finished; null until then. */
+  reporterId: string | null;
+  reportTold: boolean;
+  /** The bot message answering it (a reply to it), once there is one. */
+  answerSeq: number | null;
+  createdAt: string;
+  closedAt: string | null;
+  members: { botId: string; state: RoundState; position: number; finishedHow: string | null; finishedAt: string | null }[];
+}
+
+interface RoundRow {
+  seq: number;
+  starter_id: string | null;
+  fanned_out: number;
+  reporter_id: string | null;
+  report_told: number;
+  answer_seq: number | null;
+  created_at: string;
+  closed_at: string | null;
+}
+
+interface BoardRow {
+  number: number;
+  author_id: string;
+  round_seq: number | null;
+  sub_task: string;
+  artifact: string;
+  rationale: string;
+  refs: string;
+  claim: string | null;
+  created_at: string;
+}
+
+const boardEntryOf = (row: BoardRow): BoardEntry => ({
+  number: Number(row.number),
+  authorId: row.author_id,
+  round: row.round_seq === null ? null : Number(row.round_seq),
+  subTask: row.sub_task,
+  artifact: row.artifact,
+  rationale: row.rationale,
+  refs: JSON.parse(row.refs) as string[],
+  claim: row.claim,
+  createdAt: row.created_at,
+});
 
 export class GroupStore {
   constructor(private readonly db: Db) {}
@@ -243,20 +306,26 @@ export class GroupStore {
     return this.db.get<GroupRow>("SELECT * FROM groups WHERE id = ?", groupId) ?? null;
   }
 
-  createGroup(input: { id: string; name: string; memberIds: string[]; leaderId?: string | null; cwd?: string | null; extraFolders?: string[] }): void {
+  createGroup(input: { id: string; name: string; memberIds: string[]; leaderId?: string | null; cwd?: string | null; extraFolders?: string[]; coordination?: Coordination }): void {
     const at = now();
     this.db.tx(() => {
-      this.db.run("INSERT INTO groups (id, name, wake_mode, leader_id, cwd, extra_folders, created_at, updated_at) VALUES (?, ?, 'everyone', ?, ?, ?, ?, ?)", input.id, input.name, input.leaderId ?? null, input.cwd ?? null, JSON.stringify(input.extraFolders ?? []), at, at);
+      this.db.run("INSERT INTO groups (id, name, wake_mode, leader_id, cwd, extra_folders, coordination, created_at, updated_at) VALUES (?, ?, 'everyone', ?, ?, ?, ?, ?, ?)", input.id, input.name, input.leaderId ?? null, input.cwd ?? null, JSON.stringify(input.extraFolders ?? []), input.coordination ?? "chat", at, at);
       for (const botId of input.memberIds) this.db.run("INSERT INTO group_members (group_id, bot_id) VALUES (?, ?)", input.id, botId);
     });
   }
 
-  updateGroup(groupId: string, patch: { name?: string; wakeMode?: WakeMode; leaderId?: string | null; cwd?: string | null; extraFolders?: string[] }): void {
+  updateGroup(groupId: string, patch: { name?: string; wakeMode?: WakeMode; leaderId?: string | null; cwd?: string | null; extraFolders?: string[]; coordination?: Coordination }): void {
     if (patch.name !== undefined) this.db.run("UPDATE groups SET name = ?, updated_at = ? WHERE id = ?", patch.name, now(), groupId);
     if (patch.wakeMode !== undefined) this.db.run("UPDATE groups SET wake_mode = ? WHERE id = ?", patch.wakeMode, groupId);
     if (patch.leaderId !== undefined) this.db.run("UPDATE groups SET leader_id = ? WHERE id = ?", patch.leaderId, groupId);
     if (patch.cwd !== undefined) this.db.run("UPDATE groups SET cwd = ? WHERE id = ?", patch.cwd, groupId);
     if (patch.extraFolders !== undefined) this.db.run("UPDATE groups SET extra_folders = ? WHERE id = ?", JSON.stringify(patch.extraFolders), groupId);
+    if (patch.coordination !== undefined) this.db.run("UPDATE groups SET coordination = ? WHERE id = ?", patch.coordination, groupId);
+  }
+
+  /** Whether the group's bots work together through its board. */
+  board(groupId: string): boolean {
+    return this.group(groupId)?.coordination === "board";
   }
 
   /** The group's leader while it's a member, or null. */
@@ -267,7 +336,7 @@ export class GroupStore {
 
   deleteGroup(groupId: string): void {
     this.db.tx(() => {
-      for (const table of ["group_members", "group_messages", "group_tasks", "group_task_events", "group_mentions", "group_reactions", "group_drafts", "group_thread_follows", "group_inbox", "group_read_cursors", "group_seen", "group_reminders", "group_reminder_events", "group_messages_fts"]) this.db.run(`DELETE FROM ${table} WHERE group_id = ?`, groupId);
+      for (const table of ["group_members", "group_messages", "group_tasks", "group_task_events", "group_mentions", "group_reactions", "group_drafts", "group_thread_follows", "group_inbox", "group_read_cursors", "group_seen", "group_reminders", "group_reminder_events", "group_messages_fts", "group_board", "group_rounds", "group_round_members"]) this.db.run(`DELETE FROM ${table} WHERE group_id = ?`, groupId);
       this.db.run("DELETE FROM groups WHERE id = ?", groupId);
     });
   }
@@ -357,7 +426,7 @@ export class GroupStore {
       if (from.kind !== "system") this.recordMentions(groupId, seq, input);
       const row = this.db.get<MessageRow>("SELECT * FROM group_messages WHERE group_id = ? AND seq = ?", groupId, seq)!;
       const message = this.message(row);
-      const woken = this.deliver(row, message);
+      const woken = this.deliver(row, message, input.boardStarter ?? null);
       const conv = message.thread ?? 0;
       if (from.kind === "user") this.markRead(groupId, GROUP_USER_ID, conv, seq);
       if (from.kind === "bot") {
@@ -377,8 +446,11 @@ export class GroupStore {
    * In a group with a leader, the other members are reached only by what the leader or the user
    * aims at them (fromLead): anything else reaches them as it would a muted bot (no record at the
    * top level) and wakes none of them in a thread; one member's @mention of another reaches nobody.
+   * In a board group the bots don't talk to each other: a bot's message reaches only the user (and
+   * is its sender's own), the user's messages wake whom they're aimed at (addressed), and an open
+   * request wakes only `boardStarter`: the others get its record and wait in its round to join.
    */
-  private deliver(row: MessageRow, message: GroupMessage): string[] {
+  private deliver(row: MessageRow, message: GroupMessage, boardStarter: string | null = null): string[] {
     const groupId = row.group_id;
     if (isSkipSubtype(row.system_subtype)) return [];
     const group = this.group(groupId)!;
@@ -387,7 +459,8 @@ export class GroupStore {
     const valid = (id: string) => id === GROUP_USER_ID || memberIds.has(id);
     const conv = message.thread ?? 0;
     const senderId = row.sender_id ?? row.sender_kind;
-    const leaderId = group.leader_id && memberIds.has(group.leader_id) ? group.leader_id : null;
+    const board = group.coordination === "board";
+    const leaderId = !board && group.leader_id && memberIds.has(group.leader_id) ? group.leader_id : null;
     const lead = !leaderId || fromLead(leaderId, { kind: row.sender_kind, senderId, causalActor: row.causal_actor_id });
     /** A member the leader leads, which this message may only reach as work. */
     const led = (id: string) => leaderId !== null && id !== leaderId && id !== GROUP_USER_ID && id !== senderId;
@@ -424,10 +497,11 @@ export class GroupStore {
     // A change of leader changes every member's rules, so it reaches a muted member as well.
     const pastMute = row.system_subtype === "group.leader";
     const subject = { senderId, system: row.sender_kind === "system", subtype: row.system_subtype, causalActor: row.causal_actor_id };
-    const woken: string[] = [];
+    const records: { id: string; personal: boolean; eligible: boolean; reason: WakeReason | null }[] = [];
     for (const [id, { suppressed }] of receivers) {
       const personal = mentioned.has(id);
       if (suppressed && !personal) continue;
+      if (board && row.sender_kind === "bot" && id !== GROUP_USER_ID && id !== senderId) continue;
       const mutedFrom = muted.get(id);
       if (conv === 0 && !personal && !pastMute && mutedFrom !== null && mutedFrom !== undefined && row.seq >= mutedFrom) continue;
       // Work from the leader or the user aimed at a led member reaches it; nothing else wakes it.
@@ -440,7 +514,7 @@ export class GroupStore {
         id === GROUP_USER_ID || !asWork
           ? null
           : deliveryReason({
-              mode: group.wake_mode,
+              mode: board ? "addressed" : group.wake_mode,
               receiverId: id,
               conv,
               message: { senderId, kind: row.sender_kind, everyone: message.everyone, mentions: message.mentions, repliesTo: repliedMember, subtype: row.system_subtype },
@@ -448,6 +522,18 @@ export class GroupStore {
               repliedTo: repliedBot === id,
               eligible,
             });
+      records.push({ id, personal, eligible, reason });
+    }
+
+    // An open request in a board group goes to one bot first; the others it would have woken wait to join.
+    const open = board && row.sender_kind === "user" && conv === 0 && !message.everyone && message.mentions.length === 0 && !repliedMember;
+    const candidates = open ? records.filter((record) => record.reason === "open").map((record) => record.id) : [];
+    const starter = candidates.length ? (boardStarter && candidates.includes(boardStarter) ? boardStarter : candidates[0]!) : null;
+    const waiting: string[] = [];
+    const woken: string[] = [];
+    for (const { id, personal, eligible, reason: wake } of records) {
+      const reason = starter && wake === "open" && id !== starter ? null : wake;
+      if (starter && wake === "open" && id !== starter) waiting.push(id);
       this.db.run(
         "INSERT OR IGNORE INTO group_inbox (group_id, receiver_id, seq, conv, personal_mention, unread_eligible, wake_reason, reactivated, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         groupId,
@@ -462,6 +548,7 @@ export class GroupStore {
       );
       if (reason) woken.push(id);
     }
+    if (board && row.sender_kind === "user" && woken.length) this.startRound(groupId, row.seq, starter, woken, waiting);
 
     if (conv) {
       if (row.sender_kind !== "system") this.follow(groupId, conv, senderId, "replied", true);
@@ -605,6 +692,150 @@ export class GroupStore {
       seqs.push(...rows.slice(0, limit).map((row) => Number(row.seq)));
     }
     return { messages: this.messagesAt(groupId, seqs), places, truncated };
+  }
+
+  // ---------------------------------------------------------------- the board and its rounds
+
+  /** Every entry on the group's board, oldest first. */
+  boardEntries(groupId: string): BoardEntry[] {
+    return this.db.all<BoardRow>("SELECT * FROM group_board WHERE group_id = ? ORDER BY number", groupId).map(boardEntryOf);
+  }
+
+  /**
+   * Publishes an entry, or says why it can't be (shared/group-board.ts boardEntryProblem, and a
+   * claim another entry for the same request holds): checked and numbered in one transaction, so a
+   * refused entry writes nothing and takes no number.
+   */
+  publishBoard(groupId: string, authorId: string, round: number | null, input: { subTask: string; artifact: string; rationale: string; refs: readonly string[]; claim?: string | null }): { entry: BoardEntry } | { problem: string } {
+    return this.db.tx(() => {
+      const last = Number(this.db.get<{ n: number | null }>("SELECT MAX(number) AS n FROM group_board WHERE group_id = ?", groupId)?.n ?? 0);
+      const problem = boardEntryProblem(input, (ref) => (ref.kind === "entry" ? ref.number <= last : this.messageAt(groupId, ref.seq) !== null));
+      if (problem) return { problem };
+      const claim = input.claim ? claimKey(input.claim) : null;
+      if (claim) {
+        const holder = this.db.get<{ number: number; author_id: string }>("SELECT number, author_id FROM group_board WHERE group_id = ? AND COALESCE(round_seq, 0) = ? AND claim = ?", groupId, round ?? 0, claim);
+        if (holder && holder.author_id !== authorId) return { problem: `"${claim}" is already taken (B${holder.number}): take another piece, and publish without that claim.` };
+        if (holder) return { problem: `You already took "${claim}" in B${holder.number}: publish your progress on it without the claim.` };
+      }
+      if (last >= BOARD_ENTRIES_MAX) return { problem: `The board is full (${BOARD_ENTRIES_MAX} entries) and nothing is ever removed from it: tell the user, and carry on without publishing.` };
+      const number = last + 1;
+      this.db.run(
+        "INSERT INTO group_board (group_id, number, author_id, round_seq, sub_task, artifact, rationale, refs, claim, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        groupId,
+        number,
+        authorId,
+        round,
+        input.subTask.trim(),
+        input.artifact.trim(),
+        input.rationale.trim(),
+        JSON.stringify(input.refs),
+        claim,
+        now(),
+      );
+      return { entry: boardEntryOf(this.db.get<BoardRow>("SELECT * FROM group_board WHERE group_id = ? AND number = ?", groupId, number)!) };
+    });
+  }
+
+  /** A user's request starts a round: the bots it woke work on it; for an open one, the rest wait to join. */
+  private startRound(groupId: string, seq: number, starter: string | null, working: readonly string[], waiting: readonly string[]): void {
+    this.db.run("INSERT OR IGNORE INTO group_rounds (group_id, seq, starter_id, fanned_out, created_at) VALUES (?, ?, ?, ?, ?)", groupId, seq, starter, waiting.length ? 0 : 1, now());
+    for (const botId of working) this.db.run("INSERT OR IGNORE INTO group_round_members (group_id, seq, bot_id, state) VALUES (?, ?, ?, 'working')", groupId, seq, botId);
+    for (const botId of waiting) this.db.run("INSERT OR IGNORE INTO group_round_members (group_id, seq, bot_id, state) VALUES (?, ?, ?, 'waiting')", groupId, seq, botId);
+  }
+
+  round(groupId: string, seq: number): Round | null {
+    const row = this.db.get<RoundRow>("SELECT * FROM group_rounds WHERE group_id = ? AND seq = ?", groupId, seq);
+    if (!row) return null;
+    const members = this.db
+      .all<{ bot_id: string; state: RoundState; position: number; finished_how: string | null; finished_at: string | null }>("SELECT bot_id, state, position, finished_how, finished_at FROM group_round_members WHERE group_id = ? AND seq = ? ORDER BY rowid", groupId, seq)
+      .map((member) => ({ botId: member.bot_id, state: member.state, position: Number(member.position), finishedHow: member.finished_how, finishedAt: member.finished_at }));
+    return { seq: Number(row.seq), starterId: row.starter_id, fannedOut: !!row.fanned_out, reporterId: row.reporter_id, reportTold: !!row.report_told, answerSeq: row.answer_seq === null ? null : Number(row.answer_seq), createdAt: row.created_at, closedAt: row.closed_at, members };
+  }
+
+  /** The rounds still open in a group (or every group), oldest first. */
+  openRounds(groupId?: string): (Round & { groupId: string })[] {
+    return this.db
+      .all<{ group_id: string; seq: number }>(`SELECT group_id, seq FROM group_rounds WHERE closed_at IS NULL ${groupId ? "AND group_id = ?" : ""} ORDER BY created_at, seq`, ...(groupId ? [groupId] : []))
+      .flatMap((row) => {
+        const round = this.round(row.group_id, Number(row.seq));
+        return round ? [{ ...round, groupId: row.group_id }] : [];
+      });
+  }
+
+  /** The open rounds a bot is working on, oldest first. */
+  workingRounds(groupId: string, botId: string): Round[] {
+    return this.openRounds(groupId).filter((round) => round.members.some((member) => member.botId === botId && member.state === "working"));
+  }
+
+  /**
+   * The open rounds a bot is working on whose request reached its model: a notice told it and its
+   * seat took that in, or it read the request. The turn that ends next is its turn on them.
+   */
+  roundsTakenIn(groupId: string, botId: string): Round[] {
+    return this.workingRounds(groupId, botId).filter((round) => {
+      const row = this.db.get<{ notice_accepted: number; drained_at: string | null }>("SELECT notice_accepted, drained_at FROM group_inbox WHERE group_id = ? AND receiver_id = ? AND seq = ?", groupId, botId, round.seq);
+      return !!row && (!!row.notice_accepted || row.drained_at !== null);
+    });
+  }
+
+  /**
+   * The bots waiting on an open round join it: its request goes into their inboxes, numbered in
+   * the order they join (for which piece to start with). Returns them; none once it fanned out.
+   */
+  fanOut(groupId: string, seq: number): string[] {
+    return this.db.tx(() => {
+      const round = this.round(groupId, seq);
+      if (!round || round.fannedOut || round.closedAt) return [];
+      const waiting = round.members.filter((member) => member.state === "waiting").map((member) => member.botId);
+      waiting.forEach((botId, index) => {
+        this.db.run("UPDATE group_round_members SET state = 'working', position = ? WHERE group_id = ? AND seq = ? AND bot_id = ?", index + 1, groupId, seq, botId);
+        this.db.run("UPDATE group_inbox SET wake_reason = 'open' WHERE group_id = ? AND receiver_id = ? AND seq = ? AND drained_at IS NULL", groupId, botId, seq);
+      });
+      this.db.run("UPDATE group_rounds SET fanned_out = 1 WHERE group_id = ? AND seq = ?", groupId, seq);
+      return waiting;
+    });
+  }
+
+  /** A bot's part in a round is over: it said so (`tool`), or its turn on it ended (`turn`, `failed`). False when it wasn't working on it. */
+  finishRound(groupId: string, seq: number, botId: string, how: "tool" | "turn" | "failed"): boolean {
+    const changed = this.db.get<{ n: number }>("UPDATE group_round_members SET state = 'finished', finished_how = ?, finished_at = ? WHERE group_id = ? AND seq = ? AND bot_id = ? AND state = 'working' RETURNING 1 AS n", how, now(), groupId, seq, botId);
+    return !!changed;
+  }
+
+  /** The bots still waiting to join are left out: the request was done before they were needed. */
+  skipWaiting(groupId: string, seq: number): void {
+    this.db.tx(() => {
+      this.db.run("UPDATE group_round_members SET state = 'skipped' WHERE group_id = ? AND seq = ? AND state = 'waiting'", groupId, seq);
+      this.db.run("UPDATE group_rounds SET fanned_out = 1 WHERE group_id = ? AND seq = ?", groupId, seq);
+    });
+  }
+
+  /** A bot's reply answers the round's request; only the first one counts. */
+  answerRound(groupId: string, seq: number, answerSeq: number): void {
+    this.db.run("UPDATE group_rounds SET answer_seq = ? WHERE group_id = ? AND seq = ? AND answer_seq IS NULL", answerSeq, groupId, seq);
+  }
+
+  /** The bot that answers the round; `told`: it already knows (board_finish said so). */
+  setReporter(groupId: string, seq: number, botId: string, told: boolean): void {
+    this.db.run("UPDATE group_rounds SET reporter_id = ?, report_told = ? WHERE group_id = ? AND seq = ?", botId, told ? 1 : 0, groupId, seq);
+  }
+
+  /** The open, unanswered rounds a bot was chosen to answer and hasn't been told about yet. */
+  owedReports(groupId: string, botId: string): number[] {
+    return this.db.all<{ seq: number }>("SELECT seq FROM group_rounds WHERE group_id = ? AND reporter_id = ? AND report_told = 0 AND answer_seq IS NULL AND closed_at IS NULL ORDER BY seq", groupId, botId).map((row) => Number(row.seq));
+  }
+
+  markReportsTold(groupId: string, seqs: readonly number[]): void {
+    for (const seq of seqs) this.db.run("UPDATE group_rounds SET report_told = 1 WHERE group_id = ? AND seq = ?", groupId, seq);
+  }
+
+  closeRound(groupId: string, seq: number): void {
+    this.db.run("UPDATE group_rounds SET closed_at = ? WHERE group_id = ? AND seq = ? AND closed_at IS NULL", now(), groupId, seq);
+  }
+
+  /** When each bot last started a round as the first one on an open request (its request's number). */
+  lastStarts(groupId: string): Map<string, number> {
+    return new Map(this.db.all<{ starter_id: string; seq: number }>("SELECT starter_id, MAX(seq) AS seq FROM group_rounds WHERE group_id = ? AND starter_id IS NOT NULL GROUP BY starter_id", groupId).map((row) => [row.starter_id, Number(row.seq)]));
   }
 
   // ---------------------------------------------------------------- mentions and who a message reached
@@ -784,11 +1015,14 @@ export class GroupStore {
    * don't hold it. Newest last.
    */
   freshnessRows(groupId: string, botId: string, conv: number, after: number): number[] {
+    // On a board, only what was for the bot: it also has records of the requests it was left out of
+    // and of the user's messages to other bots, none of which it had to see.
+    const forIt = this.board(groupId) ? "AND f.wake_reason IS NOT NULL" : "";
     const notMine = `NOT (m.sender_kind = 'bot' AND m.sender_id = ?) AND NOT (m.sender_kind = 'system' AND m.causal_actor_id IS ? AND m.system_subtype IN ${EXEMPT})`;
     const rows = conv
       ? this.db.all<{ seq: number }>(`SELECT m.seq FROM group_messages m WHERE m.group_id = ? AND m.thread_seq = ? AND m.seq > ? AND ${notMine} ORDER BY m.seq`, groupId, conv, after, botId, botId)
       : this.db.all<{ seq: number }>(
-          `SELECT m.seq FROM group_inbox f JOIN group_messages m ON m.group_id = f.group_id AND m.seq = f.seq WHERE f.group_id = ? AND f.receiver_id = ? AND f.conv = 0 AND f.seq > ? AND ${notMine} ORDER BY m.seq`,
+          `SELECT m.seq FROM group_inbox f JOIN group_messages m ON m.group_id = f.group_id AND m.seq = f.seq WHERE f.group_id = ? AND f.receiver_id = ? AND f.conv = 0 AND f.seq > ? ${forIt} AND ${notMine} ORDER BY m.seq`,
           groupId,
           botId,
           after,

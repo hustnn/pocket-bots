@@ -2,6 +2,7 @@ import type { ChatSnapshot, ProvidersSnapshot, TimelinePage } from "./chat-types
 import { z } from "zod";
 import { BotMcpServerSchema, BotSchema, McpServerConfigSchema, McpToolSchema, StoreSchema } from "./bot";
 import { MAX_EXTRA_FOLDERS } from "./extra-folders";
+import { BoardEntryViewSchema, CoordinationSchema } from "./group-board";
 import { GROUP_MAX_BOTS, GROUP_NAME_MAX, GroupMessageSchema, GroupSummarySchema, GroupTaskSchema, TaskStatusSchema, USER_TEXT_MAX, WakeModeSchema } from "./group-chat";
 import { ProposalSchema } from "./proposals";
 import { defineRpc } from "./rpc-core";
@@ -652,8 +653,9 @@ export const groupCreateRpc = defineRpc({
    * `leaderId`: one of the bots, which plans and hands out the work; the others take only what it hands them.
    * `cwd`: the folder every bot's session for the group works in; without one, each works in its own.
    * `extraFolders`: folders every bot may use besides it.
+   * `coordination`: "board" to have the bots work together through a shared board (no leader then).
    */
-  input: z.object({ name: z.string().max(GROUP_NAME_MAX).nullable().optional(), memberIds: MemberIds, leaderId: z.string().min(1).nullable().optional(), cwd: WorkFolder.nullable().optional(), extraFolders: ExtraFolders.optional() }),
+  input: z.object({ name: z.string().max(GROUP_NAME_MAX).nullable().optional(), memberIds: MemberIds, leaderId: z.string().min(1).nullable().optional(), cwd: WorkFolder.nullable().optional(), extraFolders: ExtraFolders.optional(), coordination: CoordinationSchema.optional() }),
   output: z.object({ groupId: z.string() }),
 });
 
@@ -671,6 +673,8 @@ export const groupUpdateRpc = defineRpc({
     cwd: WorkFolder.nullable().optional(),
     /** The group's extra folders, replacing the list; left out, it stays. */
     extraFolders: ExtraFolders.optional(),
+    /** How the bots work together: in the chat, or through a shared board (no leader then); left out, it stays. */
+    coordination: CoordinationSchema.nullable().optional(),
   }),
   output: z.object({ ok: z.boolean() }),
 });
@@ -700,6 +704,13 @@ export const groupTasksRpc = defineRpc({
   name: "pocket.groups.tasks",
   input: z.object({ groupId: GroupId }),
   output: z.object({ tasks: z.array(GroupTaskSchema.extend({ preview: z.string(), replies: z.number() })) }),
+});
+
+/** A board group's entries, oldest first, with their authors and citation weights (which the bots don't see). */
+export const groupBoardRpc = defineRpc({
+  name: "pocket.groups.board",
+  input: z.object({ groupId: GroupId }),
+  output: z.object({ entries: z.array(BoardEntryViewSchema) }),
 });
 
 /** The bots' pending reminders in a group, soonest first. */

@@ -11,7 +11,7 @@ import { Icon } from "../../components/icons";
 import { Markdown } from "../../components/Markdown";
 import { Button, CopyButton, IconButton, Menu, MenuButton, Modal, useFeedback, type MenuItems } from "../../components/ui";
 import { errorText, rpc } from "../../lib/api";
-import { useAllChats, useGroupMessages, useGroupReminders, useGroups, useGroupTasks, useStoreDoc } from "../../lib/data";
+import { useAllChats, useGroupBoard, useGroupMessages, useGroupReminders, useGroups, useGroupTasks, useStoreDoc } from "../../lib/data";
 import { markTermsIn, pendingTermsFor, placeKey } from "../../lib/highlight";
 import { MOD, useShortcut } from "../../lib/keys";
 import { navigate, replaceRoute } from "../../lib/router";
@@ -635,6 +635,48 @@ function TaskBoard({ groupId, onPick, onClose }: { groupId: string; onPick: (tar
 }
 
 /**
+ * A board group's shared board, newest first: what each bot published, with what the bots never
+ * see (who wrote it and how much the others built on it).
+ */
+function SharedBoard({ groupId, onClose }: { groupId: string; onClose: () => void }) {
+  const board = useGroupBoard(groupId, true);
+  const entries = [...(board.data ?? [])].reverse();
+  return (
+    <aside className="group-thread" aria-label="Shared board">
+      <div className="topbar">
+        <div className="title">
+          Board<span className="subtitle"> · {entries.length} {entries.length === 1 ? "entry" : "entries"}</span>
+        </div>
+        <IconButton icon="x" title="Close the board" onClick={onClose} />
+      </div>
+      <div className="stream">
+        <div className="stream-inner group-board">
+          {board.isPending ? <span className="spinner" /> : null}
+          {!board.isPending && entries.length === 0 ? <p className="hint">Nothing on the board yet. The bots publish here what they did on a request, for one another to build on.</p> : null}
+          {entries.map((entry) => (
+            <section key={entry.number} className="group-board-entry">
+              <div className="row small" style={{ gap: 6, flexWrap: "wrap" }}>
+                <strong>B{entry.number}</strong>
+                <span className="hint">{entry.author}</span>
+                {entry.round ? <span className="hint">· for #{entry.round}</span> : null}
+                {entry.claim ? <span className="badge">takes {entry.claim}</span> : null}
+                {entry.citedBy.length ? <span className="hint" title={`Citation weight ${entry.weight.toFixed(2)}`}>· cited by {entry.citedBy.map((number) => `B${number}`).join(", ")}</span> : null}
+              </div>
+              <div>{entry.subTask}</div>
+              <details>
+                <summary className="hint">Result{entry.refs.length ? ` · builds on ${entry.refs.join(", ")}` : ""}</summary>
+                <Markdown text={entry.artifact} />
+                <p className="hint">{entry.rationale}</p>
+              </details>
+            </section>
+          ))}
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+/**
  * What the members are doing: working (with the way to their side of the group), or waiting for an
  * approval that stays in the seat (a question the group shows is answered there instead).
  */
@@ -931,7 +973,7 @@ export function GroupView({ groupId, at, atThread }: { groupId: string; at?: num
         <IconButton icon="search" title={`Search this group (${MOD}F)`} onClick={() => setSearching((open) => (open ? 0 : 1))} />
         <IconButton
           icon="listTodo"
-          title="Tasks"
+          title={group.coordination === "board" ? "Board" : "Tasks"}
           onClick={() => {
             setThread(null);
             setBoard((open) => !open);
@@ -1072,6 +1114,8 @@ export function GroupView({ groupId, at, atThread }: { groupId: string; at?: num
             onClose={() => setThread(null)}
             unread={unreadThreads.has(thread.seq)}
           />
+        ) : board && group.coordination === "board" ? (
+          <SharedBoard groupId={groupId} onClose={() => setBoard(false)} />
         ) : board ? (
           <TaskBoard
             groupId={groupId}

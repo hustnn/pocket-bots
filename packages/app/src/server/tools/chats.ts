@@ -25,6 +25,7 @@ export const searchChats = defineTool({
     limit: z.number().int().min(1).max(25).optional().describe("How many results at most (default 12)."),
   }),
   led: true,
+  board: true,
   async run({ query, since, limit = 12 }, { bot, agentId, host }) {
     const now = new Date();
     const words = searchWords(query ?? "");

@@ -31,6 +31,8 @@ export interface SeatGroupPrompt {
   subAgents?: boolean;
   questionTool?: string;
   lead?: GroupLead;
+  /** The group's bots work through its board. */
+  board?: boolean;
 }
 
 export interface ChatStart {
@@ -52,7 +54,7 @@ export interface ChatStart {
 export async function promptContext(bot: Bot, local: boolean, library: Library, start: ChatStart = {}): Promise<PromptContext> {
   // Playbooks live in the settings, so they travel with the bot to any host.
   const playbooks = selectPlaybooks(start.message ?? "", bot.playbooks);
-  const group = start.group ? groupPrompt(start.group.name, { subAgents: start.group.subAgents ?? false, ...(start.group.questionTool ? { questionTool: start.group.questionTool } : {}), ...(start.group.lead ? { lead: start.group.lead } : {}) }) : null;
+  const group = start.group ? groupPrompt(start.group.name, { subAgents: start.group.subAgents ?? false, ...(start.group.questionTool ? { questionTool: start.group.questionTool } : {}), ...(start.group.lead ? { lead: start.group.lead } : {}), ...(start.group.board ? { board: true } : {}) }) : null;
   // Connected apps go through this host's relay, so bots on other hosts can't reach them.
   const folders = start.folders ?? [];
   if (!local) return { memory: "", memoryPath: null, recentWork: [], playbooks, group, skills: [], botTools: false, apps: [], folders };
@@ -73,7 +75,7 @@ export async function promptContext(bot: Bot, local: boolean, library: Library, 
     group,
     skills: skills.map((skill) => ({ name: skill.id, description: skill.description, path: paths.get(skill.id)! })),
     // A seat has no setup tools (tools/mcp.ts ownChat), and a led member's is listed only the tools for its piece (ledMember).
-    botTools: start.group ? (start.group.lead?.role === "member" ? "led" : "seat") : true,
+    botTools: start.group ? (start.group.board ? "board" : start.group.lead?.role === "member" ? "led" : "seat") : true,
     apps: await botApps(bot),
     folders,
   };

@@ -99,9 +99,10 @@ export interface BriefingInput {
   parents?: ReadonlyMap<number, GroupMessage>;
   /**
    * Why the conversation was renewed: a cold, large one (the default), a session that couldn't be
-   * resumed (its compaction kept failing), or one that has to work in another folder now.
+   * resumed (its compaction kept failing), one that has to work in another folder now, or one
+   * whose group changed how its bots work together (its prompt and tools are for the old way).
    */
-  reason?: "stale" | "reset" | "moved";
+  reason?: "stale" | "reset" | "moved" | "recast";
   /** "moved": the folder the new conversation works in. */
   folder?: string;
 }
@@ -110,6 +111,8 @@ function renewedBecause(input: BriefingInput): string {
   switch (input.reason) {
     case "reset":
       return "This conversation for the group was renewed: the old one couldn't be compacted to fit the model any more, so it can't be resumed. Where you were:";
+    case "recast":
+      return "This conversation for the group was renewed: the user changed how the group's bots work together, and a session keeps the instructions and tools it started with. Where you were:";
     case "moved":
       return `This conversation for the group was renewed: your working folder for the group is now ${input.folder ?? "another folder"} (it was ${input.cwd}), and a session can't change folders. Relative paths in the actions below are from the old folder. Where you were:`;
     default:

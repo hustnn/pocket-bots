@@ -59,6 +59,21 @@ import {
   type ThreadJoin,
   type WakeMode,
 } from "../shared/group-chat";
+import {
+  BOARD_FAN_OUT_MS,
+  BOARD_VISIT_MAX,
+  boardEntryText,
+  boardSearchText,
+  citationWeights,
+  citersOf,
+  finishText,
+  GROUP_COORDINATION_LABEL,
+  rankBoard,
+  roundNoticeText,
+  type BoardEntryView,
+  type Coordination,
+  type RoundNotice,
+} from "../shared/group-board";
 import { dataPath } from "./bot-home";
 import { briefingPanel } from "./briefing";
 import { isBusy } from "./chat-service";
@@ -134,6 +149,7 @@ const HANDED_MAX = 8;
 /** Messages a renewed seat's briefing shows. */
 const BRIEFING_MESSAGES = 25;
 const USER_ID = GROUP_USER_ID;
+const BOARD_NO_LEADER = "A group whose bots work through a shared board has no leader: nobody hands out the work there.";
 /** Tasks still being worked on. */
 const OPEN_TASKS: TaskStatus[] = ["todo", "in_progress"];
 /** Task lifecycle notes: an emoji and a label per status. */
@@ -207,6 +223,8 @@ export interface GroupOptions {
   recycleTokens?: number;
   /** The backoff's jitter, a number in [0, 1). */
   random?: () => number;
+  /** How long an open request on a board waits for its first bot before the others join (BOARD_FAN_OUT_MS). */
+  boardFanOutMs?: number;
 }
 
 function safeName(name: string): string {
@@ -275,7 +293,12 @@ export class GroupChats {
   /** The spawn-error retry sweep, one timer per seat a spawn error paused. */
   private readonly sweepTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly noticeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** An open request on a board, by `${groupId}:${seq}`: when the bots waiting on it join anyway. */
+  private readonly fanOutTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Report notices sent and not yet taken in by their seat, by notice id. */
+  private readonly reportNotices = new Map<string, { groupId: string; seqs: number[] }>();
   private readonly random: () => number;
+  private readonly boardFanOutMs: number;
   private readonly recycleAfterMs: number;
   private readonly recycleTokens: number;
   private reminderTimer: ReturnType<typeof setTimeout> | null = null;
@@ -291,6 +314,7 @@ export class GroupChats {
     this.recycleAfterMs = options.recycleAfterMs ?? 60 * 60_000;
     this.recycleTokens = options.recycleTokens ?? 128_000;
     this.random = options.random ?? Math.random;
+    this.boardFanOutMs = options.boardFanOutMs ?? BOARD_FAN_OUT_MS;
   }
 
   // ---------------------------------------------------------------- the user's side
@@ -307,9 +331,10 @@ export class GroupChats {
    * What a seat's prompt says about its group: the name, and with a leader, the seat's part: the
    * leader, with what each member it hands work to does and runs on, or a member, with its leader.
    */
-  async seatGroup(groupId: string, botId: string | null): Promise<{ name: string; lead?: GroupLead } | null> {
+  async seatGroup(groupId: string, botId: string | null): Promise<{ name: string; lead?: GroupLead; board?: boolean } | null> {
     const group = this.store.group(groupId);
     if (!group) return null;
+    if (group.coordination === "board") return { name: group.name, board: true };
     const leaderId = this.store.leader(groupId);
     if (!leaderId || !botId) return { name: group.name };
     const bots = await this.liveBots();
@@ -336,6 +361,7 @@ export class GroupChats {
       lastSeq: group.last_seq,
       readSeq: this.store.cursor(group.id, USER_ID, 0),
       wakeMode: group.wake_mode,
+      coordination: group.coordination,
       leaderId: this.store.leader(group.id),
       cwd: group.cwd,
       extraFolders: this.extraFoldersOf(group),
@@ -347,8 +373,12 @@ export class GroupChats {
     };
   }
 
-  /** A new group; with `leaderId`, that member plans and hands out the work; with `cwd`, every seat works in that folder. */
-  async create(input: { name?: string | null; memberIds: string[]; leaderId?: string | null; cwd?: string | null; extraFolders?: string[] }): Promise<{ id: string }> {
+  /**
+   * A new group; with `leaderId`, that member plans and hands out the work; with `coordination:
+   * board`, the bots work together through the group's board instead (no leader); with `cwd`, every
+   * seat works in that folder.
+   */
+  async create(input: { name?: string | null; memberIds: string[]; leaderId?: string | null; cwd?: string | null; extraFolders?: string[]; coordination?: Coordination }): Promise<{ id: string }> {
     const memberIds = [...new Set(input.memberIds)];
     const problem = membersProblem(memberIds);
     if (problem) throw new RequestError(problem);
@@ -356,10 +386,11 @@ export class GroupChats {
     const missing = memberIds.find((id) => !bots.has(id));
     if (missing) throw new RequestError(`There's no bot with the id ${missing}.`);
     if (input.leaderId && !memberIds.includes(input.leaderId)) throw new RequestError("The leader must be one of the group's bots.");
+    if (input.leaderId && input.coordination === "board") throw new RequestError(BOARD_NO_LEADER);
     const cwd = input.cwd?.trim() ? await workFolder(input.cwd) : null;
     const folders = input.extraFolders?.length ? await extraFolders(input.extraFolders, cwd) : [];
     const id = newGroupChatId();
-    this.store.createGroup({ id, name: input.name?.trim() || defaultGroupName(memberIds.map((botId) => bots.get(botId)!.name)), memberIds, leaderId: input.leaderId ?? null, cwd, extraFolders: folders });
+    this.store.createGroup({ id, name: input.name?.trim() || defaultGroupName(memberIds.map((botId) => bots.get(botId)!.name)), memberIds, leaderId: input.leaderId ?? null, cwd, extraFolders: folders, coordination: input.coordination ?? "chat" });
     this.changed(id);
     return { id };
   }
@@ -368,9 +399,13 @@ export class GroupChats {
    * `leaderId`: a member to lead the group, null for no leader; left out, the leader stays.
    * `cwd`: the folder its seats work in, null (or empty) for each bot's own; left out, it stays.
    * `extraFolders`: the folders its seats may use besides it, replacing the list; left out, it stays.
+   * `coordination`: how the bots work together (a board group has no leader); left out, it stays.
+   * Its seats start over at their next turn, since a session keeps the prompt and tools it began with.
    */
-  async update(groupId: string, input: { name?: string | null; memberIds?: string[] | null; wakeMode?: WakeMode | null; leaderId?: string | null; cwd?: string | null; extraFolders?: string[] }): Promise<void> {
+  async update(groupId: string, input: { name?: string | null; memberIds?: string[] | null; wakeMode?: WakeMode | null; leaderId?: string | null; cwd?: string | null; extraFolders?: string[]; coordination?: Coordination | null }): Promise<void> {
     const group = this.require(groupId);
+    const coordination = input.coordination ?? group.coordination;
+    if (coordination === "board" && (input.leaderId ?? (input.leaderId === undefined ? this.store.leader(groupId) : null))) throw new RequestError(BOARD_NO_LEADER);
     // Checked before anything changes, so a folder that isn't there changes nothing.
     const cwd = input.cwd === undefined ? undefined : input.cwd?.trim() ? await workFolder(input.cwd) : null;
     const folders = input.extraFolders === undefined ? undefined : await extraFolders(input.extraFolders, cwd === undefined ? group.cwd : cwd);
@@ -390,6 +425,8 @@ export class GroupChats {
       }
       for (const botId of current.filter((id) => !next.includes(id))) {
         const member = this.store.member(groupId, botId);
+        // On a board, its requests go on without it.
+        await this.abandonRounds(groupId, botId);
         this.forgetSeat(groupId, botId);
         this.store.removeMember(groupId, botId);
         if (member?.seat_chat_id) await this.host.chats.archive(member.seat_chat_id).catch(() => undefined);
@@ -409,6 +446,19 @@ export class GroupChats {
       this.note(groupId, cwd ? `📁 the user set the group's working folder to ${cwd}: each bot's next turn here runs there.` : "📁 the user removed the group's working folder: each bot's next turn here runs in its own folder.", "group.folder", USER_ID);
     }
     if (folders !== undefined && JSON.stringify(folders) !== JSON.stringify(this.extraFoldersOf(group))) await this.setExtraFolders(groupId, folders);
+    if (coordination !== group.coordination) {
+      this.store.updateGroup(groupId, { coordination });
+      // Rounds belong to the board way of working: switching away leaves none open.
+      if (coordination === "chat") for (const round of this.store.openRounds(groupId)) this.closeRound(groupId, round.seq);
+      this.note(
+        groupId,
+        coordination === "board"
+          ? "🧩 the user switched the group to work through a shared board: the bots don't message each other any more; each request goes round the bots, and the last one to finish answers."
+          : "💬 the user switched the group back to working in the chat: the bots read the group's messages again and decide for themselves whether to take part.",
+        "group.coordination",
+        USER_ID,
+      );
+    }
     this.changed(groupId);
   }
 
@@ -488,13 +538,34 @@ export class GroupChats {
     if (input.asTask && thread) throw new RequestError("Only top-level messages can be tasks; a message in a thread is discussion.");
     const attachments = await this.keepAttachments(groupId, input.attachments ?? []);
     const mentions = parseMentions(input.text, members, await this.outsiders(groupId));
-    const { message, woken } = this.store.append(groupId, { kind: "user" }, { text: input.text, replyTo: input.replyTo ?? null, thread, attachments, ...this.mentionFields(mentions) });
+    const boardStarter = this.store.board(groupId) ? this.boardStarter(groupId) : null;
+    const { message, woken } = this.store.append(groupId, { kind: "user" }, { text: input.text, replyTo: input.replyTo ?? null, thread, attachments, ...this.mentionFields(mentions), boardStarter });
     // The task exists before any bot reads the message, so it reads as one.
     if (input.asTask) this.store.convertToTask(groupId, message.seq, GROUP_USER);
     // The user @mentioning a bot that was stopped or paused is its manual start.
     for (const botId of mentions.botIds) this.restart(groupId, botId);
+    // An open request on a board waits for its first bot a minute at most before the others join.
+    const round = this.store.round(groupId, message.seq);
+    if (round && !round.fannedOut) this.armFanOut(groupId, message.seq, this.boardFanOutMs);
     this.wake(groupId, woken);
     return message.seq;
+  }
+
+  /**
+   * Which bot an open request on a board goes to first: one that can start (not stopped or paused),
+   * idle before busy, then the one that went first longest ago (or never), in the members' order.
+   */
+  private boardStarter(groupId: string): string | null {
+    const starts = this.store.lastStarts(groupId);
+    const candidates = this.store
+      .members(groupId)
+      .filter((member) => member.muted_from_seq === null && !this.stopped.has(this.key(groupId, member.bot_id)))
+      .map((member, order) => {
+        const seat = member.seat_chat_id ? this.host.chats.get(member.seat_chat_id) : null;
+        return { botId: member.bot_id, busy: !!seat && !seat.archivedAt && isBusy(seat.status), last: starts.get(member.bot_id) ?? 0, order };
+      });
+    candidates.sort((a, b) => Number(a.busy) - Number(b.busy) || a.last - b.last || a.order - b.order);
+    return candidates[0]?.botId ?? null;
   }
 
   /**
@@ -1005,6 +1076,11 @@ export class GroupChats {
   }
 
   /** The group has a leader, and it isn't this bot. */
+  /** The group's bots work through its board (shared/group-board.ts). */
+  isBoard(groupId: string): boolean {
+    return this.store.board(groupId);
+  }
+
   ledBy(groupId: string, botId: string): boolean {
     const leaderId = this.store.leader(groupId);
     return leaderId !== null && leaderId !== botId;
@@ -1234,6 +1310,193 @@ export class GroupChats {
    *    of the thread's messages. A thread it never read counts from the top message.
    * Whatever a hold shows is recorded as seen. A held post is kept as the place's draft.
    */
+  // ---------------------------------------------------------------- the board and its rounds
+
+  /**
+   * board_publish: an entry on the group's board, under the request the bot is working on. The
+   * first bot on an open request publishing means the work is worth sharing: the others join it now.
+   */
+  async boardPublish(bot: Bot, groupId: string, input: { subTask: string; artifact: string; rationale: string; refs: readonly string[]; claim?: string | null }): Promise<string> {
+    this.requireBoard(groupId, bot.id);
+    const working = this.store.workingRounds(groupId, bot.id);
+    const result = this.store.publishBoard(groupId, bot.id, working.at(-1)?.seq ?? null, input);
+    if ("problem" in result) return `Not published: ${result.problem}`;
+    this.changed(groupId);
+    const joined: string[] = [];
+    for (const round of working) if (round.starterId === bot.id && !round.fannedOut) joined.push(...this.fanOutNow(groupId, round.seq));
+    const bots = await this.allBots();
+    const names = [...new Set(joined)].map((id) => bots.get(id)?.name ?? id);
+    return `Published as B${result.entry.number}.${names.length ? ` ${names.join(", ")} join${names.length === 1 ? "s" : ""} the request now, and will find it on the board.` : ""}`;
+  }
+
+  /** board_search: the entries matching a query, best first, at most BOARD_SEARCH_K. */
+  async boardSearch(bot: Bot, groupId: string, query: string): Promise<string> {
+    this.requireBoard(groupId, bot.id);
+    const entries = this.store.boardEntries(groupId);
+    return boardSearchText(query, rankBoard(entries, query), entries.length, citersOf(entries));
+  }
+
+  /** board_visit: entries by number, all or none. */
+  async boardVisit(bot: Bot, groupId: string, numbers: readonly number[]): Promise<string> {
+    this.requireBoard(groupId, bot.id);
+    const entries = this.store.boardEntries(groupId);
+    const byNumber = new Map(entries.map((entry) => [entry.number, entry]));
+    const missing = numbers.find((number) => !byNumber.has(number));
+    if (missing !== undefined) throw new RequestError(entries.length ? `There's no B${missing}: the board has B1 to B${entries.at(-1)!.number}.` : "The board is empty.");
+    const citers = citersOf(entries);
+    return [...new Set(numbers)].slice(0, BOARD_VISIT_MAX).map((number) => boardEntryText(byNumber.get(number)!, citers.get(number))).join("\n\n");
+  }
+
+  /** board_finish: the bot's part in a request is done; the last one on it answers. */
+  async boardFinish(bot: Bot, groupId: string, request: number | null): Promise<string> {
+    this.requireBoard(groupId, bot.id);
+    const seq = request ?? this.store.workingRounds(groupId, bot.id)[0]?.seq ?? null;
+    if (seq === null) return "You aren't working on a request right now: nothing to finish.";
+    if (!this.store.finishRound(groupId, seq, bot.id, "tool")) {
+      const round = this.store.round(groupId, seq);
+      if (round?.reporterId === bot.id && round.answerSeq === null && !round.closedAt) return finishText({ seq, state: "last" });
+      return finishText({ seq, state: "not_working" });
+    }
+    this.changed(groupId);
+    return (await this.settleRound(groupId, seq, bot.id)) ?? finishText({ seq, state: "not_working" });
+  }
+
+  /** The board's entries for the user's view: with author and weight, which bots never see. */
+  async boardView(groupId: string): Promise<BoardEntryView[]> {
+    this.require(groupId);
+    const entries = this.store.boardEntries(groupId);
+    const weights = citationWeights(entries);
+    const citers = citersOf(entries);
+    const bots = await this.allBots();
+    return entries.map((entry) => ({ ...entry, author: bots.get(entry.authorId)?.name ?? entry.authorId, weight: weights.get(entry.number) ?? 0, citedBy: citers.get(entry.number) ?? [] }));
+  }
+
+  private requireBoard(groupId: string, botId: string): void {
+    this.requireMember(groupId, botId);
+    if (!this.store.board(groupId)) throw new RequestError("This group doesn't work through a board: talk in the group instead.");
+  }
+
+  /**
+   * Where a round stands after one of its bots finished (`finisher`: by board_finish, whose result
+   * this is; null: a turn ended). While a bot is still on it, nothing changes. The first bot done
+   * before the others joined leaves them out, unless its turn failed, which brings them in. Once
+   * nobody is working, an answered round closes; otherwise a bot answers it: the one that called
+   * board_finish (told in its result), else the last to finish whose turn didn't fail (woken for it).
+   */
+  private async settleRound(groupId: string, seq: number, finisher: string | null): Promise<string | null> {
+    // Nothing below waits, so two bots finishing at once settle one after the other.
+    const bots = await this.allBots();
+    const round = this.store.round(groupId, seq);
+    if (!round || round.closedAt) return null;
+    const working = round.members.filter((member) => member.state === "working");
+    if (working.length) return finisher ? finishText({ seq, state: "others", working: working.map((member) => bots.get(member.botId)?.name ?? member.botId) }) : null;
+    if (round.members.some((member) => member.state === "waiting")) {
+      const starter = round.members.find((member) => member.botId === round.starterId);
+      if (starter?.finishedHow === "failed" && round.answerSeq === null) {
+        this.fanOutNow(groupId, seq);
+        return null;
+      }
+      this.store.skipWaiting(groupId, seq);
+    }
+    this.clearFanOut(groupId, seq);
+    if (round.answerSeq !== null) {
+      this.closeRound(groupId, seq);
+      return finisher ? finishText({ seq, state: "answered", answer: round.answerSeq }) : null;
+    }
+    if (finisher) {
+      this.store.setReporter(groupId, seq, finisher, true);
+      return finishText({ seq, state: "last" });
+    }
+    if (round.reporterId) return null;
+    const last = round.members.filter((member) => member.state === "finished" && member.finishedHow !== "failed").sort((a, b) => (b.finishedAt ?? "").localeCompare(a.finishedAt ?? ""))[0];
+    if (!last) {
+      this.note(groupId, `Nobody answered #${seq}: the turn of every bot working on it failed. Send it again to have them try once more.`, "round.unanswered", USER_ID);
+      this.closeRound(groupId, seq);
+      return null;
+    }
+    this.store.setReporter(groupId, seq, last.botId, false);
+    this.wake(groupId, [last.botId]);
+    return null;
+  }
+
+  /** The bots waiting on an open round join it now. Returns them. */
+  private fanOutNow(groupId: string, seq: number): string[] {
+    this.clearFanOut(groupId, seq);
+    const joined = this.store.fanOut(groupId, seq);
+    if (joined.length) this.wake(groupId, joined);
+    return joined;
+  }
+
+  private armFanOut(groupId: string, seq: number, delay: number): void {
+    const key = `${groupId}:${seq}`;
+    this.clearFanOut(groupId, seq);
+    const timer = setTimeout(() => {
+      this.fanOutTimers.delete(key);
+      void this.serial(groupId, async () => {
+        const round = this.store.round(groupId, seq);
+        // A request already answered needs nobody else.
+        if (round && !round.closedAt && round.answerSeq === null) this.fanOutNow(groupId, seq);
+      });
+    }, Math.max(0, delay));
+    timer.unref?.();
+    this.fanOutTimers.set(key, timer);
+  }
+
+  private clearFanOut(groupId: string, seq: number): void {
+    const key = `${groupId}:${seq}`;
+    const timer = this.fanOutTimers.get(key);
+    if (timer) clearTimeout(timer);
+    this.fanOutTimers.delete(key);
+  }
+
+  private closeRound(groupId: string, seq: number): void {
+    this.clearFanOut(groupId, seq);
+    this.store.closeRound(groupId, seq);
+    this.changed(groupId);
+  }
+
+  /**
+   * A seat's turn ended: its part in each request it had taken in is over (failed, if the turn
+   * did), and a request it was told to answer is closed, answered or not: it had its turn at it.
+   */
+  private async endRounds(groupId: string, botId: string, failed: boolean): Promise<void> {
+    if (!this.store.board(groupId)) return;
+    for (const round of this.store.openRounds(groupId)) {
+      if (round.reporterId === botId && round.reportTold && !round.members.some((member) => member.state === "working")) this.closeRound(groupId, round.seq);
+    }
+    for (const round of this.store.roundsTakenIn(groupId, botId)) {
+      if (this.store.finishRound(groupId, round.seq, botId, failed ? "failed" : "turn")) await this.settleRound(groupId, round.seq, null);
+    }
+  }
+
+  /** A bot that can't take part now (its seat won't start, it left): its rounds go on without it. */
+  private async abandonRounds(groupId: string, botId: string): Promise<void> {
+    for (const round of this.store.workingRounds(groupId, botId)) {
+      if (this.store.finishRound(groupId, round.seq, botId, "failed")) await this.settleRound(groupId, round.seq, null);
+    }
+  }
+
+  /** What a seat's notice says about the requests it's woken for on a board. */
+  private async roundNotices(groupId: string, botId: string, pending: readonly PendingMessage[], reports: readonly number[]): Promise<RoundNotice[]> {
+    const bots = await this.allBots();
+    const name = (id: string) => bots.get(id)?.name ?? id;
+    const notices: RoundNotice[] = [];
+    for (const seq of new Set(pending.map((entry) => entry.message.seq))) {
+      const round = this.store.round(groupId, seq);
+      const me = round?.members.find((member) => member.botId === botId);
+      if (!round || round.closedAt || me?.state !== "working") continue;
+      const others = round.members.filter((member) => member.botId !== botId && member.state !== "skipped");
+      if (!others.length) notices.push({ kind: "solo", seq });
+      else if (round.starterId === botId) notices.push({ kind: "first", seq, waiting: others.filter((member) => member.state === "waiting").length });
+      else if (round.starterId) {
+        const joining = round.members.filter((member) => member.position > 0);
+        notices.push({ kind: "join", seq, starter: name(round.starterId), others: joining.filter((member) => member.botId !== botId).map((member) => name(member.botId)), position: me.position, joining: joining.length });
+      } else notices.push({ kind: "together", seq, others: others.map((member) => name(member.botId)) });
+    }
+    for (const seq of reports) notices.push({ kind: "report", seq });
+    return notices;
+  }
+
   private preflight(bot: Bot, groupId: string, conv: number, action: HeldInput["action"], draft?: HeldDraft): string | null {
     const me = bot.id;
     const ledger = this.store.ledger(groupId, me, conv);
@@ -1253,8 +1516,9 @@ export class GroupChats {
       if ((ledger.boundary ?? 0) >= max) forward = max;
     } else if ((ledger.boundary ?? 0) > 0) {
       forward = ledger.boundary;
-    } else if (conv !== 0 || !this.ledBy(groupId, me)) {
+    } else if (conv !== 0 || !(this.ledBy(groupId, me) || this.store.board(groupId))) {
       // A member the leader leads isn't part of the top level's conversation: only what's handed to it reaches it there.
+      // Nor is a bot on a board: the other bots' messages are for the user.
       const recent = this.store.convPage(groupId, conv, { limit: HELD_SHOWN }).messages;
       if (recent.length) {
         const unseen = recent.filter((message) => !seen(message));
@@ -1307,10 +1571,11 @@ export class GroupChats {
       for (const member of this.store.members(group.id)) {
         const seat = member.seat_chat_id ? this.host.chats.get(member.seat_chat_id) : null;
         // A member the leader leads gets only its pieces of work, not a catch-up of the group: what
-        // it was told and didn't take in is told again, one piece at a time.
-        if (this.ledBy(group.id, member.bot_id)) {
+        // it was told and didn't take in is told again, one piece at a time. So does a bot on a
+        // board, for its requests (with their rounds) and the answers it owes.
+        if (this.ledBy(group.id, member.bot_id) || group.coordination === "board") {
           this.store.retellUntaken(group.id, member.bot_id);
-          if (this.store.pending(group.id, member.bot_id).length || this.store.pendingReminderWakes(group.id, member.bot_id).length) void this.serial(group.id, () => this.pump(group.id, member.bot_id));
+          if (this.store.pending(group.id, member.bot_id).length || this.store.pendingReminderWakes(group.id, member.bot_id).length || this.store.owedReports(group.id, member.bot_id).length) void this.serial(group.id, () => this.pump(group.id, member.bot_id));
           continue;
         }
         const catchUp = !!seat && !seat.archivedAt && this.store.unreadPlaces(group.id, member.bot_id).length > 0;
@@ -1318,6 +1583,10 @@ export class GroupChats {
         // A reminder's wake that hadn't reached the seat is still owed; pump skips what the catch-up told.
         if ((!catchUp && this.store.pending(group.id, member.bot_id).length) || this.store.pendingReminderWakes(group.id, member.bot_id).length) void this.serial(group.id, () => this.pump(group.id, member.bot_id));
       }
+    }
+    // An open request on a board whose bots hadn't joined yet: the rest of its minute, from when it was asked.
+    for (const round of this.store.openRounds()) {
+      if (!round.fannedOut) this.armFanOut(round.groupId, round.seq, Date.parse(round.createdAt) + this.boardFanOutMs - Date.now());
     }
     // Reminders that came due while pocket-bots was stopped fire now, as catch-ups.
     this.closed = false;
@@ -1330,9 +1599,10 @@ export class GroupChats {
     if (this.reminderTimer) clearTimeout(this.reminderTimer);
     this.reminderTimer = null;
     for (const backoff of [...this.errorBackoffs.values(), ...this.spawnBackoffs.values()]) if (backoff.timer) clearTimeout(backoff.timer);
-    for (const timer of [...this.noticeTimers.values(), ...this.sweepTimers.values()]) clearTimeout(timer);
+    for (const timer of [...this.noticeTimers.values(), ...this.sweepTimers.values(), ...this.fanOutTimers.values()]) clearTimeout(timer);
     this.noticeTimers.clear();
     this.sweepTimers.clear();
+    this.fanOutTimers.clear();
   }
 
   // ---------------------------------------------------------------- reminders firing
@@ -1379,6 +1649,12 @@ export class GroupChats {
   onInputAccepted(input: { chatId: string; clientMessageId: string }): void {
     // The inbox messages a notice told are now in front of the seat's runtime (not read yet).
     this.store.markNoticeAccepted(input.clientMessageId);
+    // A request it was chosen to answer: the turn that ends next is its turn at it.
+    const report = this.reportNotices.get(input.clientMessageId);
+    if (report) {
+      this.reportNotices.delete(input.clientMessageId);
+      this.store.markReportsTold(report.groupId, report.seqs);
+    }
     const delivery = this.deliveries.get(input.clientMessageId);
     if (!delivery) return;
     this.deliveries.delete(input.clientMessageId);
@@ -1425,6 +1701,8 @@ export class GroupChats {
       this.note(member.group_id, `${bot?.name ?? "A bot"}'s run stalled (${end.error ?? "no runtime events"}) and its process was gone, so pocket-bots restarted it.`, "seat.turn_failed", member.bot_id);
       return;
     }
+    // On a board, its turn on the requests it had taken in is over.
+    await this.endRounds(member.group_id, member.bot_id, end.outcome === "failed");
     if (end.outcome !== "failed") {
       if (end.outcome === "completed") {
         this.failures.delete(key);
@@ -1890,6 +2168,14 @@ export class GroupChats {
       await Promise.all(attachments.map((file) => rm(file.path, { force: true })));
       return `Already sent as #${message.seq}.`;
     }
+    // On a board, a reply to a request answers its round; one nobody's still working on is done.
+    if (replyTo && this.store.board(groupId)) {
+      const round = this.store.round(groupId, replyTo);
+      if (round && !round.closedAt) {
+        this.store.answerRound(groupId, replyTo, message.seq);
+        if (!round.members.some((member) => member.state === "working")) this.closeRound(groupId, replyTo);
+      }
+    }
     this.wake(groupId, woken);
     const undelivered = undeliveredMentionsText({ outside: mentions.outside, unknown: mentions.unknown, askBot: bot.contactBots !== "off" && !this.ledBy(groupId, bot.id), ...(await this.ledMentions(bot, groupId, mentions)) });
     const attached = attachments.length ? ` with ${attachments.map((file) => file.name).join(", ")} attached` : "";
@@ -1976,7 +2262,10 @@ export class GroupChats {
     const all = this.store.pending(groupId, botId);
     // Its fired reminders whose wake hasn't reached it: they go in the same notice.
     const reminders = this.store.pendingReminderWakes(groupId, botId);
-    if (all.length === 0 && reminders.length === 0) return;
+    // On a board, the requests it was chosen to answer (each is told once).
+    const inFlight = new Set([...this.reportNotices.values()].flatMap((notice) => (notice.groupId === groupId ? notice.seqs : [])));
+    const reports = group.coordination === "board" ? this.store.owedReports(groupId, botId).filter((seq) => !inFlight.has(seq)) : [];
+    if (all.length === 0 && reminders.length === 0 && reports.length === 0) return;
     let seat = member.seat_chat_id ? this.host.chats.get(member.seat_chat_id) : null;
     if (seat?.archivedAt) seat = null;
     const busy = !!seat && isBusy(seat.status);
@@ -1987,13 +2276,15 @@ export class GroupChats {
     // Its session is for another piece: the new one waits for the turn to end, then starts a session of its own.
     if (busy && piece?.switching) return;
     const fresh = pending.some((entry) => !entry.noticed);
-    if (seat && !fresh && reminders.length === 0) return;
+    if (seat && !fresh && reminders.length === 0 && reports.length === 0) return;
     const key = this.key(groupId, botId);
     const untold = pending.filter((entry) => !entry.noticed).map((entry) => entry.message.seq);
     // Its runtime stopped, or its seat stopped starting: its inbox waits for a wake that starts it.
     const spawn = this.spawnBackoffs.get(key);
     if (this.stopped.has(key) || (spawn?.stopped && !spawn.serverStart)) {
       this.store.markDeliveryFailed(groupId, botId, spawn?.stopped ? "not_launched" : "runtime_error", untold);
+      // On a board, its requests go on without it.
+      if (group.coordination === "board") await this.abandonRounds(groupId, botId);
       return;
     }
     // In a backoff: what came in waits for its end, and a mention arriving now counts as lost
@@ -2030,13 +2321,15 @@ export class GroupChats {
     // The group's folder (or the bot's own) changed since the seat started: it starts over there, with a briefing.
     const folder = this.seatFolder(group, bot);
     const moved = !!seat && !busy && !reset && seat.cwd !== folder;
-    if (seat && !busy && (reset || moved || this.stale(seat))) {
+    // The group's way of working changed since the seat started: its prompt and tools are for the old one.
+    const recast = !!seat && !busy && !reset && !moved && (seat.labels[GROUP_COORDINATION_LABEL] ?? "chat") !== group.coordination;
+    if (seat && !busy && (reset || moved || recast || this.stale(seat))) {
       // Cheaper to start over than to resume a big context whose cache has gone cold; the new
       // seat starts with a briefing built from the old one.
       const entries = this.host.chats.timeline(seat.id, { direction: "tail", limit: 500 }).entries;
       const inbox = new Set(pending.map((entry) => entry.message.seq));
       const seen = this.store.history(groupId, botId, BRIEFING_MESSAGES).filter((message) => !inbox.has(message.seq));
-      briefing = await briefingPanel({ messages: seen, entries, cwd: seat.cwd, meId: bot.id, parents: this.parents(groupId, seen), ...(reset ? { reason: "reset" as const } : moved ? { reason: "moved" as const, folder } : {}) });
+      briefing = await briefingPanel({ messages: seen, entries, cwd: seat.cwd, meId: bot.id, parents: this.parents(groupId, seen), ...(reset ? { reason: "reset" as const } : moved ? { reason: "moved" as const, folder } : recast ? { reason: "recast" as const } : {}) });
       await this.host.chats.archive(seat.id).catch(() => undefined);
       this.store.setSeat(groupId, botId, null);
       this.clearBackoff(key);
@@ -2049,8 +2342,11 @@ export class GroupChats {
     }
     const joins = this.threadJoins(groupId, botId, pending, !!piece);
     const shown = new Set(joins.flatMap((join) => [...join.recent.map((message) => message.seq), join.trigger.seq]));
-    // A led member gets its piece's messages in full, so it needn't read its inbox for them.
-    const handed = piece ? pending.filter((entry) => !shown.has(entry.message.seq)).slice(-HANDED_MAX).map((entry) => entry.message) : [];
+    // A led member gets its piece's messages in full, so it needn't read its inbox for them; on a
+    // board, so does a bot for the requests it works on.
+    const rounds = group.coordination === "board" ? await this.roundNotices(groupId, botId, pending, reports) : [];
+    const handedSeqs = new Set(rounds.filter((notice) => notice.kind !== "report").map((notice) => notice.seq));
+    const handed = piece ? pending.filter((entry) => !shown.has(entry.message.seq)).slice(-HANDED_MAX).map((entry) => entry.message) : pending.filter((entry) => handedSeqs.has(entry.message.seq) && !shown.has(entry.message.seq)).map((entry) => entry.message);
     for (const message of handed) shown.add(message.seq);
 
     const text = wakeText({
@@ -2062,6 +2358,7 @@ export class GroupChats {
       joins,
       briefing,
       reminders: reminders.map((reminder) => reminderFiredText(reminder, reminder.catchup)),
+      rounds: rounds.map(roundNoticeText),
       ...(handed.length ? { handed: { messages: handed, parents: this.parents(groupId, handed) } } : {}),
       // A led member's session is for one piece: its other tasks come back with their threads.
       owed: seat || piece ? [] : this.store.tasks(groupId, { statuses: OPEN_TASKS, assigneeId: botId }),
@@ -2070,6 +2367,7 @@ export class GroupChats {
     const clientMessageId = randomUUID();
     const told = pending.map((entry) => entry.message.seq);
     this.store.tieToNotice(groupId, botId, told, clientMessageId);
+    if (reports.length) this.reportNotices.set(clientMessageId, { groupId, seqs: reports });
     if (joins.length || handed.length) {
       this.deliveries.set(clientMessageId, {
         groupId,
@@ -2086,7 +2384,7 @@ export class GroupChats {
           title: `Group · ${group.name}`,
           cwd: folder,
           extraFolders: this.extraFoldersOf(this.store.group(groupId) ?? group),
-          labels: { [GROUP_LABEL]: groupId },
+          labels: { [GROUP_LABEL]: groupId, [GROUP_COORDINATION_LABEL]: group.coordination },
           group: { id: groupId, name: group.name },
           clientMessageId,
           ...(files.images.length ? { images: files.images } : {}),
@@ -2118,6 +2416,7 @@ export class GroupChats {
       if (piece && piece.work !== null) this.store.setSeatTask(groupId, botId, piece.work);
     } catch (error) {
       this.deliveries.delete(clientMessageId);
+      this.reportNotices.delete(clientMessageId);
       const detail = error instanceof Error ? error.message : String(error);
       if (!seat) {
         // A new seat that couldn't start. (A seat that exists and couldn't start is told by

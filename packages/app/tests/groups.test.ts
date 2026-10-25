@@ -1029,7 +1029,7 @@ describe("a group with a leader", () => {
     const seat = async (botId: string) => ({ bot: (await group.host.bot(botId))!, agentId: "seat", host: group.host, relay: null as never, groups: group.groups, groupId: group.id });
     const listed = async (botId: string) => ((await answerMcp({ jsonrpc: "2.0", id: 1, method: "tools/list" }, BOT_TOOLS, await seat(botId))) as { result: { tools: { name: string }[] } }).result.tools.map((tool) => tool.name);
     const setupTools = ["get_setup", "propose_skill", "propose_routine", "propose_changes"];
-    expect(await listed("alpha")).toEqual(BOT_TOOLS.map((tool) => tool.name).filter((name) => !setupTools.includes(name)));
+    expect(await listed("alpha")).toEqual(BOT_TOOLS.map((tool) => tool.name).filter((name) => !setupTools.includes(name) && !name.startsWith("board_")));
     expect(await listed("beta")).toEqual(["group_send", "group_send_draft", "group_read", "group_claim", "group_react", "group_members", "search_chats"]);
     const tasks = (await answerMcp({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "group_task", arguments: { action: "list" } } }, BOT_TOOLS, await seat("beta"))) as { result: { isError?: boolean } };
     expect(tasks.result.isError).toBeUndefined();
@@ -1188,5 +1188,176 @@ describe("a led member's pieces of work", () => {
     const second = seen.find((wake) => wake.text.includes("second piece"))!;
     expect(second.chat).not.toBe(firstChat);
     expect(second.text).not.toContain("first piece");
+  });
+});
+
+describe("a group working through its board", () => {
+  /** The bots' turns as they're woken: the text that started each, and what each tool call returned. */
+  type Wake = { bot: string; text: string; results: string[] };
+  const boardGroup = async (script: BotScript, bots = ["alpha", "beta", "gamma"], fanOutMs = 60_000) => {
+    const wakes: Wake[] = [];
+    const group = await setup(
+      (turn, step, botId) => {
+        if (!delivered(turn)) return null;
+        if (step === 0) wakes.push({ bot: botId, text: turn.text, results: [] });
+        const wake = wakes.filter((entry) => entry.bot === botId).at(-1)!;
+        wake.results = [...turn.results];
+        return script(turn, step, botId);
+      },
+      bots,
+      { boardFanOutMs: fanOutMs },
+    );
+    await group.groups.update(group.id, { coordination: "board" });
+    return { ...group, wakes };
+  };
+
+  it("sends an open request to one bot, brings the others in when it publishes, and has the last one answer", async () => {
+    let request = 0;
+    const group = await boardGroup((turn, step, botId) => {
+      const last = turn.results.at(-1) ?? "";
+      if (botId === "alpha") {
+        if (step === 0) return { tool: "board_publish", args: { sub_task: "I've split the request into part one and part two", artifact: "part one: the parser; part two: its tests", rationale: `#${request} asked for both`, refs: [`#${request}`], claim: "plan" } };
+        if (step === 1) return { tool: "board_finish", args: { request } };
+        return null;
+      }
+      if (botId === "beta") {
+        if (step === 0) return { tool: "board_search", args: { query: "part one part two" } };
+        if (step === 1) return { tool: "board_publish", args: { sub_task: "I've taken part one", artifact: "working on the parser", rationale: "B1 split the work", refs: ["B1"], claim: "part one" } };
+        if (step === 2) return { tool: "board_publish", args: { sub_task: "I've fixed the parser", artifact: "parser fixed; its tests pass", rationale: "B1 gave the piece", refs: ["B1"] } };
+        if (step === 3) return { tool: "board_finish", args: { request } };
+        return null;
+      }
+      if (step === 0) return { wait: 60 };
+      if (step === 1) return { tool: "board_publish", args: { sub_task: "I've taken part one", artifact: "starting", rationale: "B1 split the work", refs: ["B1"], claim: "Part One " } };
+      if (step === 2) return { tool: "board_publish", args: { sub_task: "I've taken part two", artifact: "starting", rationale: "B1 split the work", refs: ["B1"], claim: "part two" } };
+      if (step === 3) return { wait: 300 };
+      if (step === 4) return { tool: "board_finish", args: { request } };
+      if (step === 5 && last.startsWith("You're the last")) return { tool: "board_search", args: { query: "parser tests" } };
+      if (step === 6) return { tool: "group_send", args: { text: "Done: the parser is fixed and its tests are written.", reply_to: request } };
+      return null;
+    });
+    stop = group.stop;
+    request = await group.groups.postFromUser(group.id, { text: "Fix the parser and write its tests." });
+    await until(async () => (await group.texts()).some((text) => text.startsWith("gamma: Done")) && group.idle(), 8_000);
+    await settle(group);
+
+    const [first, ...joined] = group.wakes;
+    // Alpha went first; the others joined only once it had published.
+    expect(first!.bot).toBe("alpha");
+    expect(first!.text).toContain(`You're first on #${request}; 2 other bots are waiting.`);
+    expect(first!.text).toContain("Fix the parser and write its tests.");
+    expect(first!.results[0]).toBe("Published as B1. Beta, Gamma join the request now, and will find it on the board.");
+    expect(first!.results[1]).toBe(`Noted: your part of #${request} is done. Still working: Beta, Gamma. The last one to finish answers the user, so stop here.`);
+    expect(joined.map((wake) => wake.bot).sort()).toEqual(["beta", "gamma"]);
+    const beta = joined.find((wake) => wake.bot === "beta")!;
+    expect(beta.text).toContain(`Alpha started on #${request}, and you join it with Gamma: you're 1 of 2 joining now.`);
+    expect(beta.text).toContain("Fix the parser and write its tests.");
+    expect(beta.results[0]).toContain("B1 — I've split the request into part one and part two");
+    expect(beta.results[0]).not.toContain("Alpha");
+    // Claims are first come, first served, however they're written.
+    const gamma = joined.find((wake) => wake.bot === "gamma")!;
+    expect(gamma.results[0]).toBe('Not published: "part one" is already taken (B2): take another piece, and publish without that claim.');
+    expect(gamma.results[2]).toMatch(/^You're the last on #\d+: answer the user now/);
+
+    // One answer, which reaches the user and no other bot.
+    const bots = (await group.groups.messages(group.id)).messages.filter((message) => message.from.kind === "bot");
+    expect(bots.map((message) => message.text)).toEqual(["Done: the parser is fixed and its tests are written."]);
+    expect(group.store.receivers(group.id, bots[0]!.seq).map((row) => row.receiverId).sort()).toEqual(["gamma", "user"]);
+    const round = group.store.round(group.id, request)!;
+    expect(round).toMatchObject({ starterId: "alpha", fannedOut: true, reporterId: "gamma", answerSeq: bots[0]!.seq });
+    expect(round.closedAt).not.toBeNull();
+    expect(group.store.boardEntries(group.id).map((entry) => [entry.number, entry.authorId, entry.claim])).toEqual([
+      [1, "alpha", "plan"],
+      [2, "beta", "part one"],
+      [3, "beta", null],
+      [4, "gamma", "part two"],
+    ]);
+  });
+
+  it("lets the first bot answer a quick request alone: the others are never woken", async () => {
+    const group = await boardGroup((turn, step) => (step === 0 ? { tool: "group_send", args: { text: "Done.", reply_to: Number(/first on #(\d+)/.exec(turn.text)![1]) } } : null), ["alpha", "beta", "gamma"], 150);
+    stop = group.stop;
+    const request = await group.groups.postFromUser(group.id, { text: "What's 2+2?" });
+    await settle(group);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await settle(group);
+    expect(group.wakes.map((wake) => wake.bot)).toEqual(["alpha"]);
+    expect(group.wakes[0]!.text).toContain("If you can do it alone in a few steps, do it and answer");
+    const round = group.store.round(group.id, request)!;
+    expect(round.closedAt).not.toBeNull();
+    expect(round.members.map((member) => [member.botId, member.state])).toEqual([
+      ["alpha", "finished"],
+      ["beta", "skipped"],
+      ["gamma", "skipped"],
+    ]);
+    // The next open request goes to the bot that went first longest ago.
+    await group.groups.postFromUser(group.id, { text: "And 3+3?" });
+    await settle(group);
+    expect(group.wakes.map((wake) => wake.bot)).toEqual(["alpha", "beta"]);
+  });
+
+  it("brings the others in after the wait, and wakes the last to finish to answer when nobody did", async () => {
+    let request = 0;
+    const group = await boardGroup(
+      (turn, step, botId) => {
+        if (turn.text.includes("Everyone working on")) return step === 0 ? { tool: "group_send", args: { text: "Both parts are done.", reply_to: request } } : null;
+        if (botId === "alpha") {
+          if (step === 0) return { wait: 350 };
+          if (step === 1) return { tool: "board_publish", args: { sub_task: "I've done part one", artifact: "done", rationale: `#${request} asked for it`, refs: [`#${request}`] } };
+          return null;
+        }
+        if (step === 0) return { tool: "board_publish", args: { sub_task: "I've done part two", artifact: "done", rationale: `#${request} asked for it`, refs: [`#${request}`], claim: "part two" } };
+        return null;
+      },
+      ["alpha", "beta"],
+      100,
+    );
+    stop = group.stop;
+    request = await group.groups.postFromUser(group.id, { text: "Do parts one and two." });
+    await until(async () => (await group.texts()).some((text) => text.startsWith("alpha: Both parts")) && group.idle(), 8_000);
+    await settle(group);
+    // Beta joined while Alpha was still working, before Alpha published anything.
+    expect(group.wakes.map((wake) => wake.bot)).toEqual(["alpha", "beta", "alpha"]);
+    expect(group.wakes[1]!.text).toContain(`Alpha started on #${request}, and you join it: you're 1 of 1 joining now.`);
+    // Neither called board_finish: their turns ending finished them, and Alpha, last, was woken to answer.
+    expect(group.wakes[2]!.text).toContain(`Everyone working on #${request} has finished and nobody has answered it`);
+    const round = group.store.round(group.id, request)!;
+    expect(round).toMatchObject({ reporterId: "alpha", reportTold: true });
+    expect(round.members.map((member) => member.finishedHow)).toEqual(["turn", "turn"]);
+    expect(round.closedAt).not.toBeNull();
+  });
+
+  it("starts every bot the user names at once, and keeps bots' messages from one another", async () => {
+    let request = 0;
+    const group = await boardGroup((turn, step, botId) => {
+      if (botId === "alpha" && step === 0) return { tool: "group_send", args: { text: "@Beta can you check the tests?" } };
+      if (step === 0) return { tool: "board_finish", args: { request } };
+      return null;
+    });
+    stop = group.stop;
+    request = await group.groups.postFromUser(group.id, { text: "@Alpha @Gamma look at the build." });
+    await settle(group);
+    // Beta isn't woken by Alpha's @mention: on a board, bots don't message each other.
+    expect(group.wakes.map((wake) => wake.bot).sort()).toEqual(["alpha", "gamma"]);
+    expect(group.wakes.find((wake) => wake.bot === "gamma")!.text).toContain(`The user asked you and Alpha on #${request}: work on it together through the board`);
+    const mention = (await group.groups.messages(group.id)).messages.find((message) => message.text.startsWith("@Beta"))!;
+    expect(group.store.receivers(group.id, mention.seq).map((row) => row.receiverId).sort()).toEqual(["alpha", "user"]);
+  });
+
+  it("lists a seat only the board's tools and the ones it answers with, and won't take a leader", async () => {
+    const group = await boardGroup(() => null, ["alpha", "beta"]);
+    stop = group.stop;
+    const { answerMcp } = await import("../src/server/tools/mcp");
+    const { BOT_TOOLS } = await import("../src/server/tools");
+    const seat = { bot: (await group.host.bot("alpha"))!, agentId: "seat", host: group.host, relay: null as never, groups: group.groups, groupId: group.id };
+    const listed = (await answerMcp({ jsonrpc: "2.0", id: 1, method: "tools/list" }, BOT_TOOLS, seat)) as { result: { tools: { name: string }[] } };
+    expect(listed.result.tools.map((tool) => tool.name)).toEqual(["group_send", "group_send_draft", "group_read", "group_react", "board_publish", "board_search", "board_visit", "board_finish", "search_chats"]);
+    await expect(group.groups.update(group.id, { leaderId: "alpha" })).rejects.toThrow(/has no leader/);
+    expect((await group.groups.list())[0]).toMatchObject({ coordination: "board", leaderId: null });
+    // Back to the chat: the board's tools go, the group's come back.
+    await group.groups.update(group.id, { coordination: "chat" });
+    const back = (await answerMcp({ jsonrpc: "2.0", id: 2, method: "tools/list" }, BOT_TOOLS, seat)) as { result: { tools: { name: string }[] } };
+    expect(back.result.tools.map((tool) => tool.name)).toContain("group_claim");
+    expect(back.result.tools.map((tool) => tool.name)).not.toContain("board_publish");
   });
 });

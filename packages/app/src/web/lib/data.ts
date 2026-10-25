@@ -12,6 +12,7 @@ import {
   chatTimelineRpc,
   groupMessagesRpc,
   groupRemindersRpc,
+  groupBoardRpc,
   groupTasksRpc,
   groupsListRpc,
   providersRpc,
@@ -44,6 +45,7 @@ export const keys = {
   groupThread: (groupId: string, thread: number) => ["groups", "messages", groupId, "thread", thread] as const,
   groupTasks: (groupId: string) => ["groups", "messages", groupId, "tasks"] as const,
   groupReminders: (groupId: string) => ["groups", "messages", groupId, "reminders"] as const,
+  groupBoard: (groupId: string) => ["groups", "messages", groupId, "board"] as const,
 };
 
 // ---------------------------------------------------------------- the bots document
@@ -358,6 +360,11 @@ export function useGroupMessages(groupId: string, thread: number | null = null) 
 /** The bots' pending reminders in a group, refreshed with its messages. */
 export function useGroupReminders(groupId: string, enabled: boolean) {
   return useQuery({ queryKey: keys.groupReminders(groupId), queryFn: async () => (await rpc(groupRemindersRpc, { groupId })).reminders, enabled });
+}
+
+/** A board group's shared board, refreshed with its messages. */
+export function useGroupBoard(groupId: string, enabled: boolean) {
+  return useQuery({ queryKey: keys.groupBoard(groupId), queryFn: async () => (await rpc(groupBoardRpc, { groupId })).entries, enabled });
 }
 
 /** A group's tasks (its task board), refreshed with its messages. */
