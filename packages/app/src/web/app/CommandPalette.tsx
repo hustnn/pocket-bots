@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { BOT_LABEL, type Bot } from "../../shared/bot";
+import { BOT_LABEL, type Bot, type Team } from "../../shared/bot";
 import type { ChatSnapshot } from "../../shared/chat-types";
 import { displayTitle } from "../../shared/chat";
 import { GROUP_LABEL, type GroupSummary } from "../../shared/group-chat";
@@ -13,14 +13,14 @@ import { useAllChats, useGroups, useStoreDoc } from "../lib/data";
 import { placeKey, setPendingTerms } from "../lib/highlight";
 import { navigate } from "../lib/router";
 
-// The command palette (Cmd/Ctrl+K): jump to a bot, a group, a chat or a routine by name,
-// and find past messages in one-to-one chats and groups; each result says where it is, and
-// picking a message opens its place at that message.
+// The command palette (Cmd/Ctrl+K): jump to a bot, a team, a team's session, a chat or a
+// routine by name, and find past messages in one-to-one chats and sessions; each result says
+// where it is, and picking a message opens its place at that message.
 
 /** A place to jump to by name. */
 interface Jump {
   key: string;
-  kind: "bot" | "group" | "chat" | "routine";
+  kind: "bot" | "team" | "group" | "chat" | "routine";
   name: string;
   /** Where it is, or what it is. */
   where: string;
@@ -33,7 +33,7 @@ interface Jump {
 /** One line of the palette: a place or a message. */
 type Entry = { kind: "jump"; jump: Jump } | { kind: "hit"; hit: SearchHit };
 
-const KIND_LABEL: Record<Jump["kind"], string> = { bot: "Bot", group: "Group", chat: "Chat", routine: "Routine" };
+const KIND_LABEL: Record<Jump["kind"], string> = { bot: "Bot", team: "Team", group: "Session", chat: "Chat", routine: "Routine" };
 const PER_KIND = 6;
 const MESSAGE_LIMIT = 30;
 
@@ -53,9 +53,9 @@ function KindIcon({ name }: { name: IconName }) {
   );
 }
 
-/** Places whose name (or where they are) has every term; with none, the bots and groups and the latest chats. */
-function jumps(input: { bots: readonly Bot[]; groups: readonly GroupSummary[]; chats: readonly ChatSnapshot[]; terms: readonly string[]; onOpenRoutine: (botId: string, routineId: string) => void }): Jump[] {
-  const { bots, groups, chats, terms } = input;
+/** Places whose name (or where they are) has every term; with none, the bots, teams and latest sessions and chats. */
+function jumps(input: { bots: readonly Bot[]; teams: readonly Team[]; groups: readonly GroupSummary[]; chats: readonly ChatSnapshot[]; terms: readonly string[]; onOpenRoutine: (botId: string, routineId: string) => void }): Jump[] {
+  const { bots, teams, groups, chats, terms } = input;
   const byId = new Map(bots.map((bot) => [bot.id, bot]));
   const botBadge = (bot: Bot) => (bot.archived ? "Archived" : bot.hidden ? "Hidden" : undefined);
   const all: Jump[] = [];
@@ -63,9 +63,17 @@ function jumps(input: { bots: readonly Bot[]; groups: readonly GroupSummary[]; c
     const badge = botBadge(bot);
     all.push({ key: `bot:${bot.id}`, kind: "bot", name: bot.name || "Untitled bot", where: bot.title, ...(badge ? { badge } : {}), icon: <Avatar avatar={bot.avatar} size={22} />, pick: () => navigate({ page: "bot", botId: bot.id, chatId: null }) });
   }
+  const teamById = new Map(teams.map((team) => [team.id, team]));
+  for (const team of teams) {
+    const members = team.memberIds.flatMap((id) => byId.get(id) ?? []);
+    all.push({ key: `team:${team.id}`, kind: "team", name: team.name, where: members.map((bot) => bot.name).join(", "), icon: <AvatarStack avatars={members.map((bot) => bot.avatar)} size={18} />, pick: () => navigate({ page: "team", teamId: team.id }) });
+  }
+  // A team's sessions; group chats made on their own, from before teams, aren't listed.
   for (const group of groups) {
+    const team = group.teamId ? teamById.get(group.teamId) : undefined;
+    if (!team) continue;
     const members = group.memberIds.flatMap((id) => byId.get(id) ?? []);
-    all.push({ key: `group:${group.id}`, kind: "group", name: group.name, where: members.map((bot) => bot.name).join(", "), icon: <AvatarStack avatars={members.map((bot) => bot.avatar)} size={18} />, ...(group.last ? { at: group.last.at } : {}), pick: () => navigate({ page: "group", groupId: group.id }) });
+    all.push({ key: `group:${group.id}`, kind: "group", name: group.name, where: team.name, icon: <AvatarStack avatars={members.map((bot) => bot.avatar)} size={18} />, ...(group.last ? { at: group.last.at } : {}), pick: () => navigate({ page: "group", groupId: group.id }) });
   }
   // The chats a bot keeps on its own (a group seat's side is reached from its group), newest first.
   const own = chats.filter((chat) => chat.labels?.[BOT_LABEL] && !chat.labels?.[GROUP_LABEL] && byId.has(chat.labels[BOT_LABEL]!)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -79,13 +87,18 @@ function jumps(input: { bots: readonly Bot[]; groups: readonly GroupSummary[]; c
     }
   }
   if (terms.length === 0) {
-    // A start: the bots on the list, the groups, and the latest chats.
-    return [...all.filter((jump) => jump.kind === "bot" && !jump.badge).slice(0, PER_KIND), ...all.filter((jump) => jump.kind === "group").slice(0, PER_KIND), ...all.filter((jump) => jump.kind === "chat").slice(0, PER_KIND)];
+    // A start: the bots on the list, the teams, the latest sessions and the latest chats.
+    return [
+      ...all.filter((jump) => jump.kind === "bot" && !jump.badge).slice(0, PER_KIND),
+      ...all.filter((jump) => jump.kind === "team").slice(0, PER_KIND),
+      ...all.filter((jump) => jump.kind === "group").slice(0, PER_KIND),
+      ...all.filter((jump) => jump.kind === "chat").slice(0, PER_KIND),
+    ];
   }
   const matching = all.filter((jump) => hasAllTerms(`${jump.name} ${jump.where}`, terms));
-  // Within each kind: names that start with what's typed, then names with every word, then the rest (a bot's chat, a group with that bot).
+  // Within each kind: names that start with what's typed, then names with every word, then the rest (a bot's chat, a team with that bot).
   const rank = (jump: Jump) => (jump.name.toLowerCase().startsWith(terms[0]!) ? 0 : hasAllTerms(jump.name, terms) ? 1 : 2);
-  const kinds: Jump["kind"][] = ["bot", "group", "chat", "routine"];
+  const kinds: Jump["kind"][] = ["bot", "team", "group", "chat", "routine"];
   return kinds.flatMap((kind) => matching.filter((jump) => jump.kind === kind).sort((a, b) => rank(a) - rank(b)).slice(0, PER_KIND));
 }
 
@@ -103,8 +116,8 @@ export function CommandPalette({ onClose, onOpenRoutine }: { onClose: () => void
   const groupById = useMemo(() => new Map((groups.data ?? []).map((group) => [group.id, group])), [groups.data]);
   const terms = useMemo(() => searchTerms(query), [query]);
   const places = useMemo(
-    () => jumps({ bots, groups: groups.data ?? [], chats: (allChats.data ?? []) as ChatSnapshot[], terms, onOpenRoutine }),
-    [bots, groups.data, allChats.data, terms, onOpenRoutine],
+    () => jumps({ bots, teams: doc.data?.values.teams ?? [], groups: groups.data ?? [], chats: (allChats.data ?? []) as ChatSnapshot[], terms, onOpenRoutine }),
+    [bots, doc.data, groups.data, allChats.data, terms, onOpenRoutine],
   );
 
   // Past messages, for what's typed (two characters or more), a moment after typing stops.
@@ -204,7 +217,7 @@ export function CommandPalette({ onClose, onOpenRoutine }: { onClose: () => void
           <input
             autoFocus
             className="grow"
-            placeholder="Jump to a bot, group, chat or routine, or search messages"
+            placeholder="Jump to a bot, team, session, chat or routine, or search messages"
             aria-label="Jump to or search"
             role="combobox"
             aria-expanded

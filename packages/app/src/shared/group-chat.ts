@@ -188,6 +188,8 @@ export const GroupSummarySchema = z.object({
   wakeMode: WakeModeSchema,
   /** The member that plans and hands out the work; the others take only what it (or the user) hands them. */
   leaderId: z.string().nullable().default(null),
+  /** The team this group is a session of; null for a group made on its own. */
+  teamId: z.string().nullable().default(null),
   /** The folder every member's session for the group works in; null: each works in its own. */
   cwd: z.string().nullable().default(null),
   /** Folders besides the working folder every member's session may use. */
@@ -223,6 +225,22 @@ export function membersProblem(memberIds: readonly string[]): string | null {
   if (count < GROUP_MIN_BOTS) return `A group chat needs at least ${GROUP_MIN_BOTS} bots.`;
   if (count > GROUP_MAX_BOTS) return `A group chat can have at most ${GROUP_MAX_BOTS} bots.`;
   return null;
+}
+
+/** Why a team can't be saved with these members and leader, or null. */
+export function teamProblem(input: { memberIds: readonly string[]; leaderId: string | null }): string | null {
+  const count = new Set(input.memberIds).size;
+  if (count < GROUP_MIN_BOTS) return `A team needs at least ${GROUP_MIN_BOTS} bots.`;
+  if (count > GROUP_MAX_BOTS) return `A team can have at most ${GROUP_MAX_BOTS} bots.`;
+  if (!input.leaderId) return "Pick the bot that leads the team.";
+  if (!input.memberIds.includes(input.leaderId)) return "The leader must be one of the team's bots.";
+  return null;
+}
+
+/** A team session's name: the start of the task the user gave it, on one line. */
+export function sessionName(task: string): string {
+  const line = task.replace(/\s+/g, " ").trim();
+  return line.length > 60 ? `${line.slice(0, 57)}…` : line || "New session";
 }
 
 // ---------------------------------------------------------------- mentions
@@ -1071,15 +1089,17 @@ export function inboxText(places: readonly UnreadPlace[], meId: string, options:
  * or a line of the member's rules). `questionTool`: the runtime's own tool for asking the user,
  * whose questions the group shows. `lead`: the group has a leader, and this seat is it (with the
  * members it hands work to) or one of the members it leads, which gets only its own rules and the
- * tools for its piece (see leadSection and the `led` tools).
+ * tools for its piece (see leadSection and the `led` tools). `instructions`: the user's standing
+ * instructions for a team, which every seat of its sessions gets right after its role.
  */
-export function groupPrompt(groupName: string, options: { subAgents?: boolean; questionTool?: string; lead?: GroupLead } = {}): string {
+export function groupPrompt(groupName: string, options: { subAgents?: boolean; questionTool?: string; lead?: GroupLead; instructions?: string } = {}): string {
   const role = options.lead?.role ?? null;
   const member = role === "member";
   const section = (title: string, lines: readonly (string | false)[]) => [title, ...lines.filter((line): line is string => line !== false)].join("\n");
   return [
     `This chat is your seat in the group chat "${groupName}" in Pocket Bots, shared by the user and other bots. Nobody else reads this chat: the user and the other bots see only what you send with group_send, your only voice in the group. Approvals, sign-ins and anything private for the user stay here, outside the group.`,
     ...(options.lead ? [leadSection(options.lead, options.subAgents ?? false)] : []),
+    ...(options.instructions?.trim() ? [`The user's instructions for everyone in this team:\n${options.instructions.trim()}`] : []),
     section("Messages:", [
       !member &&
         "- pocket-bots wakes you with a notice of where new messages are, not what they say. group_read with unread: true reads your inbox (add thread: N, or top_level: true, for one place); group_inbox lists the places without reading them. Read them when it suits your current work: a notice needn't interrupt it, and unread messages may still hold work for you.",

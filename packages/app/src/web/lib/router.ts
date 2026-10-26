@@ -1,13 +1,15 @@
 import { useSyncExternalStore } from "react";
 
-// Hash routes: #/, #/bot/<id>, #/bot/<id>/chat/<chatId>, #/group/<id>,
-// #/library/<tab>, #/settings. A chat or a group can name a message to show
-// (a search result): #/bot/<id>/chat/<chatId>/at/<seq>, #/group/<id>/at/<seq>
-// and #/group/<id>/thread/<seq>/at/<seq>.
+// Hash routes: #/, #/bot/<id>, #/bot/<id>/chat/<chatId>, #/team/<id> (a new
+// session of a team), #/group/<id> (a session), #/library/<tab>, #/settings.
+// A chat or a group can name a message to show (a search result):
+// #/bot/<id>/chat/<chatId>/at/<seq>, #/group/<id>/at/<seq> and
+// #/group/<id>/thread/<seq>/at/<seq>.
 
 export type Route =
   | { page: "home" }
   | { page: "bot"; botId: string; chatId: string | null; at?: number }
+  | { page: "team"; teamId: string }
   | { page: "group"; groupId: string; at?: number; thread?: number }
   | { page: "library"; tab: "skills" | "mcp" | "apps" }
   | { page: "settings" };
@@ -26,6 +28,7 @@ export function parseRoute(hash: string): Route {
     const at = chatId ? numberAfter(parts, "at", 4) : undefined;
     return { page: "bot", botId: parts[1], chatId, ...(at ? { at } : {}) };
   }
+  if (parts[0] === "team" && parts[1]) return { page: "team", teamId: parts[1] };
   if (parts[0] === "library") return { page: "library", tab: parts[1] === "mcp" || parts[1] === "apps" ? parts[1] : "skills" };
   if (parts[0] === "group" && parts[1]) {
     const at = numberAfter(parts, "at", 2);
@@ -46,6 +49,8 @@ export function routeHash(route: Route): string {
     }
     case "library":
       return `#/library/${route.tab}`;
+    case "team":
+      return `#/team/${encodeURIComponent(route.teamId)}`;
     case "group":
       return `#/group/${encodeURIComponent(route.groupId)}${route.at ? `${route.thread ? `/thread/${route.thread}` : ""}/at/${route.at}` : ""}`;
     case "settings":

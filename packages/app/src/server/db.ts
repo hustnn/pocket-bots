@@ -432,6 +432,14 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE groups ADD COLUMN extra_folders TEXT NOT NULL DEFAULT '[]';
     `);
   },
+  // 21: a group can be a session of a team (bots.json): the team's id, and the team's instructions as
+  // they were when the session started, which every seat's prompt carries.
+  (db) => {
+    db.exec(`
+      ALTER TABLE groups ADD COLUMN team_id TEXT;
+      ALTER TABLE groups ADD COLUMN instructions TEXT NOT NULL DEFAULT '';
+    `);
+  },
 ];
 
 /** How much of one message the search index takes: a long pasted attachment doesn't need all of it. */

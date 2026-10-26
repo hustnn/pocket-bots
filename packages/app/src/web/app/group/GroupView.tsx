@@ -18,7 +18,6 @@ import { navigate, replaceRoute } from "../../lib/router";
 import { QuestionForm } from "../chat/Cards";
 import { ExtraFolders, folderName, PATH_ACCESS_NOTE, useReachesFoldersByPath } from "../folders";
 import { GroupComposer, senderName } from "./GroupComposer";
-import { MembersDialog } from "./GroupDialogs";
 
 function timeOf(at: string): string {
   const date = new Date(at);
@@ -741,7 +740,6 @@ export function GroupView({ groupId, at, atThread }: { groupId: string; at?: num
   const group = groups.data?.find((entry) => entry.id === groupId) ?? null;
   const { messages, hasOlder, loadingOlder, loadOlder, reach, loading, error, refetch } = useGroupMessages(groupId);
   const [replyTo, setReplyTo] = useState<GroupMessage | null>(null);
-  const [editingMembers, setEditingMembers] = useState(false);
   const [searching, setSearching] = useState(0);
   const pendingJump = useRef<number | null>(null);
   const [thread, setThread] = useState<{ seq: number; focus: number | null } | null>(null);
@@ -880,22 +878,25 @@ export function GroupView({ groupId, at, atThread }: { groupId: string; at?: num
     return <div className="splash">{groups.isPending ? <span className="spinner" /> : <p className="muted">That group chat no longer exists.</p>}</div>;
   }
 
+  // A team's session goes back to its team; a group made on its own (from before teams) to the start.
+  const team = group.teamId ? (doc.data?.values.teams.find((entry) => entry.id === group.teamId) ?? null) : null;
+  const back = () => navigate(team ? { page: "team", teamId: team.id } : { page: "home" });
   const rename = async () => {
-    const name = await feedback.prompt({ title: "Rename group", label: "Name", value: group.name, action: "Rename" });
+    const name = await feedback.prompt({ title: "Rename session", label: "Name", value: group.name, action: "Rename" });
     if (name === null || !name.trim() || name.trim() === group.name) return;
     await rpc(groupUpdateRpc, { groupId, name: name.trim() }).catch((failure: unknown) => feedback.error(errorText(failure)));
   };
   const remove = async () => {
     const yes = await feedback.confirm({
       title: `Delete ${group.name}?`,
-      body: "Its messages go. Each bot's side of the group is archived and stays in that bot's chat history; the bots themselves stay.",
+      body: "Its messages go. Each bot's side of the session is archived and stays in that bot's chat history; the bots themselves stay.",
       action: "Delete",
       danger: true,
     });
     if (!yes) return;
     try {
       await rpc(groupDeleteRpc, { groupId });
-      navigate({ page: "home" });
+      back();
     } catch (failure) {
       feedback.error(errorText(failure));
     }
@@ -907,19 +908,20 @@ export function GroupView({ groupId, at, atThread }: { groupId: string; at?: num
   });
   const menu: MenuItems = [
     { label: "Rename", icon: "edit", onSelect: () => void rename() },
-    { label: "Members", icon: "users", onSelect: () => setEditingMembers(true) },
+    ...(team ? [{ label: `Open ${team.name}`, icon: "users" as const, onSelect: back }] : []),
     ...(sides.length ? ["divider" as const, ...sides] : []),
     "divider",
-    { label: "Delete group", icon: "trash", danger: true, onSelect: () => void remove() },
+    { label: "Delete session", icon: "trash", danger: true, onSelect: () => void remove() },
   ];
 
   return (
     <UnreadThreads.Provider value={unreadThreads}>
       <div className="topbar">
-        <IconButton icon="chevronLeft" title="Back" onClick={() => navigate({ page: "home" })} />
+        <IconButton icon="chevronLeft" title={team ? `Back to ${team.name}` : "Back"} onClick={back} />
         <AvatarStack avatars={members.map((bot) => bot.avatar)} size={26} />
         <div className="title" style={{ cursor: "pointer" }} onClick={() => void rename()} title="Rename">
           {group.name}
+          {team ? <span className="subtitle"> · {team.name}</span> : null}
           <span className="subtitle"> · {members.map((bot) => (bot.id === group.leaderId ? `${bot.name} (leader)` : bot.name)).join(", ") || "no bots"}</span>
           {group.cwd ? (
             <span className="subtitle" title={`The bots work in ${group.cwd}`}>
@@ -937,8 +939,7 @@ export function GroupView({ groupId, at, atThread }: { groupId: string; at?: num
             setBoard((open) => !open);
           }}
         />
-        <IconButton icon="users" title="Members" onClick={() => setEditingMembers(true)} />
-        <MenuButton title="Group actions" entries={menu} />
+        <MenuButton title="Session actions" entries={menu} />
       </div>
       <GroupFolders group={group} providers={members.map((bot) => bot.provider)} />
       {searching ? <SearchPanel groupId={groupId} signal={searching} onPick={(message) => {
@@ -1036,11 +1037,8 @@ export function GroupView({ groupId, at, atThread }: { groupId: string; at?: num
             </div>
           ) : null}
           {live.length < GROUP_MIN_BOTS ? (
-            <div className="notice warning row" style={{ margin: "0 20px" }}>
-              <span className="grow">This group has fewer than {GROUP_MIN_BOTS} bots that can take part. Add one under Members.</span>
-              <Button small icon="users" onClick={() => setEditingMembers(true)}>
-                Members
-              </Button>
+            <div className="notice warning" style={{ margin: "0 20px" }}>
+              Fewer than {GROUP_MIN_BOTS} of this session's bots can take part: the others are archived or gone. Restore them, or start a new session from the team.
             </div>
           ) : null}
           <Activity members={members} seats={seats} chats={chats} />
@@ -1084,7 +1082,6 @@ export function GroupView({ groupId, at, atThread }: { groupId: string; at?: num
           />
         ) : null}
       </div>
-      {editingMembers ? <MembersDialog group={group} onClose={() => setEditingMembers(false)} /> : null}
     </UnreadThreads.Provider>
   );
 }

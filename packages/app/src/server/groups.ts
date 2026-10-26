@@ -307,13 +307,14 @@ export class GroupChats {
    * What a seat's prompt says about its group: the name, and with a leader, the seat's part: the
    * leader, with what each member it hands work to does and runs on, or a member, with its leader.
    */
-  async seatGroup(groupId: string, botId: string | null): Promise<{ name: string; lead?: GroupLead } | null> {
+  async seatGroup(groupId: string, botId: string | null): Promise<{ name: string; lead?: GroupLead; instructions?: string } | null> {
     const group = this.store.group(groupId);
     if (!group) return null;
+    const team = group.instructions.trim() ? { instructions: group.instructions } : {};
     const leaderId = this.store.leader(groupId);
-    if (!leaderId || !botId) return { name: group.name };
+    if (!leaderId || !botId) return { name: group.name, ...team };
     const bots = await this.liveBots();
-    if (botId !== leaderId) return { name: group.name, lead: { role: "member", leader: bots.get(leaderId)?.name ?? "the leader" } };
+    if (botId !== leaderId) return { name: group.name, lead: { role: "member", leader: bots.get(leaderId)?.name ?? "the leader" }, ...team };
     const members = this.store.members(groupId).flatMap((member) => {
       const bot = member.bot_id === leaderId ? null : bots.get(member.bot_id);
       if (!bot) return [];
@@ -321,7 +322,12 @@ export class GroupChats {
       const about = [bot.title.trim(), bot.description.trim() ? foldText(bot.description, 200) : "", `runs on ${runtime}${bot.model ? ` with ${bot.model}` : ""}`].filter(Boolean).join(" · ");
       return [{ name: bot.name, about }];
     });
-    return { name: group.name, lead: { role: "leader", members } };
+    return { name: group.name, lead: { role: "leader", members }, ...team };
+  }
+
+  /** The ids of a team's sessions, newest activity first. */
+  teamSessions(teamId: string): string[] {
+    return this.store.teamSessions(teamId).map((group) => group.id);
   }
 
   private summary(group: GroupRow): GroupSummary {
@@ -337,6 +343,7 @@ export class GroupChats {
       readSeq: this.store.cursor(group.id, USER_ID, 0),
       wakeMode: group.wake_mode,
       leaderId: this.store.leader(group.id),
+      teamId: group.team_id,
       cwd: group.cwd,
       extraFolders: this.extraFoldersOf(group),
       muted: members.filter((member) => member.muted_from_seq !== null).map((member) => member.bot_id),
@@ -347,8 +354,11 @@ export class GroupChats {
     };
   }
 
-  /** A new group; with `leaderId`, that member plans and hands out the work; with `cwd`, every seat works in that folder. */
-  async create(input: { name?: string | null; memberIds: string[]; leaderId?: string | null; cwd?: string | null; extraFolders?: string[] }): Promise<{ id: string }> {
+  /**
+   * A new group; with `leaderId`, that member plans and hands out the work; with `cwd`, every seat
+   * works in that folder. A team's session (teams.ts) carries the team's id and instructions.
+   */
+  async create(input: { name?: string | null; memberIds: string[]; leaderId?: string | null; cwd?: string | null; extraFolders?: string[]; teamId?: string | null; instructions?: string }): Promise<{ id: string }> {
     const memberIds = [...new Set(input.memberIds)];
     const problem = membersProblem(memberIds);
     if (problem) throw new RequestError(problem);
@@ -359,7 +369,7 @@ export class GroupChats {
     const cwd = input.cwd?.trim() ? await workFolder(input.cwd) : null;
     const folders = input.extraFolders?.length ? await extraFolders(input.extraFolders, cwd) : [];
     const id = newGroupChatId();
-    this.store.createGroup({ id, name: input.name?.trim() || defaultGroupName(memberIds.map((botId) => bots.get(botId)!.name)), memberIds, leaderId: input.leaderId ?? null, cwd, extraFolders: folders });
+    this.store.createGroup({ id, name: input.name?.trim() || defaultGroupName(memberIds.map((botId) => bots.get(botId)!.name)), memberIds, leaderId: input.leaderId ?? null, cwd, extraFolders: folders, teamId: input.teamId ?? null, instructions: input.instructions ?? "" });
     this.changed(id);
     return { id };
   }

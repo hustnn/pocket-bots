@@ -9,13 +9,14 @@ import { navigate, useRoute } from "../lib/router";
 import { BotPanel, openPanelTab } from "./panel/BotPanel";
 import { ChatView } from "./chat/ChatView";
 import { CommandPalette } from "./CommandPalette";
-import { NewGroupDialog } from "./group/GroupDialogs";
 import { GroupView } from "./group/GroupView";
 import { LibraryView } from "./library/LibraryView";
 import { NewBotDialog } from "./NewBotDialog";
 import { SettingsView } from "./SettingsView";
 import { Sidebar } from "./Sidebar";
 import { Splash } from "./Splash";
+import { TeamDialog } from "./team/TeamDialogs";
+import { TeamView } from "./team/TeamView";
 
 export function App() {
   useServerEvents();
@@ -24,7 +25,7 @@ export function App() {
   const status = useStatus();
   const [panelOpen, setPanelOpen] = useLocalState("pocket.panel", true);
   const [creating, setCreating] = useState(false);
-  const [creatingGroup, setCreatingGroup] = useState(false);
+  const [creatingTeam, setCreatingTeam] = useState(false);
   const [palette, setPalette] = useState(false);
   const feedback = useFeedback();
   useShortcut("k", () => setPalette((open) => !open));
@@ -84,9 +85,10 @@ export function App() {
       <div className="splash">{doc.isPending ? <span className="spinner" /> : <p className="muted">That bot no longer exists.</p>}</div>
     );
   } else if (route.page === "library") main = <LibraryView tab={route.tab} />;
+  else if (route.page === "team") main = <TeamView key={route.teamId} teamId={route.teamId} />;
   else if (route.page === "group") main = <GroupView key={route.groupId} groupId={route.groupId} {...(route.at ? { at: route.at } : {})} {...(route.thread ? { atThread: route.thread } : {})} />;
   else if (route.page === "settings") main = <SettingsView status={status.data ?? null} />;
-  else main = <Splash onNewBot={() => setCreating(true)} onNewGroup={() => setCreatingGroup(true)} />;
+  else main = <Splash onNewBot={() => setCreating(true)} onNewTeam={() => setCreatingTeam(true)} />;
 
   return (
     <div className={`app${showMain ? " show-main" : ""}`}>
@@ -94,7 +96,7 @@ export function App() {
         route={route}
         onSearch={() => setPalette(true)}
         onNewBot={() => setCreating(true)}
-        onNewGroup={() => setCreatingGroup(true)}
+        onNewTeam={() => setCreatingTeam(true)}
         onOpenSettings={(botId) => {
           setPanelOpen(true);
           navigate({ page: "bot", botId, chatId: route.page === "bot" && route.botId === botId ? route.chatId : null });
@@ -113,15 +115,7 @@ export function App() {
         />
       ) : null}
       {palette ? <CommandPalette onClose={() => setPalette(false)} onOpenRoutine={openRoutine} /> : null}
-      {creatingGroup ? (
-        <NewGroupDialog
-          onClose={() => setCreatingGroup(false)}
-          onCreated={(groupId) => {
-            setCreatingGroup(false);
-            navigate({ page: "group", groupId });
-          }}
-        />
-      ) : null}
+      {creatingTeam ? <TeamDialog onClose={() => setCreatingTeam(false)} onSaved={(teamId) => navigate({ page: "team", teamId })} /> : null}
     </div>
   );
 }

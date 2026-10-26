@@ -54,6 +54,10 @@ export interface GroupRow {
   cwd: string | null;
   /** JSON list of the extra folders its seats may use besides the working folder. */
   extra_folders: string;
+  /** The team (bots.json) this group is a session of; null for a group made on its own. */
+  team_id: string | null;
+  /** The team's instructions when the session started; empty for a group made on its own. */
+  instructions: string;
   last_seq: number;
   created_at: string;
   updated_at: string;
@@ -239,14 +243,30 @@ export class GroupStore {
     return this.db.all<GroupRow>("SELECT * FROM groups ORDER BY updated_at DESC");
   }
 
+  /** The sessions of a team, newest activity first. */
+  teamSessions(teamId: string): GroupRow[] {
+    return this.db.all<GroupRow>("SELECT * FROM groups WHERE team_id = ? ORDER BY updated_at DESC", teamId);
+  }
+
   group(groupId: string): GroupRow | null {
     return this.db.get<GroupRow>("SELECT * FROM groups WHERE id = ?", groupId) ?? null;
   }
 
-  createGroup(input: { id: string; name: string; memberIds: string[]; leaderId?: string | null; cwd?: string | null; extraFolders?: string[] }): void {
+  createGroup(input: { id: string; name: string; memberIds: string[]; leaderId?: string | null; cwd?: string | null; extraFolders?: string[]; teamId?: string | null; instructions?: string }): void {
     const at = now();
     this.db.tx(() => {
-      this.db.run("INSERT INTO groups (id, name, wake_mode, leader_id, cwd, extra_folders, created_at, updated_at) VALUES (?, ?, 'everyone', ?, ?, ?, ?, ?)", input.id, input.name, input.leaderId ?? null, input.cwd ?? null, JSON.stringify(input.extraFolders ?? []), at, at);
+      this.db.run(
+        "INSERT INTO groups (id, name, wake_mode, leader_id, cwd, extra_folders, team_id, instructions, created_at, updated_at) VALUES (?, ?, 'everyone', ?, ?, ?, ?, ?, ?, ?)",
+        input.id,
+        input.name,
+        input.leaderId ?? null,
+        input.cwd ?? null,
+        JSON.stringify(input.extraFolders ?? []),
+        input.teamId ?? null,
+        input.instructions ?? "",
+        at,
+        at,
+      );
       for (const botId of input.memberIds) this.db.run("INSERT INTO group_members (group_id, bot_id) VALUES (?, ?)", input.id, botId);
     });
   }

@@ -22,7 +22,7 @@ function Lineup() {
   );
 }
 
-export function Splash({ onNewBot, onNewGroup }: { onNewBot: () => void; onNewGroup: () => void }) {
+export function Splash({ onNewBot, onNewTeam }: { onNewBot: () => void; onNewTeam: () => void }) {
   const doc = useStoreDoc();
   const providers = useProviders();
   const bots = (doc.data?.values.bots ?? []).filter((bot) => !bot.archived);
@@ -33,7 +33,7 @@ export function Splash({ onNewBot, onNewGroup }: { onNewBot: () => void; onNewGr
       <Lineup />
       <h1>Pocket Bots</h1>
       <p className="muted" style={{ maxWidth: 480, margin: 0 }}>
-        Personal bots on your own coding agents (Claude Code, Codex, DeepSeek Harness, OpenCode, Pi, Grok Build), each on its own login. Give each bot instructions, a model, memory, skills and tools, then chat with it, let it run routines, or put a few bots in a group chat to work together.
+        Personal bots on your own coding agents (Claude Code, Codex, DeepSeek Harness, OpenCode, Pi, Grok Build), each on its own login. Give each bot instructions, a model, memory, skills and tools, then chat with it, let it run routines, or put a few bots in a team that takes on tasks together.
       </p>
       {providers.data && ready.length === 0 ? (
         <div className="notice warning" style={{ maxWidth: 520 }}>
@@ -50,12 +50,12 @@ export function Splash({ onNewBot, onNewGroup }: { onNewBot: () => void; onNewGr
           </Button>
         ) : null}
         {bots.length >= 2 ? (
-          <Button icon="messages" onClick={onNewGroup}>
-            New group chat
+          <Button icon="users" onClick={onNewTeam}>
+            New team
           </Button>
         ) : null}
       </div>
-      {bots.length ? <div className="hint">Press {MOD}K to jump to a bot, group, chat or routine, or to search messages.</div> : null}
+      {bots.length ? <div className="hint">Press {MOD}K to jump to a bot, team, session, chat or routine, or to search messages.</div> : null}
       <div className="hint">v{POCKET_VERSION}</div>
     </div>
   );

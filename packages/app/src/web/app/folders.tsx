@@ -118,7 +118,8 @@ export function NewChatFolder({ value, onChange, botFolder }: { value: string | 
  * and a "+" that adds one from the folders in use or a typed path. Without `onChange` they are
  * shown only (a group seat's, which belong to its group). `onChange` gets the whole new list.
  */
-export function ExtraFolders({ folders, exclude = [], onChange, subject = "chat" }: { folders: readonly string[]; exclude?: readonly string[]; onChange?: (next: string[]) => void; subject?: "chat" | "group" }) {
+export function ExtraFolders({ folders, exclude = [], onChange, subject = "chat" }: { folders: readonly string[]; exclude?: readonly string[]; onChange?: (next: string[]) => void; subject?: "chat" | "group" | "team" }) {
+  const whose = subject === "team" ? "The team's bots" : subject === "group" ? "The group's bots" : "This chat";
   const workspaces = useWorkspaces();
   const [menu, setMenu] = useState<DOMRect | null>(null);
   const [typing, setTyping] = useState(false);
@@ -138,7 +139,7 @@ export function ExtraFolders({ folders, exclude = [], onChange, subject = "chat"
   return (
     <>
       {folders.map((folder) => (
-        <span key={folder} className="folder-chip hint extra" title={`${subject === "group" ? "The group's bots" : "This chat"} can also use ${folder}`}>
+        <span key={folder} className="folder-chip hint extra" title={`${whose} can also use ${folder}`}>
           <Icon name="folder" size={13} />
           <span className="truncate">{folderName(folder)}</span>
           {onChange ? (
@@ -154,7 +155,7 @@ export function ExtraFolders({ folders, exclude = [], onChange, subject = "chat"
             type="button"
             className="btn small ghost folder-chip"
             disabled={full}
-            title={full ? `At most ${MAX_EXTRA_FOLDERS} extra folders.` : `Add a folder ${subject === "group" ? "the group's bots" : "this chat"} can use besides the working folder`}
+            title={full ? `At most ${MAX_EXTRA_FOLDERS} extra folders.` : `Add a folder ${whose.toLowerCase()} can use besides the working folder`}
             onClick={(event) => setMenu((event.currentTarget as HTMLElement).getBoundingClientRect())}
           >
             <Icon name="plus" size={13} />
@@ -164,8 +165,8 @@ export function ExtraFolders({ folders, exclude = [], onChange, subject = "chat"
           {typing ? (
             <OtherFolderDialog
               initial=""
-              title={subject === "group" ? "Extra folder for this group" : "Extra folder for this chat"}
-              hint={`${subject === "group" ? "Every bot in the group" : "The chat's agent"} can use this folder besides the working folder. Actions there may still ask for approval.`}
+              title={subject === "team" ? "Extra folder for this team" : subject === "group" ? "Extra folder for this group" : "Extra folder for this chat"}
+              hint={`${subject === "team" ? "Every bot in the team" : subject === "group" ? "Every bot in the group" : "The chat's agent"} can use this folder besides the working folder. Actions there may still ask for approval.`}
               onClose={() => setTyping(false)}
               onPick={(folder) => {
                 setTyping(false);
