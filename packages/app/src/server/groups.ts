@@ -1250,6 +1250,10 @@ export class GroupChats {
    */
   private preflight(bot: Bot, groupId: string, conv: number, action: HeldInput["action"], draft?: HeldDraft): string | null {
     const me = bot.id;
+    // A member the leader leads isn't part of the top level's conversation: what reaches it there is
+    // the work handed to it, each piece told in a turn of its own. Holding on them would show it the
+    // pieces still waiting and take them out of its inbox, so they'd never be told.
+    if (conv === 0 && this.ledBy(groupId, me)) return null;
     const ledger = this.store.ledger(groupId, me, conv);
     const seen = (message: GroupMessage) => (message.from.kind === "bot" && message.from.botId === me) || isSeen(ledger, message.seq);
     const seqs = (messages: readonly GroupMessage[]) => messages.map((message) => message.seq);
@@ -1267,8 +1271,7 @@ export class GroupChats {
       if ((ledger.boundary ?? 0) >= max) forward = max;
     } else if ((ledger.boundary ?? 0) > 0) {
       forward = ledger.boundary;
-    } else if (conv !== 0 || !this.ledBy(groupId, me)) {
-      // A member the leader leads isn't part of the top level's conversation: only what's handed to it reaches it there.
+    } else {
       const recent = this.store.convPage(groupId, conv, { limit: HELD_SHOWN }).messages;
       if (recent.length) {
         const unseen = recent.filter((message) => !seen(message));

@@ -432,7 +432,7 @@ They haven't been read. Read them when it suits you: group_read with unread: tru
 
 **看过的记录只在一个模型上下文里算数**：新座位、座位换新、上下文压缩、不报告压缩的 runtime（Grok）每次开会话，都让看过的记录作废（读位置和待读不动）；续接同一个会话则保留。作废之后它第一次在某处发言会先被搁置一次，看一眼最新的几条——它的模型确实不再记得了。
 
-**发言前检查**（`group_send`、`group_send_draft`、`group_claim`、`group_task` 改状态）对目标会话依次看：
+**发言前检查**（`group_send`、`group_send_draft`、`group_claim`、`group_task` 改状态）对目标会话依次看（有 leader 的群里，被带的成员在顶层不查：顶层只有派给它的活，拿来拦会把还在等的活从待读取走）：
 
 1. **待读**：这里有投递给它、它的模型没看过的消息 → 搁置，给它看最新 3 条；
 2. **第一次碰这个会话**（没有待读也没有 boundary）：最近 3 条里有没看过的 → 搁置；

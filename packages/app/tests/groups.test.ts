@@ -1195,6 +1195,34 @@ describe("a led member's pieces of work", () => {
     expect(second.text).not.toContain("first piece");
   });
 
+  it("lets a member claim its piece while another piece waits for it, without taking that one from its inbox", async () => {
+    const seen: string[] = [];
+    const group = await setup(
+      (turn, step, botId) => {
+        if (botId !== "beta" || !delivered(turn)) return null;
+        if (step === 0) seen.push(turn.text);
+        // The first piece takes a while, so the second waits for it.
+        return step === 0 && turn.text.includes("first piece") ? { wait: 300 } : null;
+      },
+      ["alpha", "beta"],
+    );
+    stop = group.stop;
+    await group.groups.update(group.id, { leaderId: "alpha" });
+    await settle(group);
+    const alpha = (await group.host.bot("alpha"))!;
+    const beta = (await group.host.bot("beta"))!;
+    await group.groups.read(alpha, group.id, { unread: true });
+    await group.groups.read(alpha, group.id, { topLevel: true });
+    const first = Number(/#(\d+)/.exec(await group.groups.send(alpha, group.id, { text: "@Beta the first piece" }))![1]);
+    const second = Number(/#(\d+)/.exec(await group.groups.send(alpha, group.id, { text: "@Beta the second piece" }))![1]);
+    await until(() => seen.some((text) => text.includes("first piece")));
+    // The second piece's brief at the top level doesn't hold the claim of the first, and stays in the inbox for its own turn.
+    expect(await group.groups.claim(beta, group.id, first)).toContain("You've claimed task");
+    expect(group.store.pending(group.id, "beta").map((entry) => entry.message.seq)).toContain(second);
+    await settle(group);
+    expect(seen.some((text) => text.includes("second piece"))).toBe(true);
+  });
+
   it("answers another member's question in the session it's in, without the leader", async () => {
     const wakes: { bot: string; chat: string; text: string }[] = [];
     const group = await setup(
