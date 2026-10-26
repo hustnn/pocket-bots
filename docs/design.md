@@ -504,7 +504,7 @@ They haven't been read. Read them when it suits you: group_read with unread: tru
 
 **座位没有改配置的工具**：`get_setup`、`propose_changes`、`propose_routine`、`propose_skill` 只在 bot 自己的聊天里有（§5.4）。
 
-**有 leader 的群里，成员只列出干活用得到的工具**：`group_send`、`group_send_draft`、`group_read`、`group_claim`、`group_react`、`group_members`，加上 `search_chats`（工具上标着 `led`，`tools/mcp.ts` 的 `ledMember` 按 `GroupChats.ledBy` 判断）。计划、任务、提醒、关注、静音、@ 的去向、问别的 bot、改配置这些它的规则里用不到，就不放进它每次请求都要带的工具列表；它的 prompt 里「Bot tools」一段也只提这些。只是不列出，调用照样执行：会话只在开始时取一次工具列表，换 leader 后已经开着的会话列表是旧的，下次开会话时才更新（prompt 也一样）。成员 @ 了群外的 bot，结果里不再建议用 `ask_bot`。
+**有 leader 的群里，成员只列出干活用得到的工具**：`group_send`、`group_send_draft`、`group_read`、`group_search`、`group_claim`、`group_react`、`group_members`，加上 `search_chats`（工具上标着 `led`，`tools/mcp.ts` 的 `ledMember` 按 `GroupChats.ledBy` 判断）。计划、任务、提醒、关注、静音、@ 的去向、问别的 bot、改配置这些它的规则里用不到，就不放进它每次请求都要带的工具列表；它的 prompt 里「Bot tools」一段也只提这些。只是不列出，调用照样执行：会话只在开始时取一次工具列表，换 leader 后已经开着的会话列表是旧的，下次开会话时才更新（prompt 也一样）。成员 @ 了群外的 bot，结果里不再建议用 `ask_bot`。
 
 ### 6.9 座位的 prompt
 

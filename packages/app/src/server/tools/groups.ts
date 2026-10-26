@@ -6,7 +6,7 @@ import { defineTool, type ToolCaller } from "./mcp";
 // the relay knows a seat by its tools address, which names the group. Every listed tool costs
 // tokens on each of a seat's requests, so descriptions say what a call does and leave the rules
 // for when to make it to the seat's prompt (groupPrompt). A member of a group with a leader is
-// listed only the tools marked `led`: reading, claiming, reacting and reporting.
+// listed only the tools marked `led`: reading and searching, claiming, reacting and reporting.
 
 /** The group a calling chat is a seat of, and the service, or an error the bot can show. */
 function seatOf(caller: ToolCaller) {
@@ -89,6 +89,7 @@ export const groupSearch = defineTool({
   description: "Search the group's messages for words. Results are previews: group_read around a hit for more.",
   input: z.object({ query: z.string().min(1).max(200) }),
   available: inGroup,
+  led: true,
   async run({ query }, caller) {
     const { groupId, groups } = seatOf(caller);
     return groups.search(caller.bot, groupId, query);

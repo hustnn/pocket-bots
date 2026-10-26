@@ -1030,7 +1030,7 @@ describe("a group with a leader", () => {
     const listed = async (botId: string) => ((await answerMcp({ jsonrpc: "2.0", id: 1, method: "tools/list" }, BOT_TOOLS, await seat(botId))) as { result: { tools: { name: string }[] } }).result.tools.map((tool) => tool.name);
     const setupTools = ["get_setup", "propose_skill", "propose_routine", "propose_changes"];
     expect(await listed("alpha")).toEqual(BOT_TOOLS.map((tool) => tool.name).filter((name) => !setupTools.includes(name)));
-    expect(await listed("beta")).toEqual(["group_send", "group_send_draft", "group_read", "group_claim", "group_react", "group_members", "search_chats"]);
+    expect(await listed("beta")).toEqual(["group_send", "group_send_draft", "group_read", "group_search", "group_claim", "group_react", "group_members", "search_chats"]);
     const tasks = (await answerMcp({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "group_task", arguments: { action: "list" } } }, BOT_TOOLS, await seat("beta"))) as { result: { isError?: boolean } };
     expect(tasks.result.isError).toBeUndefined();
 

@@ -650,7 +650,7 @@ bot 在群里留下的每个动作，都要先证明它的模型跟上了要发�
 
 - **leader**：新活是一条新的顶层消息，@ 一个成员并写完整的说明；迭代在同一个线程里 @ 成员；核对后自己把任务标成 done；你的请求全部做完后，用 `reply_to` 回复你的请求告诉你结果。
 - **成员**：只做派给它的活；做完在线程里 @ leader 汇报一次就停；不发确认和进度；卡住了在线程里问 leader。
-- **成员的工具**：只列出 `group_send`、`group_send_draft`、`group_read`、`group_claim`、`group_react`、`group_members`、`search_chats`。工具列表在会话开始时取一次。
+- **成员的工具**：只列出 `group_send`、`group_send_draft`、`group_read`、`group_search`、`group_claim`、`group_react`、`group_members`、`search_chats`。工具列表在会话开始时取一次。
 - **重启**：成员不补课，只把座位还没收下的、派给它的消息重新告诉它。
 
 ## 13. @ 的解析和去向
