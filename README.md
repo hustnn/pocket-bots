@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-Personal bots on your own machine, powered by the coding agents you already use. Each bot has its own instructions, model, long-term memory, skills, MCP tools and connected apps. You can chat with it, have it work on its own on a schedule or when a webhook arrives, and put several bots into one group chat to split up the work.
+Personal bots on your own machine, powered by the coding agents you already use. Each bot has its own instructions, model, long-term memory, skills, MCP tools and connected apps. You can chat with it, have it work on its own on a schedule or when a webhook arrives, and put several bots into a team: you hand it a task, its leader splits the work among the others, and you get the result back.
 
 pocket-bots drives the CLIs of six coding agents directly: **Claude Code, Codex, DeepSeek Harness, OpenCode, Pi and Grok Build**. Each CLI uses **the account and subscription you already logged in with**; pocket-bots never stores or injects any API key.
 
@@ -11,7 +11,7 @@ The docs below are written in Chinese:
 - What it can do: [docs/features.md](docs/features.md)
 - How to use each feature: **[usage guide](docs/USAGE.md)**
 - How it is built (components, communication, agents, bots, group chats): [docs/design.md](docs/design.md)
-- How several bots work together in a group chat (full rules and examples): [docs/group-chats.md](docs/group-chats.md)
+- How several bots work together as a team, in a group chat per task (full rules and examples): [docs/group-chats.md](docs/group-chats.md)
 - The group chat protocol (for developers: how messages flow, what each step reads and writes, who receives what in each combination): [docs/group-protocol.md](docs/group-protocol.md)
 
 > **About Claude**: Claude is driven through the Claude Agent SDK, using the `claude` installed on your machine and your own claude.ai login. Anthropic does not allow third-party products to offer claude.ai login to other people, so this part is for your personal use only.
@@ -33,10 +33,10 @@ Where it is today:
 |---|---|
 | Where it runs | Only on your own machine. The Web UI has no login, so putting it on a server or in the cloud needs your own auth layer |
 | Phone control | No dedicated mobile app; you can open the Web UI in a phone browser over a trusted network (such as Tailscale) |
-| Talking to other bots | Only between pocket-bots' own bots: `ask_bot` and group chats |
+| Talking to other bots | Only between pocket-bots' own bots: `ask_bot` and teams |
 | Supported agents | Six: Claude Code, Codex, DeepSeek Harness, OpenCode, Pi, Grok Build |
 | Dependencies | Codex, Pi, Grok Build and DeepSeek Harness are driven directly over their own protocols (JSON-RPC, RPC, ACP); Claude Code still goes through the Claude Agent SDK and OpenCode through `@opencode/client` |
-| Combining agents | Each bot picks one agent; in a group chat, bots on different agents can split the work |
+| Combining agents | Each bot picks one agent; in a team, bots on different agents and models can split the work |
 | Persistence | Chats, timelines and group messages are written to SQLite before they are shown; after a restart, sessions resume from their saved session ids. A turn that was running when interrupted is not re-run automatically |
 
 ## Terms
@@ -59,6 +59,7 @@ Words this README and the docs use often:
 | **SSE** | Server-Sent Events: a long-lived HTTP response through which the server keeps pushing short messages to the browser. pocket-bots uses it (`GET /api/events`) to tell the page "something changed" so it reloads that part |
 | **Routine** | A task a bot runs on its own, on a schedule or when a webhook arrives. Each run opens a new chat |
 | **Webhook** | A URL that another program POSTs to in order to start a routine |
+| **Team / session** | A team is a few bots with one of them as leader, plus instructions for all of them. Each task you give a team runs in a session: a group chat where the leader hands out the pieces, members ask each other directly, and the leader replies with the result |
 | **Seat** | A bot's place in a group chat. It is an ordinary chat between pocket-bots and that bot; the bot reads and writes the group through group chat tools |
 | **Composio** | A third-party service that connects apps such as Gmail and Slack. pocket-bots uses your Composio key to give bots access to those apps |
 | **Contract test** | One shared test suite that every agent adapter must pass (tools, approvals, steering, interrupting, resuming), so the six CLIs behave the same to the rest of pocket-bots |
@@ -112,7 +113,7 @@ See the [usage guide](docs/USAGE.md#1-准备工作).
 
 ## Configuration
 
-The data directory defaults to `~/.pocket-bots` and can be changed with the `POCKET_BOTS_HOME` environment variable. It holds `bots.json` (bots and the library), `pocket-bots.sqlite` (chats, timelines, group chats) and `Bots/<botId>/` (each bot's working directory, memory and skills). You can add a `config.json`:
+The data directory defaults to `~/.pocket-bots` and can be changed with the `POCKET_BOTS_HOME` environment variable. It holds `bots.json` (bots, teams and the library), `pocket-bots.sqlite` (chats, timelines, group chats) and `Bots/<botId>/` (each bot's working directory, memory and skills). You can add a `config.json`:
 
 ```json
 {

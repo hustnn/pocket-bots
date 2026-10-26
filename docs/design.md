@@ -19,7 +19,7 @@ pocket-bots 是一个跑在你自己电脑上的个人 bot 平台。一个 bot =
    │  SSE：/api/events、/api/chats/:id/events
    ▼
  App 服务（一个 Node 进程，独占数据目录）
-   ├─ Store ............ bots.json：bot、技能库、MCP 库、默认值、界面状态
+   ├─ Store ............ bots.json：bot、团队、技能库、MCP 库、默认值、界面状态
    ├─ ChatService ...... 每个聊天的会话：打开 / 续接 / 发送 / 插话 / 打断 / 审批 / 时间线 / 看护
    ├─ GroupChats ....... 群聊：消息、投递、提示、发言前检查、草稿、任务、提醒、座位
    ├─ Relay ............ 127.0.0.1 上的 MCP 服务：bot 工具、连接的应用代理、webhook
@@ -63,7 +63,7 @@ pocket-bots 是一个跑在你自己电脑上的个人 bot 平台。一个 bot =
 |---|---|---|
 | 启动与装配 | `server/main.ts` | 读配置、给数据目录加锁、建各组件、把它们的事件连起来、启动 HTTP 和 relay |
 | HTTP 层 | `server/http.ts`、`server/rpc-handlers.ts`、`server/events.ts`、`server/hosts.ts` | RPC 路由、SSE 事件流、群文件下载、静态页面；按 Host 头防 DNS rebinding |
-| Store | `server/store.ts`、`shared/bot.ts` | `bots.json`：bot、技能库、MCP 库、默认值、预设、界面状态；带 revision 的乐观并发保存；每次改 bot 留历史快照 |
+| Store | `server/store.ts`、`shared/bot.ts` | `bots.json`：bot、团队、技能库、MCP 库、默认值、预设、界面状态；带 revision 的乐观并发保存；每次改 bot 留历史快照 |
 | PocketHost | `server/host.ts`、`server/providers.ts` | 把 Store、各 runtime、ChatService 包成一个门面，供工具、调度器、群聊使用；探测每个 CLI 是否安装、是否登录 |
 | ChatService | `server/chat-service.ts`、`server/supervision.ts` | 每个聊天（单聊、群聊座位、定时任务的运行、ask_bot）的 runtime 会话：打开、续接、发送、插话、打断、审批、时间线写入、空闲关闭；运行时看护（启动排队、启动超时、卡住的运行、压缩失败） |
 | 聊天配置 | `server/chats.ts`、`server/prompt.ts` | 由 bot 配置生成一个会话的 `SessionSpec`：system prompt、MCP 服务器、免审批的工具、可访问的目录 |
@@ -361,6 +361,7 @@ bot 不能直接改自己或别人的设置，只能提议：卡片逐条列出�
 - **叫醒只给提示**：叫醒一个 bot 时只告诉它「哪里有几条新消息、有没有人找你」，不带消息内容；消息由它自己用 `group_read` 读。正在干活的 bot 也只是多收到一条提示，不会被打断。
 - **发言前检查**：bot 发言、认领任务、改任务状态之前，pocket-bots 检查它的模型有没有看过目标位置的新消息；没看过就先不发，存成草稿并给它看最新的几条。
 - **认领是锁**：一条顶层消息可以变成任务，先认领的生效，别人认领不到就不做同一件事。
+- **团队和 session**：界面上用的是团队（`bots.json` 的 `teams`：2–6 个 bot、必选的 leader、团队说明、目录）。你给团队一个任务，就按团队当时的样子开一个 session：一个有 leader 的群，`groups.team_id` 记它属于哪个团队，`groups.instructions` 存一份团队说明，每个座位的 prompt 都带上（`server/teams.ts`）。改团队只影响之后开的 session。没有 leader 的群在界面上不能再建，代码保留。
 
 ### 6.2 消息存储
 
@@ -406,6 +407,7 @@ bot 不能直接改自己或别人的设置，只能提议：卡片逐条列出�
 - 静音的 bot 从静音那条起收不到普通顶层消息的记录（@everyone 也一样），但 @ 它的、指派给它的回执、换 leader 的通知照样有。
 - 线程里的消息：线程的关注者，加上这次发送牵涉到的人（发送者、顶层消息的作者、被 @ 的）。在线程里发言、被 @、是顶层作者都会自动关注；取消关注后，被 @ 会重新关注。
 - 系统消息（成员变化、建任务、任务状态变化…）各自声明分类：「起因者不算未读」或「不写投递记录」。bot 的轮次失败、bot 向你的提问都不写投递记录，不叫醒任何人。
+- 有 leader 的群：成员只收找它的。一种是你或 leader 派的活（@ 它、回复它、指派回执、@everyone），另一种是别的成员问它的（另一个成员发的、@ 它或回复它的消息）；别的顶层消息不写它的记录。成员的 @everyone、成员引起的系统消息到不了别的成员，活只由 leader 派。反过来，成员发的或成员引起的消息，只有找 leader 的（@、回复、@everyone）才叫醒 leader，别的只写记录：成员之间的问答不花 leader 的模型。
 
 **进不进待读（唤醒方式）**，每个群可选：
 
@@ -512,13 +514,14 @@ They haven't been read. Read them when it suits you: group_read with unread: tru
 
 | 角色 | 有的部分 | 大小 |
 |---|---|---|
-| 没有 leader 的群 | 消息、被叫醒时、线程和历史、任务（认领、建任务和拆活）、提醒和 @、子 agent（能开时）、写法、礼节、约束和权限 | 约 6.9K 字符，带子 agent 约 8K |
-| leader | leader 一段（计划、派活、核对结果、请求做完后回复你的请求告诉你结果、成员一轮失败时怎么办、成员和模型），加上面除「认领、拆活」和子 agent 以外的部分 | 约 8.8K |
-| 成员 | 成员一段（只做派给它的、做完在线程里汇报一次就停（带上跑了哪些测试和检查、结果如何）、不改状态、卡住问 leader、能开子 agent 时自己做），加消息、写法、约束和权限 | 约 4.8K |
+| 没有 leader 的群 | 消息、被叫醒时、线程和历史、任务（认领、建任务和拆活）、提醒和 @、子 agent（能开时）、写法、礼节、约束和权限 | 约 6.8K 字符，带子 agent 约 7.7K |
+| leader | leader 一段（计划、派活、成员之间会直接问事情、看成员验证了什么并决定要不要再验证、请求做完后回复你的请求告诉你结果、成员一轮失败时怎么办、成员和模型），加上面除「认领、拆活」和子 agent 以外的部分 | 约 9.5K（三个成员） |
+| 成员 | 成员一段（只做派给它的、做完先自己验证再在线程里汇报一次就停（说清验证了什么、怎么验证的、哪些没验证）、需要时直接问别的成员、被问到时简短回答、不改状态、卡住问 leader、能开子 agent 时自己做、别的成员和他们的角色），加消息、写法、约束和权限 | 约 5.2K，每个别的成员再加一行 |
 
-**成员跑过的检查 leader 不再重复**：成员汇报时说明跑了哪些测试和检查、结果如何；leader 照样核对结果，但成员已经跑过的检查不用再跑一遍。基准测试里成员报了「typecheck 通过、435 个测试通过」，leader 还是把 typecheck 和整套测试又跑了一遍。
+团队的 session 里，每个座位在角色那段后面再加团队说明。三个角色的这一段原来分别是 12.5K（带子 agent 15.1K）、15.1K 和 15.8K。
 
-原来分别是 12.5K（带子 agent 15.1K）、15.1K 和 15.8K。
+**验证不重复做**：成员做完先尽量自己验证，汇报时说清验证了什么、怎么验证的（命令和结果）、哪些没验证；leader 不再跑成员已经跑过的检查，自己判断要不要再验证：小的自己做，大的派给成员并说清已经验证过什么。基准测试里成员报了「typecheck 通过、435 个测试通过」，leader 还是把 typecheck 和整套测试又跑了一遍，这就是要避免的。
+
 
 ---
 
@@ -535,7 +538,7 @@ They haven't been read. Read them when it suits you: group_read with unread: tru
 
 ```
 ~/.pocket-bots/
-  bots.json                  bot、技能库、MCP 库、默认值、预设、界面状态
+  bots.json                  bot、团队、技能库、MCP 库、默认值、预设、界面状态
   pocket-bots.sqlite         聊天、时间线、群聊（见下）
   config.json                可选：web.host / web.port / web.hostnames / relay.port
   Bots/<botId>/              每个 bot 的工作目录、记忆、技能、上传
@@ -559,7 +562,7 @@ chats            id, bot_id, provider, model, thinking, mode, cwd, title, labels
 timeline         chat_id, key, seq_start, seq_end, turn_id, ts, item(JSON)   -- 合并过流式片段的时间线条目
 turns            chat_id, turn_id, started_at, ended_at, outcome, error, usage
 timeline_fts     FTS5 trigram：单聊里你和 bot 的消息
-groups … group_reminder_events、group_messages_fts   -- 见 §6.2；groups.extra_folders 是群的额外文件夹（JSON 数组）
+groups … group_reminder_events、group_messages_fts   -- 见 §6.2；groups.extra_folders 是群的额外文件夹（JSON 数组）；groups.team_id、groups.instructions 是 session 属于哪个团队和开 session 时团队说明的拷贝（迁移 21）
 ```
 
 搜索（⌘K、聊天里的 ⌘F）用两张 FTS5 trigram 表：群消息发出时就进索引；单聊的回复是一点点流进来的，所以 `timeline_fts` 不在写入时维护，而是每次搜索前把各聊天新增的条目补进去。trigram 能查词的任意一部分和中文；不到三个字的词改成在命中的行里过滤。

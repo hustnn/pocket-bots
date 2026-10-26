@@ -2,14 +2,14 @@
 
 [English](README.md) | 简体中文
 
-跑在你自己电脑上的个人 bot，由你已经在用的编码 agent 驱动。每个 bot 有自己的指令、模型、长期记忆、技能、MCP 工具和连接的应用；你可以和它聊天，让它按计划或在收到 webhook 时自己干活，还能把几个 bot 拉进一个群聊，让它们分工协作。
+跑在你自己电脑上的个人 bot，由你已经在用的编码 agent 驱动。每个 bot 有自己的指令、模型、长期记忆、技能、MCP 工具和连接的应用；你可以和它聊天，让它按计划或在收到 webhook 时自己干活，还能把几个 bot 组成团队：你把任务交给团队，leader 把活分给其他 bot，做完把结果交给你。
 
 pocket-bots 直接驱动六个编码 agent 的 CLI：**Claude Code、Codex、DeepSeek Harness、OpenCode、Pi、Grok Build**。每个 CLI 用它**自己已经登录的账号和订阅额度**；pocket-bots 不保存、不注入任何 API key。
 
 - 有哪些功能：[docs/features.md](docs/features.md)
 - 每个功能怎么用：**[使用指南](docs/USAGE.md)**
 - 怎么实现的（组件、通信、agent、bot、群聊）：[docs/design.md](docs/design.md)
-- 群聊里几个 bot 怎么协作（完整规则和例子）：[docs/group-chats.md](docs/group-chats.md)
+- 几个 bot 怎么组成团队协作，每个任务一个群聊（完整规则和例子）：[docs/group-chats.md](docs/group-chats.md)
 - 群聊的通信协议（给开发者：消息怎么流动、每一步读写什么、各种组合下谁收到）：[docs/group-protocol.md](docs/group-protocol.md)
 
 > **关于 Claude**：Claude 通过 Claude Agent SDK 驱动你本机装好的 `claude`，用的是你自己的 claude.ai 登录。Anthropic 不允许第三方产品向别人提供 claude.ai 登录，所以这部分只供你个人使用。
@@ -31,10 +31,10 @@ pocket-bots 最终想做成这样的个人 bot：
 |---|---|
 | 运行位置 | 只在本机跑。Web UI 没有登录，放到服务器或云上要自己加一层认证 |
 | 手机控制 | 没有专门的手机端；可以在可信网络里（比如 Tailscale）用手机浏览器打开 Web UI |
-| 和别的 bot 通信 | 只在 pocket-bots 自己的 bot 之间：`ask_bot` 和群聊 |
+| 和别的 bot 通信 | 只在 pocket-bots 自己的 bot 之间：`ask_bot` 和团队 |
 | 支持的 agent | Claude Code、Codex、DeepSeek Harness、OpenCode、Pi、Grok Build 六个 |
 | 依赖 | Codex、Pi、Grok Build、DeepSeek Harness 直接走各自的协议（JSON-RPC、RPC、ACP）；Claude Code 还通过 Claude Agent SDK，OpenCode 还通过 `@opencode/client` |
-| 组合多种 agent | 每个 bot 选一个 agent；群聊里用不同 agent 的 bot 可以分工 |
+| 组合多种 agent | 每个 bot 选一个 agent；团队里用不同 agent、不同模型的 bot 可以分工 |
 | 持久化 | 聊天、时间线、群聊消息先写 SQLite 再展示；重启后用存下的会话 id 续接。正在跑的一轮被打断后不会自动重跑 |
 
 ## 名词解释
@@ -57,6 +57,7 @@ README 和文档里常用的词：
 | **SSE** | Server-Sent Events（服务器推送事件）：一个一直不断开的 HTTP 响应，服务器通过它不停地给浏览器推短消息。pocket-bots 用它（`GET /api/events`）告诉页面「什么变了」，页面再重新拉那一块 |
 | **定时任务（routine）** | bot 自己跑的任务，按计划或收到 webhook 时触发。每次运行开一个新聊天 |
 | **webhook** | 一个 URL，别的程序往它 POST 就能启动一个定时任务 |
+| **团队 / session** | 团队是几个 bot，其中一个是 leader，加上给它们所有人的说明。你给团队的每个任务在一个 session 里做：一个群聊，leader 派活，成员之间可以直接问事情，最后 leader 把结果回复给你 |
 | **座位** | bot 在群聊里的位置。它就是 pocket-bots 和这个 bot 之间的一个普通聊天，bot 通过群聊工具读写群 |
 | **Composio** | 连接 Gmail、Slack 等应用的第三方服务。pocket-bots 用你的 Composio key 让 bot 能用这些应用 |
 | **合同测试** | 每个 agent 适配器都必须通过的同一套测试（工具、审批、插话、打断、续接），保证六个 CLI 对 pocket-bots 其他部分表现一致 |
@@ -110,7 +111,7 @@ npm run service -- install     # 还有 status、uninstall、print
 
 ## 配置
 
-数据目录默认是 `~/.pocket-bots`，可以用环境变量 `POCKET_BOTS_HOME` 改。里面有 `bots.json`（bot 和库）、`pocket-bots.sqlite`（聊天、时间线、群聊）、`Bots/<botId>/`（每个 bot 的工作目录、记忆和技能）。可以放一个 `config.json`：
+数据目录默认是 `~/.pocket-bots`，可以用环境变量 `POCKET_BOTS_HOME` 改。里面有 `bots.json`（bot、团队和库）、`pocket-bots.sqlite`（聊天、时间线、群聊）、`Bots/<botId>/`（每个 bot 的工作目录、记忆和技能）。可以放一个 `config.json`：
 
 ```json
 {
