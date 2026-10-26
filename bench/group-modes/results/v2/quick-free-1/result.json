@@ -1,0 +1,102 @@
+{
+  "run": "quick-free-1",
+  "task": "quick",
+  "arm": "free",
+  "seed": "1",
+  "model": "sophon/DeepSeek-V4.1-Flash-1017",
+  "outcome": "completed",
+  "providerErrors": [],
+  "wallSeconds": 36,
+  "firstBotMessageSeconds": 21,
+  "lastBotMessageSeconds": 21,
+  "score": {
+    "truth": 8,
+    "correct": true,
+    "answers": 1
+  },
+  "totals": {
+    "seats": 4,
+    "turns": 7,
+    "calls": 29,
+    "input": 394413,
+    "output": 4328,
+    "tokens": 398741
+  },
+  "perBot": {
+    "Ada": {
+      "seats": 1,
+      "calls": 6,
+      "turns": 1,
+      "input": 79219,
+      "output": 484,
+      "maxInput": 14131,
+      "tools": {
+        "bash": 3,
+        "group_read": 1,
+        "read": 1,
+        "group_send": 1
+      }
+    },
+    "Ben": {
+      "seats": 1,
+      "calls": 9,
+      "turns": 2,
+      "input": 124765,
+      "output": 1589,
+      "maxInput": 15298,
+      "tools": {
+        "group_read": 2,
+        "bash": 2,
+        "read": 1,
+        "group_send": 1,
+        "group_send_draft": 1
+      }
+    },
+    "Cy": {
+      "seats": 1,
+      "calls": 6,
+      "turns": 2,
+      "input": 79533,
+      "output": 1091,
+      "maxInput": 14085,
+      "tools": {
+        "bash": 2,
+        "group_read": 2,
+        "read": 2
+      }
+    },
+    "Dee": {
+      "seats": 1,
+      "calls": 8,
+      "turns": 2,
+      "input": 110896,
+      "output": 1164,
+      "maxInput": 15139,
+      "tools": {
+        "group_read": 1,
+        "bash": 3,
+        "glob": 1,
+        "read": 1,
+        "group_send": 1,
+        "group_send_draft": 1
+      }
+    }
+  },
+  "groupMessages": {
+    "total": 2,
+    "bot": 1,
+    "system": 0,
+    "user": 1
+  },
+  "tasks": [],
+  "board": {
+    "entries": 0,
+    "claims": 0,
+    "cited": 0
+  },
+  "rounds": [],
+  "transcript": [
+    "#1 user: How many test(...) cases are in test/semver.test.js? Reply with just the number.",
+    "#2 Ada ↩#1: 8"
+  ]
+}

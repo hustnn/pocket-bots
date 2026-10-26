@@ -1,0 +1,104 @@
+{
+  "run": "quick-free-2",
+  "task": "quick",
+  "arm": "free",
+  "seed": "2",
+  "model": "sophon/DeepSeek-V4.1-Flash-1017",
+  "outcome": "completed",
+  "providerErrors": [],
+  "wallSeconds": 33,
+  "firstBotMessageSeconds": 17,
+  "lastBotMessageSeconds": 17,
+  "score": {
+    "truth": 8,
+    "correct": true,
+    "answers": 1
+  },
+  "totals": {
+    "seats": 4,
+    "turns": 6,
+    "calls": 30,
+    "input": 404954,
+    "output": 3780,
+    "tokens": 408734
+  },
+  "perBot": {
+    "Ada": {
+      "seats": 1,
+      "calls": 9,
+      "turns": 2,
+      "input": 124055,
+      "output": 1143,
+      "maxInput": 14974,
+      "tools": {
+        "bash": 3,
+        "group_read": 2,
+        "read": 1,
+        "group_send": 1,
+        "group_send_draft": 1
+      }
+    },
+    "Ben": {
+      "seats": 1,
+      "calls": 6,
+      "turns": 1,
+      "input": 78747,
+      "output": 798,
+      "maxInput": 14043,
+      "tools": {
+        "group_read": 1,
+        "bash": 2,
+        "read": 1,
+        "group_send": 1,
+        "group_send_draft": 1
+      }
+    },
+    "Cy": {
+      "seats": 1,
+      "calls": 6,
+      "turns": 1,
+      "input": 76501,
+      "output": 479,
+      "maxInput": 13444,
+      "tools": {
+        "group_read": 1,
+        "bash": 2,
+        "glob": 1,
+        "read": 1,
+        "group_send": 1
+      }
+    },
+    "Dee": {
+      "seats": 1,
+      "calls": 9,
+      "turns": 2,
+      "input": 125651,
+      "output": 1360,
+      "maxInput": 15273,
+      "tools": {
+        "group_read": 2,
+        "bash": 4,
+        "read": 1,
+        "group_send": 1,
+        "group_send_draft": 1
+      }
+    }
+  },
+  "groupMessages": {
+    "total": 2,
+    "bot": 1,
+    "system": 0,
+    "user": 1
+  },
+  "tasks": [],
+  "board": {
+    "entries": 0,
+    "claims": 0,
+    "cited": 0
+  },
+  "rounds": [],
+  "transcript": [
+    "#1 user: How many test(...) cases are in test/semver.test.js? Reply with just the number.",
+    "#2 Cy: 8"
+  ]
+}

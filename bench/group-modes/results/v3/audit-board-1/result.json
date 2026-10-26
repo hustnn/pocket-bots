@@ -1,0 +1,75 @@
+{
+  "run": "audit-board-1",
+  "task": "audit",
+  "arm": "board",
+  "seed": "1",
+  "model": "sophon/DeepSeek-V4.1-Flash-1017",
+  "outcome": "completed",
+  "providerErrors": [],
+  "wallSeconds": 197,
+  "firstBotMessageSeconds": 187,
+  "lastBotMessageSeconds": 187,
+  "score": {
+    "found": 10,
+    "total": 10,
+    "missed": []
+  },
+  "totals": {
+    "seats": 1,
+    "turns": 1,
+    "calls": 16,
+    "input": 440560,
+    "output": 13366,
+    "tokens": 453926
+  },
+  "perBot": {
+    "Ada": {
+      "seats": 1,
+      "calls": 16,
+      "turns": 1,
+      "input": 440560,
+      "output": 13366,
+      "maxInput": 45824,
+      "tools": {
+        "bash": 14,
+        "glob": 1,
+        "group_send": 1
+      }
+    }
+  },
+  "groupMessages": {
+    "total": 2,
+    "bot": 1,
+    "system": 0,
+    "user": 1
+  },
+  "tasks": [],
+  "board": {
+    "entries": 0,
+    "claims": 0,
+    "cited": 0
+  },
+  "rounds": [
+    {
+      "group_id": "group-mvoqb20rfrjf",
+      "seq": 1,
+      "starter_id": "bot-x-ada",
+      "fanned_out": 1,
+      "reporter_id": null,
+      "report_told": 0,
+      "answer_seq": 2,
+      "created_at": "2026-10-26T04:00:36.608Z",
+      "closed_at": "2026-10-26T04:03:53.057Z",
+      "members": [
+        "ada:finished/turn",
+        "ben:skipped/-",
+        "cy:skipped/-",
+        "dee:skipped/-"
+      ]
+    }
+  ],
+  "transcript": [
+    "#1 user: The docs/ folder has 72 pages about our platform's services. Some pages contradict each other about a service's facts (its port, request timeout, retries, owning team, datastore, region, payload limit or cache TTL). Find every contradiction: for each one, name the service, the fact, the two conflict",
+    "#2 Ada ↩#1: I checked all 72 pages (283 factual statements across the 12 services × 8 facts). There are 10 contradictions; every other service/fact pair agrees. ⏎  ⏎ 1. **Analytics — datastore:** Redis (`faq-gateway-11.md`, `handbook-billing-07.md`) vs MySQL (`faq-profile-35.md`). ⏎ 2. **Auth — region:** eu-central-1"
+  ]
+}

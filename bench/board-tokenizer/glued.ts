@@ -1,0 +1,10 @@
+import { createRequire } from "node:module";
+import { boardTokens, rankBoard, type BoardEntry } from "../../packages/app/src/shared/group-board.ts";
+const require = createRequire(import.meta.url);
+const { Jieba } = require("@node-rs/jieba");
+const { dict } = require("@node-rs/jieba/dict");
+const jieba = Jieba.withDict(dict);
+const texts = ["我已确认search服务缓存TTL为5分钟", "我已用Redis做分布式锁", "我已修复npm test在CI里失败的问题", "超时设置为30秒"];
+for (const t of texts) console.log(`${t}\n  ours: [${boardTokens(t).join(" ")}]\n  jieba: [${jieba.cut(t.toLowerCase(), true).join(" ")}]`);
+const entries: BoardEntry[] = texts.map((t, i) => ({ number: i + 1, authorId: "a", round: null, subTask: t, artifact: "", rationale: "", refs: [], claim: null, createdAt: "" }));
+for (const q of ["TTL", "Redis", "npm test", "CI", "30秒", "分布式锁"]) console.log(`"${q}" → ${rankBoard(entries, q).map((e) => `B${e.number}`).join(" ") || "nothing"}`);

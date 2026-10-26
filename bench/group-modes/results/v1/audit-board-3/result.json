@@ -1,0 +1,112 @@
+{
+  "run": "audit-board-3",
+  "task": "audit",
+  "arm": "board",
+  "seed": "3",
+  "model": "sophon/DeepSeek-V4.1-Flash-1017",
+  "outcome": "completed",
+  "wallSeconds": 41,
+  "firstBotMessageSeconds": null,
+  "lastBotMessageSeconds": null,
+  "score": {
+    "found": 0,
+    "total": 10,
+    "missed": [
+      "media port",
+      "profile region",
+      "notify store",
+      "analytics store",
+      "ingest ttl",
+      "export port",
+      "notify region",
+      "auth region",
+      "scheduler retries",
+      "search ttl"
+    ]
+  },
+  "totals": {
+    "seats": 4,
+    "turns": 4,
+    "calls": 0,
+    "input": 0,
+    "output": 0,
+    "tokens": 0
+  },
+  "perBot": {
+    "Ada": {
+      "seats": 1,
+      "calls": 0,
+      "turns": 1,
+      "input": 0,
+      "output": 0,
+      "maxInput": 0,
+      "tools": {}
+    },
+    "Ben": {
+      "seats": 1,
+      "calls": 0,
+      "turns": 1,
+      "input": 0,
+      "output": 0,
+      "maxInput": 0,
+      "tools": {}
+    },
+    "Cy": {
+      "seats": 1,
+      "calls": 0,
+      "turns": 1,
+      "input": 0,
+      "output": 0,
+      "maxInput": 0,
+      "tools": {}
+    },
+    "Dee": {
+      "seats": 1,
+      "calls": 0,
+      "turns": 1,
+      "input": 0,
+      "output": 0,
+      "maxInput": 0,
+      "tools": {}
+    }
+  },
+  "groupMessages": {
+    "total": 6,
+    "bot": 0,
+    "system": 5,
+    "user": 1
+  },
+  "tasks": [],
+  "board": {
+    "entries": 0,
+    "claims": 0,
+    "cited": 0
+  },
+  "rounds": [
+    {
+      "group_id": "group-mvnzjllpu1pj",
+      "seq": 1,
+      "starter_id": "bot-x-ada",
+      "fanned_out": 1,
+      "reporter_id": null,
+      "report_told": 0,
+      "answer_seq": null,
+      "created_at": "2026-10-25T15:31:25.602Z",
+      "closed_at": "2026-10-25T15:32:06.142Z",
+      "members": [
+        "ada:finished/failed",
+        "ben:finished/failed",
+        "cy:finished/failed",
+        "dee:finished/failed"
+      ]
+    }
+  ],
+  "transcript": [
+    "#1 user: The docs/ folder has 72 pages about our platform's services. Some pages contradict each other about a service's facts (its port, request timeout, retries, owning team, datastore, region, payload limit or cache TTL). Find every contradiction: for each one, name the service, the fact, the two conflict",
+    "#2 system: Ada's turn failed: Internal error: turn failed: 500: {\"code\":\"500\",\"message\":\"Failed to connect to /2605:340:cd51:4900:d397:3080:5740:2a7e:30000\"}",
+    "#3 system: Ben's turn failed: Internal error: turn failed: 500: {\"code\":\"500\",\"message\":\"Failed to connect to /2605:340:cd51:4900:d397:3080:5740:2a7e:30000\"}",
+    "#4 system: Dee's turn failed: Internal error: turn failed: 500: {\"code\":\"500\",\"message\":\"Failed to connect to /2605:340:cd51:4900:d397:3080:5740:2a7e:30000\"}",
+    "#5 system: Nobody answered #1: the turn of every bot working on it failed. Send it again to have them try once more.",
+    "#6 system: Cy's turn failed: Internal error: turn failed: 500: {\"code\":\"500\",\"message\":\"Failed to connect to /2605:340:cd51:4900:d397:3080:5740:2a7e:30000\"}"
+  ]
+}

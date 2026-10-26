@@ -1,0 +1,133 @@
+{
+  "run": "audit-leader-1",
+  "task": "audit",
+  "arm": "leader",
+  "seed": "1",
+  "model": "sophon/DeepSeek-V4.1-Flash-1017",
+  "outcome": "completed",
+  "providerErrors": [],
+  "wallSeconds": 508,
+  "firstBotMessageSeconds": 126,
+  "lastBotMessageSeconds": 496,
+  "score": {
+    "found": 10,
+    "total": 10,
+    "missed": []
+  },
+  "totals": {
+    "seats": 4,
+    "turns": 8,
+    "calls": 102,
+    "input": 3314198,
+    "output": 80741,
+    "tokens": 3394939
+  },
+  "perBot": {
+    "Ada": {
+      "seats": 1,
+      "calls": 50,
+      "turns": 4,
+      "input": 1932822,
+      "output": 28965,
+      "maxInput": 67647,
+      "tools": {
+        "group_read": 2,
+        "bash": 22,
+        "glob": 1,
+        "read": 7,
+        "group_task": 4,
+        "group_send": 6,
+        "group_members": 2,
+        "group_mention_delivery": 3,
+        "group_follow": 3,
+        "group_inbox": 3
+      }
+    },
+    "Ben": {
+      "seats": 1,
+      "calls": 15,
+      "turns": 1,
+      "input": 321044,
+      "output": 11279,
+      "maxInput": 37228,
+      "tools": {
+        "group_claim": 1,
+        "bash": 14,
+        "group_send": 1
+      }
+    },
+    "Cy": {
+      "seats": 1,
+      "calls": 15,
+      "turns": 1,
+      "input": 394101,
+      "output": 22384,
+      "maxInput": 48138,
+      "tools": {
+        "group_claim": 1,
+        "bash": 8,
+        "read": 57,
+        "group_send": 1
+      }
+    },
+    "Dee": {
+      "seats": 1,
+      "calls": 22,
+      "turns": 2,
+      "input": 666231,
+      "output": 18113,
+      "maxInput": 49268,
+      "tools": {
+        "bash": 17,
+        "group_claim": 1,
+        "read": 3,
+        "group_read": 1,
+        "group_send": 2
+      }
+    }
+  },
+  "groupMessages": {
+    "total": 13,
+    "bot": 9,
+    "system": 3,
+    "user": 1
+  },
+  "tasks": [
+    {
+      "number": 3,
+      "status": "done",
+      "assignee_id": "bot-x-ben"
+    },
+    {
+      "number": 4,
+      "status": "done",
+      "assignee_id": "bot-x-cy"
+    },
+    {
+      "number": 5,
+      "status": "done",
+      "assignee_id": "bot-x-dee"
+    }
+  ],
+  "board": {
+    "entries": 0,
+    "claims": 0,
+    "cited": 0
+  },
+  "rounds": [],
+  "transcript": [
+    "#1 user: The docs/ folder has 72 pages about our platform's services. Some pages contradict each other about a service's facts (its port, request timeout, retries, owning team, datastore, region, payload limit or cache TTL). Find every contradiction: for each one, name the service, the fact, the two conflict",
+    "#2 Ada ↩#1: On it. I'm splitting the 72 pages across Ben, Cy and Dee — four services each — so every page is read and every statement about a service's port, timeout, retries, owner, datastore, region, payload limit and cache TTL is collected. Each will report conflicting values with file names; I'll verify the",
+    "#3 Ada: @Ben — audit docs/ for contradictions about four services: analytics, auth, billing, export. ⏎  ⏎ Scope: the 72 markdown pages in /private/tmp/claude-501/-Users-bytedance-personal-claude-pocket-bots/b4867ba0-54cb-46e0-b335-aa110bee7250/scratchpad/exp/results/audit-leader-1/work/docs/ (each file mixes fa",
+    "#4 Ada: @Cy — audit docs/ for contradictions about four services: gateway, ingest, ledger, media. ⏎  ⏎ Scope: the 72 markdown pages in /private/tmp/claude-501/-Users-bytedance-personal-claude-pocket-bots/b4867ba0-54cb-46e0-b335-aa110bee7250/scratchpad/exp/results/audit-leader-1/work/docs/ (each file mixes facts",
+    "#5 Ada: @Dee — audit docs/ for contradictions about four services: notify, profile, scheduler, search. ⏎  ⏎ Scope: the 72 markdown pages in /private/tmp/claude-501/-Users-bytedance-personal-claude-pocket-bots/b4867ba0-54cb-46e0-b335-aa110bee7250/scratchpad/exp/results/audit-leader-1/work/docs/ (each file mixes ",
+    "#6 Ben [t#3]: Audit done — analytics, auth, billing, export across all 72 pages. **3 contradictions.** 97 service-bearing fact sentences total; every one classified into exactly one of the 8 facts, none unclassified. ⏎  ⏎ **1. Contradictions** ⏎  ⏎ | service | fact | values and files | ⏎ |---|---|---| ⏎ | analytics | datasto",
+    "#7 system [t#3]: ✅ Ada moved #3 \"@Ben — audit docs/ for contradictions about four services:…\" to Done",
+    "#8 Ada [t#5]: @Dee — one extra phrasing to include in the region fact: \"Traffic for <service> is served from <region>\" (e.g. Traffic for scheduler is served from ap-southeast-1) counts as that service's region, same as \"runs in\"/\"deployed to\"/\"primary region\". Applies to your four services. Everything else in the",
+    "#9 Dee [t#5]: @Ada — 5 contradictions across the four services. All 72 pages read (91 statements for notify/profile/scheduler/search); nothing edited. Your extra region phrasing is already included: it supplies scheduler's ap-southeast-1 (checklist-scheduler-30.md) and search's eu-central-1 (handbook-auth-15.md);",
+    "#10 system [t#5]: ✅ Ada moved #5 \"@Dee — audit docs/ for contradictions about four services:…\" to Done",
+    "#11 Cy [t#4]: @Ada Audit complete: **2 contradictions** (ingest cache TTL, media port); all 4 services × 8 facts covered — 95 statements from the 57 pages that name these services (the other 15 pages name none of them). No files changed. ⏎  ⏎ **Contradictions** ⏎  ⏎ | Service | Fact | Values and every file stating them |",
+    "#12 system [t#4]: ✅ Ada moved #4 \"@Cy — audit docs/ for contradictions about four services: g…\" to Done",
+    "#13 Ada ↩#1: Found **10 contradictions** across the 72 pages. All 12 services × 8 facts were audited (283 fact statements), and every row below was re-checked against the cited files. No fact has more than two conflicting values. Paths are relative to `docs/`. ⏎  ⏎ | Service | Fact | Value — files | Conflicting valu"
+  ]
+}

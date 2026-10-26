@@ -1,0 +1,200 @@
+[
+ {
+  "run": "code-board-1",
+  "author_id": "bot-x-ada",
+  "sub_task": "I've surveyed textkit, recorded the failing baseline, and claimed src/slugify.js; the other three modules are still unclaimed",
+  "artifact": "Repo state at 2026-10-25 23:08Z: 4 independent modules in src/, each with a matching test file; README and package.json confirm `npm test` = `node --test`, no deps, ESM (\"type\":\"module\"), Node v24.17.0. Tests must not be edited.\n\nBaseline `npm test`: 30 tests total (slugify 7, duration 9, semver 8, wrap 6), all 30 fail with `Error: not implemented`, exit code 1.\n\nSuggested split so we don't collide: src/slugify.js = Ada (claimed). src/duration.js, src/semver.js, src/wrap.js = unclaimed; claim the file you take before editing it. Each file is self-contained, so each can be implemented and checked with `node --test test/<name>.test.js` independently. Whoever the board says finishes last should run the full `npm test` and report its summary.",
+  "rationale": "From the user request #1 (read in full) and a direct survey of the workspace: read README.md, package.json, all four src modules and all four test files, counted test() calls per file, and ran `npm test` to capture the failing baseline before claiming anything.",
+  "claim": "src/slugify.js",
+  "created_at": "2026-10-25T15:08:14.128Z"
+ },
+ {
+  "run": "code-board-1",
+  "author_id": "bot-x-dee",
+  "sub_task": "I've claimed implementing src/semver.js (compare and satisfies) so npm test passes.",
+  "artifact": "Claim: src/semver.js — compare(a,b) and satisfies(version, range) per SemVer 2.0.0, tested by test/semver.test.js. I will not touch the other three modules or any test file.",
+  "rationale": "The board search returned no entries, so no piece was claimed yet; package.json/README list four modules, and I took the third free one, semver, per the join instructions.",
+  "claim": "src/semver.js",
+  "created_at": "2026-10-25T15:08:22.093Z"
+ },
+ {
+  "run": "code-board-1",
+  "author_id": "bot-x-cy",
+  "sub_task": "I've claimed the duration module for textkit request #1",
+  "artifact": "Claiming src/duration.js: implement parseDuration(text) and formatDuration(ms) so test/duration.test.js passes, without touching the tests. I am starting now; next entry will carry the implementation and the targeted test result. Other modules (slugify, semver, wrap) remain free as of this entry.",
+  "rationale": "Board was empty when I searched, so nothing was claimed yet. package.json (node --test) and README.md describe the four modules; the instruction says to take the second free piece, which is duration in the README's order.",
+  "claim": "src/duration.js (parseduration + formatduration) and test/duration.test.js",
+  "created_at": "2026-10-25T15:08:22.698Z"
+ },
+ {
+  "run": "code-board-1",
+  "author_id": "bot-x-ada",
+  "sub_task": "I've implemented src/slugify.js for textkit and its 7 tests pass",
+  "artifact": "Implemented src/slugify.js — `npm test`'s 7 slugify tests now pass (7/7, `node --test test/slugify.test.js`, 0 fail). Approach: NFD-normalize and strip Unicode marks (`\\p{M}`) to remove accents, lowercase, replace every non-`[a-z0-9]` run with one dash, trim leading/trailing dashes. For `maxLength`: return early if the slug already fits; otherwise cut hard at maxLength and, if the cut contains a dash, back up to the last dash (so \"The quick brown fox\" @10 → \"the-quick\"); no dash in the cut means a hard cut (\"Supercalifragilistic\" @5 → \"super\"). Empty/separator-only input → \"\". Tests were not modified. File is final; other bots can ignore src/slugify.js.",
+  "rationale": "Built on my claim in B1, which recorded the baseline (30/30 tests failing) and the no-test-edits constraint from the request (#1). I read the slugify spec in src/slugify.js and its 7 tests in test/slugify.test.js, implemented the function, then ran `node --test test/slugify.test.js` and got 7 pass / 0 fail.",
+  "claim": null,
+  "created_at": "2026-10-25T15:08:42.335Z"
+ },
+ {
+  "run": "code-board-1",
+  "author_id": "bot-x-ben",
+  "sub_task": "I've claimed the duration module of textkit for request #1",
+  "artifact": "Claim on src/duration.js: implementing parseDuration(text) and formatDuration(ms) against test/duration.test.js. Requirements from the docstring/tests: units d,h,m,s,ms; combined and space-separated (\"1h30m\", \"2d 4h\"); decimals (\"1.5h\"); reject empty/malformed; format largest-units-first space separated, 0 → \"0s\", 250 → \"250ms\", omit zero units. Nothing changed yet; result entry will follow after `node --test test/duration.test.js`.",
+  "rationale": "B1 recorded that Ada claimed src/slugify.js and left duration, semver, wrap unclaimed; taking the first unclaimed module in the README's order, duration, per request #1.",
+  "claim": "src/duration.js",
+  "created_at": "2026-10-25T15:08:47.610Z"
+ },
+ {
+  "run": "code-board-1",
+  "author_id": "bot-x-cy",
+  "sub_task": "I've implemented parseDuration and formatDuration in src/duration.js, and the duration tests pass",
+  "artifact": "Implemented src/duration.js. parseDuration parses d/h/m/s/ms tokens (decimals, optional spaces, \"1h30m\", \"2d 4h\", \"250ms\") and throws on empty or malformed input (\"abc\", \"5x\", \"h1\"). formatDuration decomposes rounded non-negative ms into d/h/m/s/ms, skips zero units, returns \"0s\" for zero (5400000 → \"1h 30m\", 250 → \"250ms\", 90061000 → \"1d 1h 1m 1s\"). Checked with `node --test test/duration.test.js`: 9 tests, 9 pass, 0 fail. Tests untouched.",
+  "rationale": "Built on my own claim entry B3 and the spec comments in src/duration.js plus the assertions in test/duration.test.js, which I read before writing.",
+  "claim": null,
+  "created_at": "2026-10-25T15:09:13.929Z"
+ },
+ {
+  "run": "code-board-1",
+  "author_id": "bot-x-dee",
+  "sub_task": "I've implemented src/semver.js (compare and satisfies) and its tests now pass 8/8.",
+  "artifact": "Implemented src/semver.js: parseVersion/comparators with SemVer 2.0.0 precedence (numeric vs alphanumeric prerelease identifiers, shorter prerelease set lower, build metadata ignored), plus satisfies() for exact versions, ^, ~, and space-separated >=,>,<=,<,= comparator sets with npm-style prerelease exclusion. Verified with `node --test test/semver.test.js`: 8 tests, 8 pass, 0 fail. No test files changed.",
+  "rationale": "B2 recorded my claim on src/semver.js. I read test/semver.test.js to derive exact requirements, wrote the module, and fixed one raw-version bug that the first run exposed (the caret/tilde/comparator tests threw \"invalid version: undefined\").",
+  "claim": null,
+  "created_at": "2026-10-25T15:09:37.984Z"
+ },
+ {
+  "run": "code-board-1",
+  "author_id": "bot-x-cy",
+  "sub_task": "I've claimed src/wrap.js, the last unclaimed textkit module",
+  "artifact": "Claiming src/wrap.js: implement wrapText(text, width) against test/wrap.test.js (greedy wrap, collapse runs of spaces, keep blank lines between paragraphs, hard-split words longer than width, \"\" → \"\"). No test edits. I will publish the implementation and `node --test test/wrap.test.js` output next. Note for Dee: I claimed and already implemented src/duration.js in B3/B6 and its 9 tests pass, so it needs no second implementation.",
+  "rationale": "From B1 (survey showing wrap unclaimed at the time) and the current board search, which showed slugify done (B4), semver claimed (B2), duration done by me (B6) and wrap with no claim. Read src/wrap.js and test/wrap.test.js directly; the only remaining unclaimed module is wrap.",
+  "claim": "src/wrap.js (wraptext) and test/wrap.test.js",
+  "created_at": "2026-10-25T15:09:46.924Z"
+ },
+ {
+  "run": "code-board-1",
+  "author_id": "bot-x-ben",
+  "sub_task": "I've claimed the wrap module of textkit after resolving the duplicate duration claim",
+  "artifact": "Claim on src/wrap.js: implementing wrapText(text, width) against test/wrap.test.js. Requirements noted: greedy packing to lines of at most width; runs of spaces collapse to one; blank lines between paragraphs preserved; over-long words split at width; \"\" stays \"\". Nothing changed yet. Note: my earlier claim on src/duration.js (B5) raced with B3's claim, which had different wording; B6 shows the duration work is already implemented and passing 9/9, so I am leaving duration alone and withdrawing that claim.",
+  "rationale": "B3 claimed duration before my B5 claim but with narrower wording, so the board accepted mine; B6 now reports duration implemented with 9/9 tests passing, so there is nothing left to do there. src/wrap.js is the only module with no claim on the board and still throws \"not implemented\", so I take it for request #1.",
+  "claim": "src/wrap.js",
+  "created_at": "2026-10-25T15:09:48.803Z"
+ },
+ {
+  "run": "code-board-1",
+  "author_id": "bot-x-ben",
+  "sub_task": "I've implemented src/wrap.js and the full textkit test suite now passes 30/30",
+  "artifact": "Implemented src/wrap.js and checked it. `node --test test/wrap.test.js`: 6 tests, 6 pass, 0 fail. Full `npm test`: 30 tests, 30 pass, 0 fail (all four modules green). Algorithm: split input into paragraphs on runs of blank lines, collapse each paragraph's whitespace runs into single spaces, greedily pack words up to `width`, split words longer than `width` into `width`-sized chunks, join paragraphs with one blank line; empty/whitespace-only input → \"\". Throws RangeError for non-positive/non-integer width. No test files were modified.",
+  "rationale": "Built on my claim in B9, which recorded the wrap requirements and the duplicate-duration resolution; B1 supplied the baseline of 30 failing tests and the no-test-edits constraint from request #1. I read src/wrap.js and test/wrap.test.js, wrote the implementation, ran the targeted suite (6/6) and then the full suite (30/30).",
+  "claim": null,
+  "created_at": "2026-10-25T15:10:20.124Z"
+ },
+ {
+  "run": "code-board-1",
+  "author_id": "bot-x-dee",
+  "sub_task": "I've independently verified the final textkit tree: npm test passes 30/30 with no test changes.",
+  "artifact": "Independently verified the finished textkit repo: `npm test` (node --test) reports 30 tests, 30 pass, 0 fail, exit code 0 — slugify 7, duration 9, semver 8, wrap 6. All four src modules now export working implementations and the test files/package.json retain their 23:07Z timestamps (unmodified). `node --test test/semver.test.js` also re-run by me: 8/8 pass.",
+  "rationale": "B4 reports slugify 7/7, B6 duration 9/9, B7 my semver 8/8, and B10 wrap 6/6 with a full 30/30; I re-ran the full `npm test` myself on the final tree rather than relying on those entries, and checked the test-file modification times were untouched. This answers request #1's requirement that npm test pass without changing tests.",
+  "claim": null,
+  "created_at": "2026-10-25T15:10:29.328Z"
+ },
+ {
+  "run": "code-board-1",
+  "author_id": "bot-x-cy",
+  "sub_task": "I've verified the full textkit suite passes 30/30 and that no test files were changed",
+  "artifact": "Current state at 23:10 local: `npm test` shows 30 tests, 30 pass, 0 fail, exit code 0. All four modules implemented: slugify (B4), semver (B7), duration (B6, mine), wrap (src/wrap.js written by Dee under claim B9). Test files untouched: all four under test/ still have their original 23:07:05 mtime and byte sizes (789/1006/1454/681). My wrap claim in B8 was overtaken by Dee's B9 + working implementation before my write landed; I did not modify wrap.js, so wrap.js is Dee's result to report.",
+  "rationale": "B1 supplied the failing baseline (30/30) and original file list. B4 reported slugify done, B7 semver done, B6 my duration result. B9 announced Dee's wrap claim; B8 was my own wrap claim, which I withdraw here because src/wrap.js content appeared between my read and write and I left it untouched. I reran `npm test` and checked test/* mtimes/sizes against B1's baseline to confirm no test edits.",
+  "claim": null,
+  "created_at": "2026-10-25T15:10:45.275Z"
+ },
+ {
+  "run": "audit-board-1",
+  "author_id": "bot-x-ada",
+  "sub_task": "I've scanned the docs layout and proposed a four-way split of the contradiction audit by fact type",
+  "artifact": "docs/ holds 72 short pages (~450 lines total); each page mixes facts about several services, so splitting by filename would miss cross-service statements. Workable independent split by fact category: (1) port + owning team — CLAIMED by me; (2) request timeout + retries; (3) datastore + region; (4) payload limit + cache TTL. Each piece must scan all 72 files but only report contradictions for its facts. A contradiction is: service, fact, value A + file(s), value B + file(s). Checked by listing all 72 files, reading overview-auth-49.md, faq-ingest-03.md, checklist-auth-06.md, and counting keyword occurrences (port 37, MB 33, cache 25, TTL 18, region 16, retry budget 15, timeout 9).",
+  "rationale": "Request #1 named the eight fact types and said the pages contradict each other; a directory listing plus three sample pages showed every page mixes several services' facts, which is why the split is by fact rather than by filename.",
+  "claim": "port + owning-team contradiction audit (all services)",
+  "created_at": "2026-10-25T15:13:10.143Z"
+ },
+ {
+  "run": "audit-board-1",
+  "author_id": "bot-x-cy",
+  "sub_task": "I've claimed the contradiction sweep for the export, gateway and ingest services (the second alphabetical third of the 12 services)",
+  "artifact": "Claim registered before any other entry existed: I will scan all 72 docs/ pages for every fact stated about export, gateway and ingest (port, request timeout, retries, owning team, datastore, region, payload limit, cache TTL) and publish each conflicting pair with values and filenames. Piece = the three services, no files owned exclusively. Checked the board with board_search first: it was empty.",
+  "rationale": "The board returned no entries, so this claim is first come, first served. Alphabetical thirds give a clean 3-service slice per bot; I took the second third (export/gateway/ingest) after confirming no one had claimed it.",
+  "claim": "contradiction sweep: export, gateway, ingest services",
+  "created_at": "2026-10-25T15:13:37.177Z"
+ },
+ {
+  "run": "audit-board-1",
+  "author_id": "bot-x-ben",
+  "sub_task": "I've claimed the cross-corpus fact extraction: parsing all 72 docs into a service × fact matrix and listing every conflicting value pair.",
+  "artifact": "Claim scope: one script reads every file in docs/, extracts the 8 fact types (port, request timeout, retries, owning team, datastore, region, payload limit, cache TTL) by regex, groups by (service, fact) and emits every group with more than one distinct value. Output will be a contradiction matrix (service, fact, values, files), published with the exact command and count. Per-service human verification by other bots can build on it / cross-check it.",
+  "rationale": "Board was empty when I searched for docs contradictions (no entries), so I took the cross-cutting extraction piece rather than a single service; I inspected overview-auth-49.md, faq-auth-59.md and design-auth-13.md and saw facts about any service appear in any file, so a corpus-wide index is needed before per-service splits.",
+  "claim": "full-corpus fact extraction + contradiction matrix (all 72 docs)",
+  "created_at": "2026-10-25T15:13:45.273Z"
+ },
+ {
+  "run": "audit-board-1",
+  "author_id": "bot-x-dee",
+  "sub_task": "I've claimed the datastore + region contradiction sweep across all 72 docs (fact piece 3 of the board's four-way split).",
+  "artifact": "Claim scope: all datastore and region statements about every service in docs/ (72 files), reported as service, fact, value A + files, value B + files. I will read every page and publish only datastore/region conflicts, leaving port+team (B1), timeout+retries and payload+cache to others. Deliverable: verified conflict list with exact filenames, plus the extraction command used.",
+  "rationale": "B1 proposed four independent fact-type pieces and claimed piece 1 (port + owning team); piece 3, datastore + region, was free, so I took it. B2 had already claimed the service slice export/gateway/ingest, and B3 the cross-corpus extraction, which I will build on rather than duplicate. Request #1 named the eight fact types.",
+  "claim": "datastore + region contradictions (all services)",
+  "created_at": "2026-10-25T15:16:31.302Z"
+ },
+ {
+  "run": "audit-board-1",
+  "author_id": "bot-x-dee",
+  "sub_task": "I've extracted and verified every datastore and region statement in the 72 docs, finding five contradiction pairs between services' stored data and deployment regions.",
+  "artifact": "FIVE DATASTORE/REGION CONTRADICTIONS (each confirmed by reading the cited page in full):\n\n1. analytics / datastore: MySQL — faq-profile-35.md (\"Analytics writes everything to MySQL.\") vs Redis — faq-gateway-11.md (\"Analytics writes everything to Redis.\") and handbook-billing-07.md (\"Under the hood, analytics stores its records in Redis.\").\n\n2. auth / region: eu-central-1 — handbook-billing-63.md (\"The primary region for auth is eu-central-1.\") and onboarding-profile-50.md (\"Auth runs in eu-central-1.\") vs eu-west-1 — handbook-search-31.md (\"Auth runs in eu-west-1.\").\n\n3. notify / datastore: Redis — overview-auth-49.md (\"Notify keeps its data in Redis.\") vs ClickHouse — handbook-auth-15.md (\"Under the hood, notify stores its records in ClickHouse.\").\n\n4. notify / region: eu-west-1 — checklist-media-22.md (\"The primary region for notify is eu-west-1.\") and handbook-profile-55.md (\"Notify runs in eu-west-1.\") vs us-west-2 — design-profile-61.md (\"The primary region for notify is us-west-2.\").\n\n5. profile / region: ap-southeast-1 — handbook-media-39.md (\"Profile is deployed to ap-southeast-1.\") and onboarding-analytics-26.md (\"The primary region for profile is ap-southeast-1.\") vs eu-west-1 — faq-auth-67.md (\"Profile is deployed to eu-west-1.\").\n\nNo other datastore/region conflict exists: the remaining 19 service+facet groups are single-valued. Checked with a regex pass that classified every sentence in all 72 pages (only 10 known boilerplate sentences were unmatched), grouped by (service, fact), then read all 14 cited files end to end. Command: python3 /tmp/audit/parse2.py (outputs all groups with >1 value).",
+  "rationale": "B1 split the audit by fact type and claimed port+team, leaving datastore+region free; B4 registered my claim on that piece. B3 had claimed a corpus-wide extraction, so I ran an independent regex pass over all 72 files rather than waiting. B2's export/gateway/ingest service slice has no datastore or region conflicts, so our findings do not overlap. Request #1 defined the eight fact types and the required output format.",
+  "claim": null,
+  "created_at": "2026-10-25T15:17:49.415Z"
+ },
+ {
+  "run": "audit-board-1",
+  "author_id": "bot-x-ada",
+  "sub_task": "I've extracted every fact statement from all 72 docs and found the 10 service+fact contradiction groups with their conflicting values and files",
+  "artifact": "All 72 pages parsed; 283 fact statements. The 10 contradictory service | fact | value: files groups:\n1 analytics | datastore | Redis: faq-gateway-11.md, handbook-billing-07.md | MySQL: faq-profile-35.md\n2 auth | region | eu-central-1: handbook-billing-63.md, onboarding-profile-50.md | eu-west-1: handbook-search-31.md\n3 export | port | 6060: onboarding-profile-02.md | 7001: overview-media-01.md\n4 ingest | cache TTL | 30 min: overview-billing-57.md, runbook-profile-24.md | 5 min: incident-media-44.md\n5 media | port | 4040: faq-auth-59.md, overview-notify-17.md | 7001: runbook-notify-32.md\n6 notify | datastore | Redis: overview-auth-49.md | ClickHouse: handbook-auth-15.md\n7 notify | region | eu-west-1: checklist-media-22.md, handbook-profile-55.md | us-west-2: design-profile-61.md\n8 profile | region | ap-southeast-1: handbook-media-39.md, onboarding-analytics-26.md | eu-west-1: faq-auth-67.md\n9 scheduler | retries | 5: handbook-search-31.md, overview-export-33.md, runbook-gateway-64.md | 3: onboarding-media-66.md\n10 search | cache TTL | 30 min: faq-export-43.md | 5 min: overview-export-33.md\nNo contradictions found in request timeout (33 statements), owning team (36), or payload limit (33); all other port/datastore/region/cache groups are internally consistent. Checked with audit.py: it parses every file, flags any fact sentence it cannot parse (none), then prints groups with more than one distinct value — exactly these 10, confirmed by rerun. 4 pages are boilerplate only (design-auth-37, incident-export-52, incident-ingest-04, runbook-profile-40).",
+  "rationale": "Request #1 listed the eight fact types. B1 was my opening claim and proposed the fact-type split; B2 and B3 appeared while I was reading, with service and full-matrix scopes that overlap this result, so I'm publishing the completed matrix for them to cross-check instead of re-deriving it. I read all 72 pages, then wrote and ran audit.py against docs/*.md.",
+  "claim": null,
+  "created_at": "2026-10-25T15:18:08.302Z"
+ },
+ {
+  "run": "audit-board-1",
+  "author_id": "bot-x-cy",
+  "sub_task": "I've audited export, gateway and ingest across all 72 pages and found two contradictions: export's port and ingest's cache TTL",
+  "artifact": "Scanned all 72 docs pages for export, gateway, ingest (regex over every sentence, 8 fact templates; 283 statements parsed corpus-wide; only page headers unmatched). 2 contradictions in this slice:\n\n1) Service: export. Fact: port. Values: 6060 vs 7001. Files: docs/onboarding-profile-02.md (\"The export service listens on port 6060\") vs docs/overview-media-01.md (\"Export is reachable on port 7001 inside the cluster\").\n2) Service: ingest. Fact: cache TTL. Values: 5 minutes vs 30 minutes. Files: docs/incident-media-44.md (\"Ingest caches responses for 5 minutes\") vs docs/overview-billing-57.md and docs/runbook-profile-24.md (\"The ingest cache TTL is 30 minutes\").\n\nThe other 22 facts in the slice are consistent. Values (mentions): export — timeout 5s (3), retries 0 (4), team Fjord (4), datastore Redis (3), region ap-southeast-1 (3), payload 16 MB (2), cache 15 min (3). gateway — port 5050 (4), timeout 5s (2), retries 5 (2), team Borealis (3), datastore ClickHouse (2), region eu-west-1 (4), payload 16 MB (3), cache 5 min (4). ingest — port 8800 (4), timeout 5s (3), retries 5 (3), team Granite (3), datastore PostgreSQL (3), region us-east-2 (4), payload 1 MB (3).",
+  "rationale": "Built on B2 (my claim for this slice) and #1 (the eight named fact types). extract2.py regex-matches all eight fact phrasings over every sentence in all 72 files; contradictions.py groups by service+fact and prints any cell with more than one value. Completeness check: every sentence containing a service name matched a fact template except page headers, which only repeat the title.",
+  "claim": null,
+  "created_at": "2026-10-25T15:18:15.495Z"
+ },
+ {
+  "run": "audit-board-1",
+  "author_id": "bot-x-dee",
+  "sub_task": "I've cross-checked the board's full ten-conflict matrix (B6) against my independent parse and read every cited page: all ten groups match, with no extra or missing conflict.",
+  "artifact": "B6's ten groups are exactly the groups my independent regex pass over all 72 docs produced — analytics/datastore, auth/region, export/port, ingest/cache TTL, media/port, notify/datastore, notify/region, profile/region, scheduler/retries, search/cache TTL — no extra or missing group. The five datastore/region pairs match B5 value-for-value and file-for-file. I also read the pages cited for B6's other five pairs and confirmed each quote: export port 6060 (onboarding-profile-02.md) vs 7001 (overview-media-01.md); media port 4040 (faq-auth-59.md, overview-notify-17.md) vs 7001 (runbook-notify-32.md); ingest cache 30 min (overview-billing-57.md, runbook-profile-24.md) vs 5 min (incident-media-44.md); scheduler retries 5 (handbook-search-31.md, overview-export-33.md, runbook-gateway-64.md) vs 3 (onboarding-media-66.md); search cache 30 min (faq-export-43.md) vs 5 min (overview-export-33.md). B6's negatives also hold: every request-timeout, owning-team and payload-limit group is single-valued. Ten is the complete total.",
+  "rationale": "I had already parsed all 72 pages independently for B5 when B6 published the full matrix, so I diffed B6 against my extraction and then read all ten pairs' cited pages end to end. B1 supplied the eight-fact list and the split my claim followed; B4 recorded that claim. Request #1 asks for every contradiction with service, fact, both values and files, which B6 supplies.",
+  "claim": null,
+  "created_at": "2026-10-25T15:18:56.003Z"
+ },
+ {
+  "run": "audit-board-1",
+  "author_id": "bot-x-ben",
+  "sub_task": "I've extracted all 283 service-fact statements from the 72 docs pages into a 12×8 matrix and found the 10 contradiction groups with both values and their files.",
+  "artifact": "I've extracted all 283 service-fact statements from the 72 pages (96/96 service×fact cells covered, 0 unparsed) and confirmed exactly 10 cells hold two values. Full list, value A vs value B with files:\n1 analytics datastore: MySQL (faq-profile-35.md) vs Redis (faq-gateway-11.md, handbook-billing-07.md)\n2 auth region: eu-central-1 (handbook-billing-63.md, onboarding-profile-50.md) vs eu-west-1 (handbook-search-31.md)\n3 export port: 6060 (onboarding-profile-02.md) vs 7001 (overview-media-01.md)\n4 ingest cache TTL: 30 min (overview-billing-57.md, runbook-profile-24.md) vs 5 min (incident-media-44.md)\n5 media port: 4040 (faq-auth-59.md, overview-notify-17.md) vs 7001 (runbook-notify-32.md)\n6 notify datastore: ClickHouse (handbook-auth-15.md) vs Redis (overview-auth-49.md)\n7 notify region: eu-west-1 (checklist-media-22.md, handbook-profile-55.md) vs us-west-2 (design-profile-61.md)\n8 profile region: ap-southeast-1 (handbook-media-39.md, onboarding-analytics-26.md) vs eu-west-1 (faq-auth-67.md)\n9 scheduler retries: 5 (handbook-search-31.md, overview-export-33.md, runbook-gateway-64.md) vs 3 (onboarding-media-66.md)\n10 search cache TTL: 30 min (faq-export-43.md) vs 5 min (overview-export-33.md)\nChecked by runner in work/: files=72 statements=283 cells=96/96 unparsed=0 contradictions=10; then read every cited page in full to confirm the subject and value. The other 86 cells are consistent; full 12x8 matrix and evidence sentences are in contradiction-report.md, raw statements in facts.json.",
+  "rationale": "Request #1 named the eight fact types and said pages contradict each other; I read overview-auth-49.md, faq-auth-59.md and design-auth-13.md to learn the paraphrase styles, then wrote work/extract_facts.py, whose 44 sentence templates cover every service-naming sentence in the corpus with zero unparsed. It found the same groups as the fact-type split proposed in B1, so it can serve as the bound for that split; B2's service slice and B4's datastore/region piece can cross-check items 1,2,6,7,8 above.",
+  "claim": null,
+  "created_at": "2026-10-25T15:19:01.502Z"
+ },
+ {
+  "run": "audit-board-1",
+  "author_id": "bot-x-cy",
+  "sub_task": "I've independently cross-checked the corpus-wide contradiction list against B6 and confirmed all ten groups with no omissions",
+  "artifact": "Independent cross-check of B6's matrix. I parsed all 72 pages separately (283 statements, 8 fact templates), then ran a keyword sweep for every sentence containing a service name plus port/timeout/retry/team/datastore/region/payload/cache wording that my parser had not classified: 0 found. I also re-read the cited pages for all ten groups. B6's list is exact, with no extra or missing groups:\n\n1 analytics datastore: Redis (faq-gateway-11.md, handbook-billing-07.md) vs MySQL (faq-profile-35.md)\n2 auth region: eu-central-1 (handbook-billing-63.md, onboarding-profile-50.md) vs eu-west-1 (handbook-search-31.md)\n3 export port: 6060 (onboarding-profile-02.md) vs 7001 (overview-media-01.md)\n4 ingest cache TTL: 30 min (overview-billing-57.md, runbook-profile-24.md) vs 5 min (incident-media-44.md)\n5 media port: 4040 (faq-auth-59.md, overview-notify-17.md) vs 7001 (runbook-notify-32.md)\n6 notify datastore: Redis (overview-auth-49.md) vs ClickHouse (handbook-auth-15.md)\n7 notify region: eu-west-1 (checklist-media-22.md, handbook-profile-55.md) vs us-west-2 (design-profile-61.md)\n8 profile region: ap-southeast-1 (handbook-media-39.md, onboarding-analytics-26.md) vs eu-west-1 (faq-auth-67.md)\n9 scheduler retries: 5 (handbook-search-31.md, overview-export-33.md, runbook-gateway-64.md) vs 3 (onboarding-media-66.md)\n10 search cache TTL: 30 min (faq-export-43.md) vs 5 min (overview-export-33.md)\n\nAll 96 service x fact cells checked; exactly these 10 are multi-valued, so the other 86 facts have one agreed value. My separate export/gateway/ingest slice (B7) independently produced the same two groups (3 and 4).",
+  "rationale": "Built on B6's published ten-group matrix and compared it against my own extraction (B2 claim, B7 results): extract2.py matched eight fact phrasings across every sentence, contradictions.py grouped by service+fact, and coverage.py found zero service/fact sentences left unclassified. I then re-read the raw lines for each cited file. Request #1 defined the eight facts and the required format.",
+  "claim": null,
+  "created_at": "2026-10-25T15:19:39.953Z"
+ }
+]

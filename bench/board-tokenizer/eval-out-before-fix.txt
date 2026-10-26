@@ -1,0 +1,476 @@
+75 entries, 60 queries, k = 8
+
+| 打分 | 分词 | Recall@8 | MRR | nDCG@8 | 一条都没找到 | 第一名不相关 |
+|---|---|---|---|---|---|---|
+| 我们的 BM25 | ours（整段+二元，现状） | 98% | 0.96 | 0.95 | 0 | 4 |
+| 我们的 BM25 | 仅二元，中英分开（修复后） | 99% | 0.97 | 0.96 | 0 | 3 |
+| 我们的 BM25 | 一元+二元 | 99% | 0.97 | 0.96 | 0 | 3 |
+| 我们的 BM25 | jieba 精确模式 | 91% | 0.90 | 0.89 | 4 | 4 |
+| 我们的 BM25 | 二元 + jieba 精确（并集） | 99% | 0.97 | 0.96 | 0 | 3 |
+| 我们的 BM25 | jieba 搜索模式 | 99% | 0.96 | 0.95 | 0 | 4 |
+| zvec BM25 | jieba mix（zg 的配置） | 98% | 0.96 | 0.95 | 0 | 4 |
+| zvec BM25 | jieba search | 98% | 0.96 | 0.95 | 0 | 4 |
+| zvec BM25 | ngram 2 | 99% | 0.97 | 0.97 | 0 | 3 |
+| zvec BM25 | standard（单字） | 99% | 0.94 | 0.94 | 0 | 6 |
+| zvec BM25 | ours 的词，zvec 打分 | 97% | 0.95 | 0.94 | 0 | 5 |
+| zvec BM25 | jieba 搜索模式的词，zvec 打分 | 99% | 0.96 | 0.95 | 0 | 4 |
+
+nDCG@8 by query type (queries per type: 精确词 8、新词/领域词 10、粒度不一致 14、歧义/跨词误配 8、中英混合 7、中英无空格 5、自然语言问句 5、近义改写 3)
+
+| 分词 | 精确词 | 新词/领域词 | 粒度不一致 | 歧义/跨词误配 | 中英混合 | 中英无空格 | 自然语言问句 | 近义改写 |
+|---|---|---|---|---|---|---|---|---|
+| ours（整段+二元，现状） | 1.00 | 1.00 | 0.97 | 0.94 | 1.00 | 0.82 | 0.93 | 0.77 |
+| 仅二元，中英分开（修复后） | 1.00 | 1.00 | 0.97 | 0.94 | 1.00 | 0.98 | 0.93 | 0.77 |
+| 一元+二元 | 1.00 | 1.00 | 0.97 | 0.94 | 1.00 | 0.91 | 0.93 | 0.89 |
+| jieba 精确模式 | 1.00 | 1.00 | 0.70 | 0.97 | 1.00 | 0.94 | 0.90 | 0.45 |
+| 二元 + jieba 精确（并集） | 1.00 | 1.00 | 0.97 | 1.00 | 1.00 | 0.96 | 0.93 | 0.64 |
+| jieba 搜索模式 | 1.00 | 1.00 | 0.91 | 0.95 | 1.00 | 0.98 | 0.90 | 0.80 |
+| zvec · jieba mix（zg 的配置） | 1.00 | 1.00 | 0.88 | 0.96 | 1.00 | 0.98 | 0.93 | 0.77 |
+| zvec · jieba search | 1.00 | 1.00 | 0.88 | 0.96 | 1.00 | 0.98 | 0.93 | 0.77 |
+| zvec · ngram 2 | 1.00 | 1.00 | 0.97 | 0.95 | 1.00 | 0.97 | 0.93 | 0.76 |
+| zvec · standard（单字） | 0.95 | 1.00 | 0.93 | 0.94 | 1.00 | 0.91 | 0.81 | 0.89 |
+| zvec · ours 的词，zvec 打分 | 1.00 | 1.00 | 0.97 | 0.94 | 1.00 | 0.74 | 0.93 | 0.77 |
+| zvec · jieba 搜索模式的词，zvec 打分 | 1.00 | 1.00 | 0.91 | 0.95 | 1.00 | 0.98 | 0.90 | 0.77 |
+
+Top 3 per query (* = relevant):
+
+[精确词] "登录日志" → E3
+   ours（整段+二元，现状）: E3* E58 E66 (ndcg 1.00)
+   jieba 精确模式: E3* E58 E66 (ndcg 1.00)
+   二元 + jieba 精确（并集）: E3* E58 E66 (ndcg 1.00)
+   jieba 搜索模式: E3* E58 E70 (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E3* E58 E70 (ndcg 1.00)
+   zvec·jieba search: E3* E58 E70 (ndcg 1.00)
+   zvec·standard（单字）: E3* E58 E66 (ndcg 1.00)
+[精确词] "重试次数" → E8,E45,E54
+   ours（整段+二元，现状）: E45* E8* E54* (ndcg 1.00)
+   jieba 精确模式: E8* E45* E54* (ndcg 1.00)
+   二元 + jieba 精确（并集）: E45* E8* E54* (ndcg 1.00)
+   jieba 搜索模式: E45* E8* E54* (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E45* E8* E54* (ndcg 1.00)
+   zvec·jieba search: E45* E8* E54* (ndcg 1.00)
+   zvec·standard（单字）: E8* E45* E54* (ndcg 1.00)
+[精确词] "缓存过期时间" → E21
+   ours（整段+二元，现状）: E21* E4 E20 (ndcg 1.00)
+   jieba 精确模式: E21* E20 E4 (ndcg 1.00)
+   二元 + jieba 精确（并集）: E21* E4 E20 (ndcg 1.00)
+   jieba 搜索模式: E21* E20 E4 (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E21* E20 E4 (ndcg 1.00)
+   zvec·jieba search: E21* E20 E4 (ndcg 1.00)
+   zvec·standard（单字）: E21* E20 E4 (ndcg 1.00)
+[精确词] "连接池" → E23
+   ours（整段+二元，现状）: E23* (ndcg 1.00)
+   jieba 精确模式: E23* (ndcg 1.00)
+   二元 + jieba 精确（并集）: E23* (ndcg 1.00)
+   jieba 搜索模式: E23* (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E23* (ndcg 1.00)
+   zvec·jieba search: E23* (ndcg 1.00)
+   zvec·standard（单字）: E23* E13 E9 (ndcg 1.00)
+[精确词] "数据库存储" → E26
+   ours（整段+二元，现状）: E26* E65 E50 (ndcg 1.00)
+   jieba 精确模式: E26* E65 E50 (ndcg 1.00)
+   二元 + jieba 精确（并集）: E26* E50 E65 (ndcg 1.00)
+   jieba 搜索模式: E26* E50 E65 (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E26* E50 E51 (ndcg 1.00)
+   zvec·jieba search: E26* E50 E51 (ndcg 1.00)
+   zvec·standard（单字）: E65 E26* E44 (ndcg 0.63)
+[精确词] "单价" → E10
+   ours（整段+二元，现状）: E10* E11 (ndcg 1.00)
+   jieba 精确模式: E10* (ndcg 1.00)
+   二元 + jieba 精确（并集）: E10* E11 (ndcg 1.00)
+   jieba 搜索模式: E10* (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E10* (ndcg 1.00)
+   zvec·jieba search: E10* (ndcg 1.00)
+   zvec·standard（单字）: E10* E11 E69 (ndcg 1.00)
+[精确词] "代码覆盖率" → E37
+   ours（整段+二元，现状）: E37* E31 (ndcg 1.00)
+   jieba 精确模式: E37* (ndcg 1.00)
+   二元 + jieba 精确（并集）: E37* E31 (ndcg 1.00)
+   jieba 搜索模式: E37* E31 (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E37* E31 (ndcg 1.00)
+   zvec·jieba search: E37* E31 (ndcg 1.00)
+   zvec·standard（单字）: E37* E31 E39 (ndcg 1.00)
+[精确词] "转化率" → E39
+   ours（整段+二元，现状）: E39* (ndcg 1.00)
+   jieba 精确模式: E39* (ndcg 1.00)
+   二元 + jieba 精确（并集）: E39* (ndcg 1.00)
+   jieba 搜索模式: E39* (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E39* (ndcg 1.00)
+   zvec·jieba search: E39* (ndcg 1.00)
+   zvec·standard（单字）: E39* E37 E65 (ndcg 1.00)
+[新词/领域词] "白屏" → E1,E2
+   ours（整段+二元，现状）: E2* E1* (ndcg 1.00)
+   jieba 精确模式: E1* E2* (ndcg 1.00)
+   二元 + jieba 精确（并集）: E2* E1* (ndcg 1.00)
+   jieba 搜索模式: E2* E1* (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E2* E1* (ndcg 1.00)
+   zvec·jieba search: E2* E1* (ndcg 1.00)
+   zvec·standard（单字）: E2* E1* E67 (ndcg 1.00)
+[新词/领域词] "灰度" → E15,E16
+   ours（整段+二元，现状）: E16* E15* (ndcg 1.00)
+   jieba 精确模式: E16* E15* (ndcg 1.00)
+   二元 + jieba 精确（并集）: E16* E15* (ndcg 1.00)
+   jieba 搜索模式: E16* E15* (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E16* E15* (ndcg 1.00)
+   zvec·jieba search: E16* E15* (ndcg 1.00)
+   zvec·standard（单字）: E16* E15* E34 (ndcg 1.00)
+[新词/领域词] "熔断" → E17
+   ours（整段+二元，现状）: E17* (ndcg 1.00)
+   jieba 精确模式: E17* (ndcg 1.00)
+   二元 + jieba 精确（并集）: E17* (ndcg 1.00)
+   jieba 搜索模式: E17* (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E17* (ndcg 1.00)
+   zvec·jieba search: E17* (ndcg 1.00)
+   zvec·standard（单字）: E17* E6 E4 (ndcg 1.00)
+[新词/领域词] "幂等" → E9
+   ours（整段+二元，现状）: E9* (ndcg 1.00)
+   jieba 精确模式: E9* (ndcg 1.00)
+   二元 + jieba 精确（并集）: E9* (ndcg 1.00)
+   jieba 搜索模式: E9* (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E9* (ndcg 1.00)
+   zvec·jieba search: E9* (ndcg 1.00)
+   zvec·standard（单字）: E9* E23 (ndcg 1.00)
+[新词/领域词] "埋点" → E38
+   ours（整段+二元，现状）: E38* (ndcg 1.00)
+   jieba 精确模式: E38* (ndcg 1.00)
+   二元 + jieba 精确（并集）: E38* (ndcg 1.00)
+   jieba 搜索模式: E38* (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E38* (ndcg 1.00)
+   zvec·jieba search: E38* (ndcg 1.00)
+   zvec·standard（单字）: E38* E7 E20 (ndcg 1.00)
+[新词/领域词] "冷启动" → E29
+   ours（整段+二元，现状）: E29* E63 (ndcg 1.00)
+   jieba 精确模式: E29* (ndcg 1.00)
+   二元 + jieba 精确（并集）: E29* E63 (ndcg 1.00)
+   jieba 搜索模式: E29* E63 (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E29* E63 (ndcg 1.00)
+   zvec·jieba search: E29* E63 (ndcg 1.00)
+   zvec·standard（单字）: E29* E63 E27 (ndcg 1.00)
+[新词/领域词] "鉴权" → E13
+   ours（整段+二元，现状）: E13* (ndcg 1.00)
+   jieba 精确模式: E13* (ndcg 1.00)
+   二元 + jieba 精确（并集）: E13* (ndcg 1.00)
+   jieba 搜索模式: E13* (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E13* (ndcg 1.00)
+   zvec·jieba search: E13* (ndcg 1.00)
+   zvec·standard（单字）: E13* E56 E50 (ndcg 1.00)
+[新词/领域词] "超卖" → E25
+   ours（整段+二元，现状）: E25* (ndcg 1.00)
+   jieba 精确模式: E25* (ndcg 1.00)
+   二元 + jieba 精确（并集）: E25* (ndcg 1.00)
+   jieba 搜索模式: E25* (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E25* (ndcg 1.00)
+   zvec·jieba search: E25* (ndcg 1.00)
+   zvec·standard（单字）: E25* E12 E36 (ndcg 1.00)
+[新词/领域词] "限流" → E19
+   ours（整段+二元，现状）: E19* (ndcg 1.00)
+   jieba 精确模式: E19* (ndcg 1.00)
+   二元 + jieba 精确（并集）: E19* (ndcg 1.00)
+   jieba 搜索模式: E19* (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E19* (ndcg 1.00)
+   zvec·jieba search: E19* (ndcg 1.00)
+   zvec·standard（单字）: E19* E47 E56 (ndcg 1.00)
+[粒度不一致] "长江" → E49
+   ours（整段+二元，现状）: E49* (ndcg 1.00)
+   jieba 精确模式: — (ndcg 0.00)
+   二元 + jieba 精确（并集）: E49* (ndcg 1.00)
+   jieba 搜索模式: E49* (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E49* (ndcg 1.00)
+   zvec·jieba search: E49* (ndcg 1.00)
+   zvec·standard（单字）: E49* E61 E62 (ndcg 1.00)
+[粒度不一致] "登录页面" → E1
+   ours（整段+二元，现状）: E1* E40 E6 (ndcg 1.00)
+   jieba 精确模式: E40 E6 E7 (ndcg 0.36)
+   二元 + jieba 精确（并集）: E1* E40 E6 (ndcg 1.00)
+   jieba 搜索模式: E40 E6 E7 (ndcg 0.36)
+   zvec·jieba mix（zg 的配置）: E40 E6 E7 (ndcg 0.36)
+   zvec·jieba search: E40 E6 E7 (ndcg 0.36)
+   zvec·standard（单字）: E40 E1* E7 (ndcg 0.63)
+[粒度不一致] "单元测试" → E31,E4
+   ours（整段+二元，现状）: E31* E4* E63 (ndcg 1.00)
+   jieba 精确模式: E31* E4* (ndcg 1.00)
+   二元 + jieba 精确（并集）: E31* E4* E63 (ndcg 1.00)
+   jieba 搜索模式: E31* E4* E63 (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E31* E4* E63 (ndcg 1.00)
+   zvec·jieba search: E31* E4* E63 (ndcg 1.00)
+   zvec·standard（单字）: E31* E4* E63 (ndcg 1.00)
+[粒度不一致] "测试用例" → E33,E31
+   ours（整段+二元，现状）: E33* E31* E63 (ndcg 1.00)
+   jieba 精确模式: E33* (ndcg 0.61)
+   二元 + jieba 精确（并集）: E33* E31* E63 (ndcg 1.00)
+   jieba 搜索模式: E33* E63 E50 (ndcg 0.83)
+   zvec·jieba mix（zg 的配置）: E33* E63 E50 (ndcg 0.81)
+   zvec·jieba search: E33* E63 E50 (ndcg 0.81)
+   zvec·standard（单字）: E33* E31* E63 (ndcg 1.00)
+[粒度不一致] "回滚" → E16,E51
+   ours（整段+二元，现状）: E51* E16* (ndcg 1.00)
+   jieba 精确模式: E51* E16* (ndcg 1.00)
+   二元 + jieba 精确（并集）: E51* E16* (ndcg 1.00)
+   jieba 搜索模式: E51* E16* (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E51* E16* (ndcg 1.00)
+   zvec·jieba search: E51* E16* (ndcg 1.00)
+   zvec·standard（单字）: E51* E16* E7 (ndcg 1.00)
+[粒度不一致] "发布" → E15
+   ours（整段+二元，现状）: E48 E15* (ndcg 0.63)
+   jieba 精确模式: E15* (ndcg 1.00)
+   二元 + jieba 精确（并集）: E48 E15* (ndcg 0.63)
+   jieba 搜索模式: E48 E15* (ndcg 0.63)
+   zvec·jieba mix（zg 的配置）: E48 E15* (ndcg 0.63)
+   zvec·jieba search: E48 E15* (ndcg 0.63)
+   zvec·standard（单字）: E48 E15* E59 (ndcg 0.63)
+[粒度不一致] "数据库" → E20,E23,E24,E26,E50,E51
+   ours（整段+二元，现状）: E50* E51* E26* (ndcg 0.89)
+   jieba 精确模式: E50* E51* E23* (ndcg 0.89)
+   二元 + jieba 精确（并集）: E50* E51* E26* (ndcg 0.89)
+   jieba 搜索模式: E50* E51* E26* (ndcg 0.89)
+   zvec·jieba mix（zg 的配置）: E50* E51* E23* (ndcg 0.89)
+   zvec·jieba search: E50* E51* E23* (ndcg 0.89)
+   zvec·standard（单字）: E50* E62 E51* (ndcg 0.81)
+[粒度不一致] "监测" → E62,E49
+   ours（整段+二元，现状）: E62* E49* (ndcg 1.00)
+   jieba 精确模式: — (ndcg 0.00)
+   二元 + jieba 精确（并集）: E62* E49* (ndcg 1.00)
+   jieba 搜索模式: E62* E49* (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E62* E49* (ndcg 1.00)
+   zvec·jieba search: E62* E49* (ndcg 1.00)
+   zvec·standard（单字）: E62* E49* E63 (ndcg 1.00)
+[粒度不一致] "大桥" → E49
+   ours（整段+二元，现状）: E49* (ndcg 1.00)
+   jieba 精确模式: — (ndcg 0.00)
+   二元 + jieba 精确（并集）: E49* (ndcg 1.00)
+   jieba 搜索模式: E49* (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E49* (ndcg 1.00)
+   zvec·jieba search: E49* (ndcg 1.00)
+   zvec·standard（单字）: E49* E28 E23 (ndcg 1.00)
+[粒度不一致] "首屏" → E2,E67
+   ours（整段+二元，现状）: E67* E2* (ndcg 1.00)
+   jieba 精确模式: E67* E2* (ndcg 1.00)
+   二元 + jieba 精确（并集）: E67* E2* (ndcg 1.00)
+   jieba 搜索模式: E67* E2* (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E67* (ndcg 0.61)
+   zvec·jieba search: E67* (ndcg 0.61)
+   zvec·standard（单字）: E67* E2* E1 (ndcg 1.00)
+[粒度不一致] "按需加载" → E2
+   ours（整段+二元，现状）: E2* E52 E29 (ndcg 1.00)
+   jieba 精确模式: E2* E52 E29 (ndcg 1.00)
+   二元 + jieba 精确（并集）: E2* E52 E29 (ndcg 1.00)
+   jieba 搜索模式: E2* E52 E40 (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E2* E52 E40 (ndcg 1.00)
+   zvec·jieba search: E2* E52 E40 (ndcg 1.00)
+   zvec·standard（单字）: E2* E52 E26 (ndcg 1.00)
+[粒度不一致] "测试环境" → E50,E63
+   ours（整段+二元，现状）: E63* E50* E16 (ndcg 1.00)
+   jieba 精确模式: E63* E50* (ndcg 1.00)
+   二元 + jieba 精确（并集）: E63* E50* E16 (ndcg 1.00)
+   jieba 搜索模式: E63* E50* E16 (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E63* E50* E16 (ndcg 1.00)
+   zvec·jieba search: E63* E50* E16 (ndcg 1.00)
+   zvec·standard（单字）: E63* E50* E16 (ndcg 1.00)
+[粒度不一致] "会员价" → E69
+   ours（整段+二元，现状）: E69* (ndcg 1.00)
+   jieba 精确模式: E69* (ndcg 1.00)
+   二元 + jieba 精确（并集）: E69* (ndcg 1.00)
+   jieba 搜索模式: E69* (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E69* (ndcg 1.00)
+   zvec·jieba search: E69* (ndcg 1.00)
+   zvec·standard（单字）: E69* E10 E48 (ndcg 1.00)
+[歧义/跨词误配] "库存" → E25,E64
+   ours（整段+二元，现状）: E64* E25* E26 (ndcg 1.00)
+   jieba 精确模式: E64* E25* (ndcg 1.00)
+   二元 + jieba 精确（并集）: E64* E25* E26 (ndcg 1.00)
+   jieba 搜索模式: E64* E25* (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E25* E64* (ndcg 1.00)
+   zvec·jieba search: E25* E64* (ndcg 1.00)
+   zvec·standard（单字）: E64* E25* E26 (ndcg 1.00)
+[歧义/跨词误配] "验证" → E1,E16,E68
+   ours（整段+二元，现状）: E4 E53 E68* (ndcg 0.55)
+   jieba 精确模式: E68* E16* E1* (ndcg 1.00)
+   二元 + jieba 精确（并集）: E68* E16* E4 (ndcg 0.97)
+   jieba 搜索模式: E4 E53 E68* (ndcg 0.58)
+   zvec·jieba mix（zg 的配置）: E4 E68* E59 (ndcg 0.65)
+   zvec·jieba search: E4 E68* E59 (ndcg 0.65)
+   zvec·standard（单字）: E4 E53 E68* (ndcg 0.54)
+[歧义/跨词误配] "价格" → E10,E11,E69
+   ours（整段+二元，现状）: E11* E69* E10* (ndcg 1.00)
+   jieba 精确模式: E11* E10* (ndcg 0.77)
+   二元 + jieba 精确（并集）: E11* E10* E69* (ndcg 1.00)
+   jieba 搜索模式: E11* E69* E10* (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E11* E69* E10* (ndcg 1.00)
+   zvec·jieba search: E11* E69* E10* (ndcg 1.00)
+   zvec·standard（单字）: E11* E69* E10* (ndcg 1.00)
+[歧义/跨词误配] "存储" → E26,E44,E65
+   ours（整段+二元，现状）: E26* E65* E44* (ndcg 1.00)
+   jieba 精确模式: E65* E26* E44* (ndcg 1.00)
+   二元 + jieba 精确（并集）: E65* E26* E44* (ndcg 1.00)
+   jieba 搜索模式: E65* E26* E44* (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E65* E26* E44* (ndcg 1.00)
+   zvec·jieba search: E65* E26* E44* (ndcg 1.00)
+   zvec·standard（单字）: E65* E26* E44* (ndcg 1.00)
+[歧义/跨词误配] "并行" → E36,E67
+   ours（整段+二元，现状）: E67* E36* (ndcg 1.00)
+   jieba 精确模式: E67* E36* (ndcg 1.00)
+   二元 + jieba 精确（并集）: E67* E36* (ndcg 1.00)
+   jieba 搜索模式: E67* E36* (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E67* E36* (ndcg 1.00)
+   zvec·jieba search: E67* E36* (ndcg 1.00)
+   zvec·standard（单字）: E67* E36* E25 (ndcg 1.00)
+[歧义/跨词误配] "验证码" → E4,E39,E53,E59,E61
+   ours（整段+二元，现状）: E4* E53* E61* (ndcg 1.00)
+   jieba 精确模式: E4* E53* E59* (ndcg 1.00)
+   二元 + jieba 精确（并集）: E4* E53* E61* (ndcg 1.00)
+   jieba 搜索模式: E4* E53* E59* (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E4* E59* E53* (ndcg 1.00)
+   zvec·jieba search: E4* E59* E53* (ndcg 1.00)
+   zvec·standard（单字）: E4* E53* E61* (ndcg 1.00)
+[中英混合] "npm test 失败" → E32
+   ours（整段+二元，现状）: E32* E31 E14 (ndcg 1.00)
+   jieba 精确模式: E32* E73 E31 (ndcg 1.00)
+   二元 + jieba 精确（并集）: E32* E73 E31 (ndcg 1.00)
+   jieba 搜索模式: E32* E73 E31 (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E32* E73 E31 (ndcg 1.00)
+   zvec·jieba search: E32* E73 E31 (ndcg 1.00)
+   zvec·standard（单字）: E32* E73 E31 (ndcg 1.00)
+[中英混合] "CSP 拦截" → E1
+   ours（整段+二元，现状）: E1* (ndcg 1.00)
+   jieba 精确模式: E1* (ndcg 1.00)
+   二元 + jieba 精确（并集）: E1* (ndcg 1.00)
+   jieba 搜索模式: E1* (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E1* E43 E21 (ndcg 1.00)
+   zvec·jieba search: E1* E43 E21 (ndcg 1.00)
+   zvec·standard（单字）: E1* (ndcg 1.00)
+[中英混合] "k8s 探针" → E27
+   ours（整段+二元，现状）: E27* (ndcg 1.00)
+   jieba 精确模式: E27* (ndcg 1.00)
+   二元 + jieba 精确（并集）: E27* (ndcg 1.00)
+   jieba 搜索模式: E27* (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E27* E43 E21 (ndcg 1.00)
+   zvec·jieba search: E27* E43 E21 (ndcg 1.00)
+   zvec·standard（单字）: E27* E17 (ndcg 1.00)
+[中英混合] "src/wrap.js" → E34
+   ours（整段+二元，现状）: E34* E1 (ndcg 1.00)
+   jieba 精确模式: E34* (ndcg 1.00)
+   二元 + jieba 精确（并集）: E34* E1 (ndcg 1.00)
+   jieba 搜索模式: E34* E1 (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E34* E1 E8 (ndcg 1.00)
+   zvec·jieba search: E34* E1 E8 (ndcg 1.00)
+   zvec·standard（单字）: E34* E1 (ndcg 1.00)
+[中英无空格] "TTL" → E21,E71
+   ours（整段+二元，现状）: E61 E21* (ndcg 0.39)
+   jieba 精确模式: E61 E71* E21* (ndcg 0.69)
+   二元 + jieba 精确（并集）: E71* E61 E21* (ndcg 0.92)
+   jieba 搜索模式: E71* E61 E21* (ndcg 0.92)
+   zvec·jieba mix（zg 的配置）: E71* E61 E21* (ndcg 0.92)
+   zvec·jieba search: E71* E61 E21* (ndcg 0.92)
+   zvec·standard（单字）: E71* E61 E21* (ndcg 0.92)
+[中英无空格] "Redis 分布式锁" → E72
+   ours（整段+二元，现状）: E72* E55 E44 (ndcg 1.00)
+   jieba 精确模式: E72* E55 E20 (ndcg 1.00)
+   二元 + jieba 精确（并集）: E72* E55 E20 (ndcg 1.00)
+   jieba 搜索模式: E72* E55 E20 (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E72* E55 E20 (ndcg 1.00)
+   zvec·jieba search: E72* E55 E20 (ndcg 1.00)
+   zvec·standard（单字）: E72* E55 E20 (ndcg 1.00)
+[中英无空格] "CI 失败" → E73,E36
+   ours（整段+二元，现状）: E36* E32 E14 (ndcg 0.88)
+   jieba 精确模式: E73* E36* E32 (ndcg 1.00)
+   二元 + jieba 精确（并集）: E73* E32 E14 (ndcg 0.88)
+   jieba 搜索模式: E73* E36* E14 (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E73* E36* E32 (ndcg 1.00)
+   zvec·jieba search: E73* E36* E32 (ndcg 1.00)
+   zvec·standard（单字）: E73* E32 E14 (ndcg 0.61)
+[中英无空格] "网关超时" → E74,E12
+   ours（整段+二元，现状）: E74* E12* E17 (ndcg 1.00)
+   jieba 精确模式: E12* E74* E17 (ndcg 1.00)
+   二元 + jieba 精确（并集）: E74* E12* E17 (ndcg 1.00)
+   jieba 搜索模式: E12* E74* E17 (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E74* E12* E17 (ndcg 1.00)
+   zvec·jieba search: E74* E12* E17 (ndcg 1.00)
+   zvec·standard（单字）: E12* E74* E17 (ndcg 1.00)
+[中英无空格] "user_id 索引" → E75,E24
+   ours（整段+二元，现状）: E24* E42 E66 (ndcg 0.85)
+   jieba 精确模式: E24* E75* E66 (ndcg 1.00)
+   二元 + jieba 精确（并集）: E75* E24* E42 (ndcg 1.00)
+   jieba 搜索模式: E75* E24* E66 (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E75* E24* E66 (ndcg 1.00)
+   zvec·jieba search: E75* E24* E66 (ndcg 1.00)
+   zvec·standard（单字）: E24* E75* E19 (ndcg 1.00)
+[自然语言问句] "为什么登录页会白屏？" → E1
+   ours（整段+二元，现状）: E1* E2 E7 (ndcg 1.00)
+   jieba 精确模式: E1* E64 E7 (ndcg 1.00)
+   二元 + jieba 精确（并集）: E1* E2 E7 (ndcg 1.00)
+   jieba 搜索模式: E1* E64 E7 (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E1* E64 E7 (ndcg 1.00)
+   zvec·jieba search: E1* E64 E7 (ndcg 1.00)
+   zvec·standard（单字）: E1* E2 E40 (ndcg 1.00)
+[自然语言问句] "支付失败后会重试几次" → E8
+   ours（整段+二元，现状）: E54 E8* E40 (ndcg 0.63)
+   jieba 精确模式: E54 E64 E8* (ndcg 0.50)
+   二元 + jieba 精确（并集）: E54 E8* E64 (ndcg 0.63)
+   jieba 搜索模式: E54 E64 E8* (ndcg 0.50)
+   zvec·jieba mix（zg 的配置）: E54 E8* E40 (ndcg 0.63)
+   zvec·jieba search: E54 E8* E40 (ndcg 0.63)
+   zvec·standard（单字）: E54 E8* E64 (ndcg 0.63)
+[自然语言问句] "怎么回滚灰度发布" → E16,E15
+   ours（整段+二元，现状）: E15* E16* E48 (ndcg 1.00)
+   jieba 精确模式: E16* E15* E51 (ndcg 1.00)
+   二元 + jieba 精确（并集）: E15* E16* E51 (ndcg 1.00)
+   jieba 搜索模式: E16* E15* E48 (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E16* E15* E51 (ndcg 1.00)
+   zvec·jieba search: E16* E15* E51 (ndcg 1.00)
+   zvec·standard（单字）: E16* E15* E48 (ndcg 1.00)
+[自然语言问句] "首页打开很慢怎么优化" → E2
+   ours（整段+二元，现状）: E2* (ndcg 1.00)
+   jieba 精确模式: E2* E67 E52 (ndcg 1.00)
+   二元 + jieba 精确（并集）: E2* E52 E24 (ndcg 1.00)
+   jieba 搜索模式: E2* E40 E67 (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E2* (ndcg 1.00)
+   zvec·jieba search: E2* (ndcg 1.00)
+   zvec·standard（单字）: E67 E39 E52 (ndcg 0.43)
+[自然语言问句] "定时任务为什么会重复执行" → E55
+   ours（整段+二元，现状）: E55* E72 E30 (ndcg 1.00)
+   jieba 精确模式: E55* E72 E64 (ndcg 1.00)
+   二元 + jieba 精确（并集）: E55* E72 E30 (ndcg 1.00)
+   jieba 搜索模式: E55* E72 E64 (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E55* E72 E64 (ndcg 1.00)
+   zvec·jieba search: E55* E72 E64 (ndcg 1.00)
+   zvec·standard（单字）: E55* E72 E48 (ndcg 1.00)
+[近义改写] "页面空白" → E1,E2,E6
+   ours（整段+二元，现状）: E6* E52 E40 (ndcg 0.47)
+   jieba 精确模式: E6* E52 E40 (ndcg 0.47)
+   二元 + jieba 精确（并集）: E6* E52 E40 (ndcg 0.47)
+   jieba 搜索模式: E6* E40 E52 (ndcg 0.47)
+   zvec·jieba mix（zg 的配置）: E6* E40 E52 (ndcg 0.47)
+   zvec·jieba search: E6* E40 E52 (ndcg 0.47)
+   zvec·standard（单字）: E6* E52 E40 (ndcg 0.85)
+[近义改写] "认证失败" → E14,E13
+   ours（整段+二元，现状）: E14* E32 E73 (ndcg 0.83)
+   jieba 精确模式: E14* E32 E53 (ndcg 0.88)
+   二元 + jieba 精确（并集）: E14* E32 E53 (ndcg 0.83)
+   jieba 搜索模式: E14* E32 E13* (ndcg 0.92)
+   zvec·jieba mix（zg 的配置）: E14* E32 E73 (ndcg 0.85)
+   zvec·jieba search: E14* E32 E73 (ndcg 0.85)
+   zvec·standard（单字）: E14* E53 E32 (ndcg 0.82)
+[近义改写] "启动慢" → E29
+   ours（整段+二元，现状）: E29* E63 (ndcg 1.00)
+   jieba 精确模式: E63 E67 E52 (ndcg 0.00)
+   二元 + jieba 精确（并集）: E63 E29* E52 (ndcg 0.63)
+   jieba 搜索模式: E29* E63 E40 (ndcg 1.00)
+   zvec·jieba mix（zg 的配置）: E29* E63 E67 (ndcg 1.00)
+   zvec·jieba search: E29* E63 E67 (ndcg 1.00)
+   zvec·standard（单字）: E29* E63 E27 (ndcg 1.00)
+
+How each tokenizer splits a few queries:
+  数据库存储: ours [数据库存储 数据 据库 库存 存储] · jieba [数据库 存储] · jieba搜索 [数据 据库 数据库 存储]
+  单价: ours [单价 单价] · jieba [单价] · jieba搜索 [单价]
+  登录页面: ours [登录页面 登录 录页 页面] · jieba [登录 页面] · jieba搜索 [登录 页面]
+  长江: ours [长江 长江] · jieba [长江] · jieba搜索 [长江]
+  白屏: ours [白屏 白屏] · jieba [白屏] · jieba搜索 [白屏]
+  缓存击穿: ours [缓存击穿 缓存 存击 击穿] · jieba [缓存 击穿] · jieba搜索 [缓存 击穿]
+  为什么登录页会白屏？: ours [为什么登录页会白屏 为什 什么 么登 登录 录页 页会 会白 白屏] · jieba [为什么 登录 页 会 白屏] · jieba搜索 [什么 为什么 登录 页 会 白屏]
+  src/wrap.js: ours [src wrap js] · jieba [src wrap.js] · jieba搜索 [src wrap js wrap.js]
+  监测数据入库延迟: ours [监测数据入库延迟 监测 测数 数据 据入 入库 库延 延迟] · jieba [监测数据 入库 延迟] · jieba搜索 [监测 数据 测数据 监测数据 入库 延迟]
+  验证码短信: ours [验证码短信 验证 证码 码短 短信] · jieba [验证码 短信] · jieba搜索 [验证 验证码 短信]
+  会员价为原价: ours [会员价为原价 会员 员价 价为 为原 原价] · jieba [会员价 为 原价] · jieba搜索 [会员 会员价 为 原价]
+  「我已梳理下单价格的展示规则：下单…」 jieba [我 已 梳理 下单 价格 的 展示 规则 下单 页]
+  「我已核对库存扣减的并发问题：库存…」 jieba [我 已 核对 库存 扣减 的 并发 问题 库存 扣减]
+  「我已确认长江大桥项目的数据接入：…」 jieba [我 已 确认 长江大桥 项目 的 数据 接入 桥梁 监测数据]

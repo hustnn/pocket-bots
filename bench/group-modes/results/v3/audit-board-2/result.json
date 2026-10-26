@@ -1,0 +1,77 @@
+{
+  "run": "audit-board-2",
+  "task": "audit",
+  "arm": "board",
+  "seed": "2",
+  "model": "sophon/DeepSeek-V4.1-Flash-1017",
+  "outcome": "completed",
+  "providerErrors": [],
+  "wallSeconds": 469,
+  "firstBotMessageSeconds": 459,
+  "lastBotMessageSeconds": 459,
+  "score": {
+    "found": 10,
+    "total": 10,
+    "missed": []
+  },
+  "totals": {
+    "seats": 1,
+    "turns": 1,
+    "calls": 21,
+    "input": 790086,
+    "output": 33329,
+    "tokens": 823415
+  },
+  "perBot": {
+    "Ada": {
+      "seats": 1,
+      "calls": 21,
+      "turns": 1,
+      "input": 790086,
+      "output": 33329,
+      "maxInput": 72157,
+      "tools": {
+        "bash": 17,
+        "board_search": 2,
+        "read": 1,
+        "group_read": 1,
+        "group_send": 1
+      }
+    }
+  },
+  "groupMessages": {
+    "total": 2,
+    "bot": 1,
+    "system": 0,
+    "user": 1
+  },
+  "tasks": [],
+  "board": {
+    "entries": 0,
+    "claims": 0,
+    "cited": 0
+  },
+  "rounds": [
+    {
+      "group_id": "group-mvoqmxnmuiiq",
+      "seq": 1,
+      "starter_id": "bot-x-ada",
+      "fanned_out": 1,
+      "reporter_id": null,
+      "report_told": 0,
+      "answer_seq": 2,
+      "created_at": "2026-10-26T04:09:50.823Z",
+      "closed_at": "2026-10-26T04:17:39.114Z",
+      "members": [
+        "ada:finished/turn",
+        "ben:skipped/-",
+        "cy:skipped/-",
+        "dee:skipped/-"
+      ]
+    }
+  ],
+  "transcript": [
+    "#1 user: The docs/ folder has 72 pages about our platform's services. Some pages contradict each other about a service's facts (its port, request timeout, retries, owning team, datastore, region, payload limit or cache TTL). Find every contradiction: for each one, name the service, the fact, the two conflict",
+    "#2 Ada ↩#1: Found **10 contradictions** across the 72 pages. I checked all eight fact types for all 12 services; **request timeout, owning team, and payload limit are consistent everywhere** — no conflicting values. ⏎  ⏎ **Port (2)** ⏎ 1. **export** — **6060** vs **7001** ⏎    - 6060: `docs/onboarding-profile-02.md` ⏎   "
+  ]
+}

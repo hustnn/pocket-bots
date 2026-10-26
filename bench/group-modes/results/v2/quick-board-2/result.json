@@ -1,0 +1,75 @@
+{
+  "run": "quick-board-2",
+  "task": "quick",
+  "arm": "board",
+  "seed": "2",
+  "model": "sophon/DeepSeek-V4.1-Flash-1017",
+  "outcome": "completed",
+  "providerErrors": [],
+  "wallSeconds": 27,
+  "firstBotMessageSeconds": 24,
+  "lastBotMessageSeconds": 24,
+  "score": {
+    "truth": 8,
+    "correct": true,
+    "answers": 1
+  },
+  "totals": {
+    "seats": 1,
+    "turns": 1,
+    "calls": 6,
+    "input": 66125,
+    "output": 991,
+    "tokens": 67116
+  },
+  "perBot": {
+    "Ada": {
+      "seats": 1,
+      "calls": 6,
+      "turns": 1,
+      "input": 66125,
+      "output": 991,
+      "maxInput": 12051,
+      "tools": {
+        "bash": 3,
+        "group_send": 1,
+        "board_finish": 1
+      }
+    }
+  },
+  "groupMessages": {
+    "total": 2,
+    "bot": 1,
+    "system": 0,
+    "user": 1
+  },
+  "tasks": [],
+  "board": {
+    "entries": 0,
+    "claims": 0,
+    "cited": 0
+  },
+  "rounds": [
+    {
+      "group_id": "group-mvomeo1kegrx",
+      "seq": 1,
+      "starter_id": "bot-x-ada",
+      "fanned_out": 1,
+      "reporter_id": null,
+      "report_told": 0,
+      "answer_seq": 2,
+      "created_at": "2026-10-26T02:11:26.652Z",
+      "closed_at": "2026-10-26T02:11:51.979Z",
+      "members": [
+        "ada:finished/tool",
+        "ben:skipped/-",
+        "cy:skipped/-",
+        "dee:skipped/-"
+      ]
+    }
+  ],
+  "transcript": [
+    "#1 user: How many test(...) cases are in test/semver.test.js? Reply with just the number.",
+    "#2 Ada ↩#1: 8"
+  ]
+}

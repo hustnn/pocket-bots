@@ -1,0 +1,147 @@
+{
+  "run": "audit-leader-3",
+  "task": "audit",
+  "arm": "leader",
+  "seed": "3",
+  "model": "sophon/DeepSeek-V4.1-Flash-1017",
+  "outcome": "timed_out",
+  "providerErrors": [],
+  "wallSeconds": 1476,
+  "firstBotMessageSeconds": 83,
+  "lastBotMessageSeconds": 1273,
+  "score": {
+    "found": 10,
+    "total": 10,
+    "missed": []
+  },
+  "totals": {
+    "seats": 6,
+    "turns": 9,
+    "calls": 211,
+    "input": 9834372,
+    "output": 214945,
+    "tokens": 10049317
+  },
+  "perBot": {
+    "Ada": {
+      "seats": 1,
+      "calls": 38,
+      "turns": 4,
+      "input": 1182106,
+      "output": 19478,
+      "maxInput": 50479,
+      "tools": {
+        "group_read": 4,
+        "bash": 15,
+        "todo_write": 2,
+        "group_send": 6,
+        "group_follow": 3,
+        "read": 2,
+        "group_task": 3,
+        "group_send_draft": 1
+      }
+    },
+    "Ben": {
+      "seats": 1,
+      "calls": 33,
+      "turns": 1,
+      "input": 1512638,
+      "output": 34134,
+      "maxInput": 72878,
+      "tools": {
+        "bash": 20,
+        "group_read": 4,
+        "group_claim": 2,
+        "group_members": 1,
+        "write": 1,
+        "edit": 4,
+        "read": 1,
+        "group_send": 1
+      }
+    },
+    "Cy": {
+      "seats": 1,
+      "calls": 29,
+      "turns": 1,
+      "input": 1427956,
+      "output": 40790,
+      "maxInput": 91509,
+      "tools": {
+        "bash": 15,
+        "group_read": 3,
+        "group_claim": 2,
+        "read": 74,
+        "write": 2,
+        "edit": 2,
+        "group_send": 1
+      }
+    },
+    "Dee": {
+      "seats": 3,
+      "calls": 111,
+      "turns": 3,
+      "input": 5711672,
+      "output": 120543,
+      "maxInput": 106859,
+      "tools": {
+        "bash": 98,
+        "glob": 1,
+        "group_read": 10,
+        "group_members": 2,
+        "edit": 2,
+        "read": 12,
+        "group_claim": 3,
+        "group_send": 1
+      }
+    }
+  },
+  "groupMessages": {
+    "total": 13,
+    "bot": 9,
+    "system": 3,
+    "user": 1
+  },
+  "tasks": [
+    {
+      "number": 2,
+      "status": "in_progress",
+      "assignee_id": "bot-x-cy"
+    },
+    {
+      "number": 3,
+      "status": "done",
+      "assignee_id": "bot-x-ben"
+    },
+    {
+      "number": 4,
+      "status": "done",
+      "assignee_id": "bot-x-cy"
+    },
+    {
+      "number": 9,
+      "status": "done",
+      "assignee_id": "bot-x-dee"
+    }
+  ],
+  "board": {
+    "entries": 0,
+    "claims": 0,
+    "cited": 0
+  },
+  "rounds": [],
+  "transcript": [
+    "#1 user: The docs/ folder has 72 pages about our platform's services. Some pages contradict each other about a service's facts (its port, request timeout, retries, owning team, datastore, region, payload limit or cache TTL). Find every contradiction: for each one, name the service, the fact, the two conflict",
+    "#2 Ada ↩#1: On it. Plan: two independent full passes over the 72 pages — @Ben extracts every fact statement with a script (exact, exhaustive, with evidence rows), @Cy reads the pages manually (independent method, catches phrasings a script might miss). Then @Dee reconciles the two against the source docs into o",
+    "#3 Ada: @Ben New piece: a scripted, exhaustive contradiction audit of the docs folder. ⏎  ⏎ GOAL ⏎ Find every contradiction about a platform service's facts across 72 Markdown pages. Each page mixes facts about several services, and two pages sometimes state different values for the same service + fact. ⏎  ⏎ CORPUS ⏎ W",
+    "#4 Ada: @Cy New piece: an independent manual contradiction audit of the docs folder. ⏎  ⏎ GOAL ⏎ Find every contradiction about a platform service's facts across 72 Markdown pages. Pages are written by different teams: some state different values for the same service + fact. I need a complete, exact list. ⏎  ⏎ CORPUS",
+    "#5 Ben [t#3]: Scripted pass done: 72/72 pages parsed, 283 assertions, **10 contradictions** (all two-way; **0 three-way splits**). Exhaustive check: 499 prose sentences = 283 concrete facts + 216 boilerplate lines; 0 unexplained sentences. ⏎  ⏎ The 10 (service — fact: value A vs value B): ⏎ - analytics — datastore: Red",
+    "#6 Cy [t#4]: Done — 10 contradictions, 0 three-way splits. Checked 96 (service, fact) pairs (12 services × 8 facts): 86 consistent. Manual pass recorded 283 assertions from all 72 pages. ⏎  ⏎ Files: ⏎ - `work/audit/cy-assertions.md` — full table, one row per service/fact/value, every `docs/<file>` listed. ⏎ - `work/audi",
+    "#7 system [t#3]: ✅ Ada moved #3 \"@Ben New piece: a scripted, exhaustive contradiction audit…\" to Done",
+    "#8 system [t#4]: ✅ Ada moved #4 \"@Cy New piece: an independent manual contradiction audit of…\" to Done",
+    "#9 Ada: @Dee New piece: adjudicate two finished audit passes and produce the final deliverable. ⏎  ⏎ WORKING FOLDER ⏎ /private/tmp/claude-501/-Users-bytedance-personal-claude-pocket-bots/b4867ba0-54cb-46e0-b335-aa110bee7250/scratchpad/exp/results/audit-leader-3/work ⏎ Corpus: work/docs/*.md — 72 pages, 448 lines. S",
+    "#10 Ada ↩#2 [t#2]: Progress: Ben's scripted pass and Cy's manual pass agree exactly — 283 fact assertions, 96 service-fact pairs, 10 contradictions, no three-way value splits. @Dee is now re-verifying every row against the pages and checking the tricky normalisations (shared ports, \"under 8 MB\" vs \"largest is 8 MB\", r",
+    "#11 Dee [t#9]: @Ada Final: **10 contradictions, 0 three-way splits**; 96/96 (service, fact) pairs populated, 86 consistent. Both passes confirmed — **no field-level disagreement** on any of the 283 rows: Ben, Cy and the earlier `dee-assertions.csv` are identical on file, service, fact, normalised value and quote t",
+    "#12 system [t#9]: ✅ Ada moved #9 \"@Dee New piece: adjudicate two finished audit passes and pr…\" to Done",
+    "#13 Ada ↩#1: **10 contradictions** across the 72 pages — every one a two-value split, no three-way conflicts. Coverage was exhaustive: 96 service-fact pairs (12 services × 8 facts), 283 individual assertions, 86 pairs consistent. There are **no contradictions at all** for request timeout, owning team or payload "
+  ]
+}

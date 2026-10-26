@@ -1,0 +1,122 @@
+{
+  "run": "audit-free-1",
+  "task": "audit",
+  "arm": "free",
+  "seed": "1",
+  "model": "sophon/DeepSeek-V4.1-Flash-1017",
+  "outcome": "completed",
+  "providerErrors": [],
+  "wallSeconds": 375,
+  "firstBotMessageSeconds": 21,
+  "lastBotMessageSeconds": 363,
+  "score": {
+    "found": 10,
+    "total": 10,
+    "missed": []
+  },
+  "totals": {
+    "seats": 4,
+    "turns": 14,
+    "calls": 97,
+    "input": 3209108,
+    "output": 57259,
+    "tokens": 3266367
+  },
+  "perBot": {
+    "Ada": {
+      "seats": 1,
+      "calls": 31,
+      "turns": 3,
+      "input": 1114703,
+      "output": 18398,
+      "maxInput": 51326,
+      "tools": {
+        "group_read": 4,
+        "bash": 15,
+        "group_claim": 1,
+        "group_send": 3,
+        "write": 1,
+        "group_task": 1,
+        "group_inbox": 2,
+        "group_react": 1
+      }
+    },
+    "Ben": {
+      "seats": 1,
+      "calls": 10,
+      "turns": 3,
+      "input": 147047,
+      "output": 2016,
+      "maxInput": 16747,
+      "tools": {
+        "group_read": 3,
+        "bash": 3,
+        "group_claim": 1,
+        "group_task": 1,
+        "group_members": 1,
+        "group_react": 1
+      }
+    },
+    "Cy": {
+      "seats": 1,
+      "calls": 29,
+      "turns": 3,
+      "input": 1282526,
+      "output": 22267,
+      "maxInput": 70481,
+      "tools": {
+        "group_read": 4,
+        "bash": 18,
+        "read": 72,
+        "group_claim": 1,
+        "group_task": 1,
+        "group_members": 1
+      }
+    },
+    "Dee": {
+      "seats": 1,
+      "calls": 27,
+      "turns": 5,
+      "input": 664832,
+      "output": 14578,
+      "maxInput": 37608,
+      "tools": {
+        "bash": 12,
+        "group_read": 7,
+        "group_claim": 1,
+        "group_task": 2,
+        "group_members": 1,
+        "group_follow": 1,
+        "group_send": 2
+      }
+    }
+  },
+  "groupMessages": {
+    "total": 7,
+    "bot": 5,
+    "system": 1,
+    "user": 1
+  },
+  "tasks": [
+    {
+      "number": 1,
+      "status": "done",
+      "assignee_id": "bot-x-ada"
+    }
+  ],
+  "board": {
+    "entries": 0,
+    "claims": 0,
+    "cited": 0
+  },
+  "rounds": [],
+  "transcript": [
+    "#1 user: The docs/ folder has 72 pages about our platform's services. Some pages contradict each other about a service's facts (its port, request timeout, retries, owning team, datastore, region, payload limit or cache TTL). Find every contradiction: for each one, name the service, the fact, the two conflict",
+    "#2 Ada: On task #1. I'll extract every fact sentence from all 72 docs (service + fact + value + file), group them by service and fact, and report every group with two or more distinct values. I'll post a table plus a Markdown file with the full evidence.",
+    "#3 Dee [t#1]: @Ada I see #1 is yours (my claim was refused), so I won't run a duplicate audit. If you want it split, reply \"split\" and I'll take these six services — analytics, billing, export, gateway, ingest, ledger — and post only the contradictions I find, each as service / fact / value A + files vs value B +",
+    "#4 Ada: Found **10 contradictions** across the 72 pages. I parsed all 283 fact statements (port, request timeout, retries, owning team, datastore, region, payload limit, cache TTL); these are the only service/fact pairs with conflicting values. ⏎  ⏎ 1. **analytics — datastore:** Redis (`faq-gateway-11.md`, `han",
+    "#5 system [t#1]: ✅ Ada moved #1 \"The docs/ folder has 72 pages about our platform's services…\" to Done",
+    "#6 Ada [t#1]: No split needed, @Dee — the audit is already done and task #1 is closed: 10 contradictions in #4, with the full evidence in the attached report. If you want to sanity-check it, the highest-value check is a second pass over the eight fact types for missed value conflicts; I verified parser coverage l",
+    "#7 Dee ↩#6 [t#1]: Second pass done, @Ada — it confirms #4 exactly, with no missed conflicts. ⏎  ⏎ I re-extracted all 283 fact statements from the 72 pages with a separate parser and normalized each to (service, fact, value). Result: the same 10 conflicts, same values, same files — nothing extra. ⏎  ⏎ Coverage: 499 sentences "
+  ]
+}

@@ -1,0 +1,125 @@
+{
+  "run": "audit-board-1",
+  "task": "audit",
+  "arm": "board",
+  "seed": "1",
+  "model": "sophon/DeepSeek-V4.1-Flash-1017",
+  "outcome": "completed",
+  "wallSeconds": 500,
+  "firstBotMessageSeconds": 495,
+  "lastBotMessageSeconds": 495,
+  "score": {
+    "found": 10,
+    "total": 10,
+    "missed": []
+  },
+  "totals": {
+    "seats": 4,
+    "turns": 4,
+    "calls": 85,
+    "input": 2683010,
+    "output": 92661,
+    "tokens": 2775671
+  },
+  "perBot": {
+    "Ada": {
+      "seats": 1,
+      "calls": 16,
+      "turns": 1,
+      "input": 516285,
+      "output": 23261,
+      "maxInput": 56169,
+      "tools": {
+        "bash": 5,
+        "read": 73,
+        "board_search": 3,
+        "board_publish": 2,
+        "write": 2,
+        "group_read": 1,
+        "board_finish": 1
+      }
+    },
+    "Ben": {
+      "seats": 1,
+      "calls": 29,
+      "turns": 1,
+      "input": 834182,
+      "output": 21705,
+      "maxInput": 51271,
+      "tools": {
+        "bash": 19,
+        "board_search": 4,
+        "board_publish": 2,
+        "write": 2,
+        "board_visit": 1,
+        "board_finish": 1
+      }
+    },
+    "Cy": {
+      "seats": 1,
+      "calls": 15,
+      "turns": 1,
+      "input": 581535,
+      "output": 26969,
+      "maxInput": 59170,
+      "tools": {
+        "board_search": 3,
+        "bash": 8,
+        "board_publish": 3,
+        "board_visit": 1,
+        "board_finish": 1,
+        "group_send": 1
+      }
+    },
+    "Dee": {
+      "seats": 1,
+      "calls": 25,
+      "turns": 1,
+      "input": 751008,
+      "output": 20726,
+      "maxInput": 51307,
+      "tools": {
+        "bash": 17,
+        "board_search": 4,
+        "board_publish": 3,
+        "group_read": 1,
+        "board_finish": 1
+      }
+    }
+  },
+  "groupMessages": {
+    "total": 2,
+    "bot": 1,
+    "system": 0,
+    "user": 1
+  },
+  "tasks": [],
+  "board": {
+    "entries": 10,
+    "claims": 4,
+    "cited": 7
+  },
+  "rounds": [
+    {
+      "group_id": "group-mvnyujpry2aj",
+      "seq": 1,
+      "starter_id": "bot-x-ada",
+      "fanned_out": 1,
+      "reporter_id": "bot-x-cy",
+      "report_told": 1,
+      "answer_seq": 2,
+      "created_at": "2026-10-25T15:11:56.755Z",
+      "closed_at": "2026-10-25T15:20:12.155Z",
+      "members": [
+        "ada:finished/tool",
+        "ben:finished/tool",
+        "cy:finished/tool",
+        "dee:finished/tool"
+      ]
+    }
+  ],
+  "transcript": [
+    "#1 user: The docs/ folder has 72 pages about our platform's services. Some pages contradict each other about a service's facts (its port, request timeout, retries, owning team, datastore, region, payload limit or cache TTL). Find every contradiction: for each one, name the service, the fact, the two conflict",
+    "#2 Cy ↩#1: Found **10 contradictions** in docs/ (72 pages). Each line gives one value with the files asserting it, then the conflicting value. ⏎  ⏎ 1. **analytics — datastore:** Redis in docs/faq-gateway-11.md and docs/handbook-billing-07.md vs MySQL in docs/faq-profile-35.md. ⏎ 2. **auth — region:** eu-central-1 in"
+  ]
+}

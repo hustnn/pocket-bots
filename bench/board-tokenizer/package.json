@@ -1,0 +1,10 @@
+{
+  "name": "board-tokenizer",
+  "private": true,
+  "description": "Chinese board-search comparison: our tokenizer and BM25 against jieba and zvec FTS",
+  "type": "module",
+  "dependencies": {
+    "@node-rs/jieba": "^2.0.4",
+    "@zvec/zvec": "^0.7.1"
+  }
+}

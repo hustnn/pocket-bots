@@ -1,0 +1,121 @@
+{
+  "run": "audit-free-2",
+  "task": "audit",
+  "arm": "free",
+  "seed": "2",
+  "model": "sophon/DeepSeek-V4.1-Flash-1017",
+  "outcome": "completed",
+  "providerErrors": [],
+  "wallSeconds": 423,
+  "firstBotMessageSeconds": 292,
+  "lastBotMessageSeconds": 292,
+  "score": {
+    "found": 10,
+    "total": 10,
+    "missed": []
+  },
+  "totals": {
+    "seats": 4,
+    "turns": 8,
+    "calls": 99,
+    "input": 3445727,
+    "output": 81665,
+    "tokens": 3527392
+  },
+  "perBot": {
+    "Ada": {
+      "seats": 1,
+      "calls": 18,
+      "turns": 1,
+      "input": 611699,
+      "output": 17849,
+      "maxInput": 53623,
+      "tools": {
+        "group_read": 1,
+        "bash": 11,
+        "group_claim": 1,
+        "group_task": 2,
+        "read": 1,
+        "write": 1,
+        "edit": 1,
+        "group_send": 1
+      }
+    },
+    "Ben": {
+      "seats": 1,
+      "calls": 31,
+      "turns": 3,
+      "input": 1136514,
+      "output": 24739,
+      "maxInput": 57869,
+      "tools": {
+        "bash": 16,
+        "group_read": 5,
+        "read": 4,
+        "group_claim": 1,
+        "group_members": 1,
+        "write": 1,
+        "group_follow": 2,
+        "group_react": 1
+      }
+    },
+    "Cy": {
+      "seats": 1,
+      "calls": 31,
+      "turns": 2,
+      "input": 991358,
+      "output": 18413,
+      "maxInput": 45815,
+      "tools": {
+        "group_read": 7,
+        "bash": 20,
+        "group_task": 1,
+        "group_members": 1,
+        "group_send": 1,
+        "group_send_draft": 1
+      }
+    },
+    "Dee": {
+      "seats": 1,
+      "calls": 19,
+      "turns": 2,
+      "input": 706156,
+      "output": 20664,
+      "maxInput": 54263,
+      "tools": {
+        "group_read": 5,
+        "bash": 9,
+        "group_claim": 1,
+        "group_members": 1,
+        "group_follow": 1,
+        "group_send": 1,
+        "group_send_draft": 1
+      }
+    }
+  },
+  "groupMessages": {
+    "total": 4,
+    "bot": 1,
+    "system": 2,
+    "user": 1
+  },
+  "tasks": [
+    {
+      "number": 1,
+      "status": "done",
+      "assignee_id": "bot-x-ada"
+    }
+  ],
+  "board": {
+    "entries": 0,
+    "claims": 0,
+    "cited": 0
+  },
+  "rounds": [],
+  "transcript": [
+    "#1 user: The docs/ folder has 72 pages about our platform's services. Some pages contradict each other about a service's facts (its port, request timeout, retries, owning team, datastore, region, payload limit or cache TTL). Find every contradiction: for each one, name the service, the fact, the two conflict",
+    "#2 Ada: Found **10 contradictions across 9 services** in docs/ (72 pages, 283 fact statements scanned). All are page-vs-page; no page contradicts itself. Exact quotes and per-value source counts are in the attached report. ⏎  ⏎ 1. **analytics — datastore:** Redis (`faq-gateway-11.md`, `handbook-billing-07.md`) ",
+    "#3 system [t#1]: ✅ Ada moved #1 \"The docs/ folder has 72 pages about our platform's services…\" to Done",
+    "#4 system [t#1]: @Ben stopped following this thread: Task #1 is done and independently verified; no further replies needed."
+  ]
+}

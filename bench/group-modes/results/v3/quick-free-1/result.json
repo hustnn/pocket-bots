@@ -1,0 +1,105 @@
+{
+  "run": "quick-free-1",
+  "task": "quick",
+  "arm": "free",
+  "seed": "1",
+  "model": "sophon/DeepSeek-V4.1-Flash-1017",
+  "outcome": "completed",
+  "providerErrors": [],
+  "wallSeconds": 35,
+  "firstBotMessageSeconds": 17,
+  "lastBotMessageSeconds": 17,
+  "score": {
+    "truth": 8,
+    "correct": true,
+    "answers": 1
+  },
+  "totals": {
+    "seats": 4,
+    "turns": 5,
+    "calls": 32,
+    "input": 432838,
+    "output": 3167,
+    "tokens": 436005
+  },
+  "perBot": {
+    "Ada": {
+      "seats": 1,
+      "calls": 7,
+      "turns": 1,
+      "input": 90907,
+      "output": 654,
+      "maxInput": 13909,
+      "tools": {
+        "group_read": 1,
+        "bash": 2,
+        "read": 1,
+        "group_send": 1,
+        "group_send_draft": 1
+      }
+    },
+    "Ben": {
+      "seats": 1,
+      "calls": 7,
+      "turns": 1,
+      "input": 90348,
+      "output": 614,
+      "maxInput": 13886,
+      "tools": {
+        "group_read": 1,
+        "bash": 1,
+        "grep": 1,
+        "read": 1,
+        "group_send": 1,
+        "group_send_draft": 1
+      }
+    },
+    "Cy": {
+      "seats": 1,
+      "calls": 6,
+      "turns": 1,
+      "input": 76645,
+      "output": 514,
+      "maxInput": 13498,
+      "tools": {
+        "group_read": 1,
+        "bash": 2,
+        "glob": 1,
+        "read": 1,
+        "group_send": 1
+      }
+    },
+    "Dee": {
+      "seats": 1,
+      "calls": 12,
+      "turns": 2,
+      "input": 174938,
+      "output": 1385,
+      "maxInput": 16236,
+      "tools": {
+        "bash": 6,
+        "group_read": 2,
+        "read": 1,
+        "group_send": 1,
+        "group_send_draft": 1
+      }
+    }
+  },
+  "groupMessages": {
+    "total": 2,
+    "bot": 1,
+    "system": 0,
+    "user": 1
+  },
+  "tasks": [],
+  "board": {
+    "entries": 0,
+    "claims": 0,
+    "cited": 0
+  },
+  "rounds": [],
+  "transcript": [
+    "#1 user: How many test(...) cases are in test/semver.test.js? Reply with just the number.",
+    "#2 Cy ↩#1: 8"
+  ]
+}

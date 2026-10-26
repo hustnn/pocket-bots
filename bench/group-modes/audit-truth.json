@@ -1,0 +1,113 @@
+{
+ "contradictions": [
+  {
+   "service": "media",
+   "attribute": "port",
+   "true": 4040,
+   "altered": 7001,
+   "altered_file": "runbook-notify-32.md",
+   "other_files": [
+    "overview-notify-17.md",
+    "faq-auth-59.md"
+   ]
+  },
+  {
+   "service": "profile",
+   "attribute": "region",
+   "true": "ap-southeast-1",
+   "altered": "eu-west-1",
+   "altered_file": "faq-auth-67.md",
+   "other_files": [
+    "handbook-media-39.md",
+    "onboarding-analytics-26.md"
+   ]
+  },
+  {
+   "service": "notify",
+   "attribute": "store",
+   "true": "ClickHouse",
+   "altered": "Redis",
+   "altered_file": "overview-auth-49.md",
+   "other_files": [
+    "handbook-auth-15.md"
+   ]
+  },
+  {
+   "service": "analytics",
+   "attribute": "store",
+   "true": "Redis",
+   "altered": "MySQL",
+   "altered_file": "faq-profile-35.md",
+   "other_files": [
+    "faq-gateway-11.md",
+    "handbook-billing-07.md"
+   ]
+  },
+  {
+   "service": "ingest",
+   "attribute": "ttl",
+   "true": 30,
+   "altered": 5,
+   "altered_file": "incident-media-44.md",
+   "other_files": [
+    "runbook-profile-24.md",
+    "overview-billing-57.md"
+   ]
+  },
+  {
+   "service": "export",
+   "attribute": "port",
+   "true": 6060,
+   "altered": 7001,
+   "altered_file": "overview-media-01.md",
+   "other_files": [
+    "onboarding-profile-02.md"
+   ]
+  },
+  {
+   "service": "notify",
+   "attribute": "region",
+   "true": "eu-west-1",
+   "altered": "us-west-2",
+   "altered_file": "design-profile-61.md",
+   "other_files": [
+    "checklist-media-22.md",
+    "handbook-profile-55.md"
+   ]
+  },
+  {
+   "service": "auth",
+   "attribute": "region",
+   "true": "eu-central-1",
+   "altered": "eu-west-1",
+   "altered_file": "handbook-search-31.md",
+   "other_files": [
+    "onboarding-profile-50.md",
+    "handbook-billing-63.md"
+   ]
+  },
+  {
+   "service": "scheduler",
+   "attribute": "retries",
+   "true": 5,
+   "altered": 3,
+   "altered_file": "onboarding-media-66.md",
+   "other_files": [
+    "runbook-gateway-64.md",
+    "handbook-search-31.md",
+    "overview-export-33.md"
+   ]
+  },
+  {
+   "service": "search",
+   "attribute": "ttl",
+   "true": 5,
+   "altered": 30,
+   "altered_file": "faq-export-43.md",
+   "other_files": [
+    "overview-export-33.md"
+   ]
+  }
+ ],
+ "files": 72
+}

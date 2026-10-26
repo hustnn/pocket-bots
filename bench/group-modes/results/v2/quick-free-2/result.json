@@ -1,0 +1,105 @@
+{
+  "run": "quick-free-2",
+  "task": "quick",
+  "arm": "free",
+  "seed": "2",
+  "model": "sophon/DeepSeek-V4.1-Flash-1017",
+  "outcome": "completed",
+  "providerErrors": [],
+  "wallSeconds": 39,
+  "firstBotMessageSeconds": 17,
+  "lastBotMessageSeconds": 17,
+  "score": {
+    "truth": 8,
+    "correct": true,
+    "answers": 1
+  },
+  "totals": {
+    "seats": 4,
+    "turns": 6,
+    "calls": 36,
+    "input": 496105,
+    "output": 4034,
+    "tokens": 500139
+  },
+  "perBot": {
+    "Ada": {
+      "seats": 1,
+      "calls": 7,
+      "turns": 1,
+      "input": 90219,
+      "output": 666,
+      "maxInput": 13908,
+      "tools": {
+        "group_read": 1,
+        "bash": 3,
+        "group_send": 1,
+        "group_send_draft": 1
+      }
+    },
+    "Ben": {
+      "seats": 1,
+      "calls": 13,
+      "turns": 2,
+      "input": 187222,
+      "output": 1438,
+      "maxInput": 15945,
+      "tools": {
+        "group_read": 2,
+        "bash": 6,
+        "glob": 1,
+        "read": 1,
+        "group_send": 1,
+        "group_send_draft": 1,
+        "group_inbox": 1
+      }
+    },
+    "Cy": {
+      "seats": 1,
+      "calls": 11,
+      "turns": 2,
+      "input": 154762,
+      "output": 1487,
+      "maxInput": 15369,
+      "tools": {
+        "group_read": 4,
+        "bash": 2,
+        "read": 1,
+        "grep": 1,
+        "group_send": 1,
+        "group_send_draft": 1
+      }
+    },
+    "Dee": {
+      "seats": 1,
+      "calls": 5,
+      "turns": 1,
+      "input": 63902,
+      "output": 443,
+      "maxInput": 13527,
+      "tools": {
+        "bash": 2,
+        "group_read": 1,
+        "read": 1,
+        "group_send": 1
+      }
+    }
+  },
+  "groupMessages": {
+    "total": 2,
+    "bot": 1,
+    "system": 0,
+    "user": 1
+  },
+  "tasks": [],
+  "board": {
+    "entries": 0,
+    "claims": 0,
+    "cited": 0
+  },
+  "rounds": [],
+  "transcript": [
+    "#1 user: How many test(...) cases are in test/semver.test.js? Reply with just the number.",
+    "#2 Dee ↩#1: 8"
+  ]
+}

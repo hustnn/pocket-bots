@@ -52,6 +52,7 @@ packages/
     └── scripts/dev.mjs
 docs/                            features.md、USAGE.md、design.md、group-chats.md、group-protocol.md（中文）
 spikes/                          早期协议验证脚本，不参与构建和测试，一般不用改
+bench/                           共享看板的实验脚本、任务和结果（只在 group-board-mode 分支上存档），不参与构建和测试
 ```
 
 大多数源文件开头都有一段注释说明它负责什么；找代码先看那里。
