@@ -60,12 +60,12 @@ import {
   type WakeMode,
 } from "../shared/group-chat";
 import {
-  BOARD_FAN_OUT_MS,
   BOARD_VISIT_MAX,
   boardEntryText,
   boardSearchText,
   citationWeights,
   citersOf,
+  claimsOverlap,
   finishText,
   GROUP_COORDINATION_LABEL,
   rankBoard,
@@ -98,7 +98,7 @@ import {
   type Recurrence,
   type ReminderStatus,
 } from "./reminders";
-import { isSeen, type AppendInput, type GroupRow, type GroupStore, type MemberRow, type TaskAmendment } from "./group-store";
+import { isSeen, type AppendInput, type GroupRow, type GroupStore, type MemberRow, type Round, type TaskAmendment } from "./group-store";
 import {
   claimAutomaticStart,
   freshBreaker,
@@ -122,6 +122,16 @@ import type { GroupSearchHit } from "./search";
 // group's flows: the bots' tools, the check before a post, notices and seats. The group's state,
 // with each receiver's delivery records, read positions and model-seen ledger, lives in SQLite
 // (group-store.ts); each bot takes part through its seat, an ordinary chat of its own.
+
+/**
+ * Whether a bot works on a round alongside others, so its first entry there must claim a piece: every
+ * round with another bot in it, except the first bot's own while the others haven't joined (it may be
+ * doing the work alone, or publishing the plan it'll then claim from).
+ */
+function sharesRound(round: Round, botId: string): boolean {
+  if (!round.members.some((member) => member.botId !== botId && member.state !== "skipped")) return false;
+  return !(round.starterId === botId && !round.fannedOut);
+}
 
 /** Starts a bot's seat chat for a group. */
 export type SeatStarter = (bot: Bot, input: StartChatInput & { group: { id: string; name: string } }) => Promise<string>;
@@ -223,8 +233,6 @@ export interface GroupOptions {
   recycleTokens?: number;
   /** The backoff's jitter, a number in [0, 1). */
   random?: () => number;
-  /** How long an open request on a board waits for its first bot before the others join (BOARD_FAN_OUT_MS). */
-  boardFanOutMs?: number;
 }
 
 function safeName(name: string): string {
@@ -293,12 +301,9 @@ export class GroupChats {
   /** The spawn-error retry sweep, one timer per seat a spawn error paused. */
   private readonly sweepTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly noticeTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  /** An open request on a board, by `${groupId}:${seq}`: when the bots waiting on it join anyway. */
-  private readonly fanOutTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** Report notices sent and not yet taken in by their seat, by notice id. */
   private readonly reportNotices = new Map<string, { groupId: string; seqs: number[] }>();
   private readonly random: () => number;
-  private readonly boardFanOutMs: number;
   private readonly recycleAfterMs: number;
   private readonly recycleTokens: number;
   private reminderTimer: ReturnType<typeof setTimeout> | null = null;
@@ -314,7 +319,6 @@ export class GroupChats {
     this.recycleAfterMs = options.recycleAfterMs ?? 60 * 60_000;
     this.recycleTokens = options.recycleTokens ?? 128_000;
     this.random = options.random ?? Math.random;
-    this.boardFanOutMs = options.boardFanOutMs ?? BOARD_FAN_OUT_MS;
   }
 
   // ---------------------------------------------------------------- the user's side
@@ -546,9 +550,6 @@ export class GroupChats {
     if (input.asTask) this.store.convertToTask(groupId, message.seq, GROUP_USER);
     // The user @mentioning a bot that was stopped or paused is its manual start.
     for (const botId of mentions.botIds) this.restart(groupId, botId);
-    // An open request on a board waits for its first bot a minute at most before the others join.
-    const round = this.store.round(groupId, message.seq);
-    if (round && !round.fannedOut) this.armFanOut(groupId, message.seq, this.boardFanOutMs);
     this.wake(groupId, woken);
     return message.seq;
   }
@@ -1321,7 +1322,13 @@ export class GroupChats {
   async boardPublish(bot: Bot, groupId: string, input: { subTask: string; artifact: string; rationale: string; refs: readonly string[]; claim?: string | null }): Promise<string> {
     this.requireBoard(groupId, bot.id);
     const working = this.store.workingRounds(groupId, bot.id);
-    const result = this.store.publishBoard(groupId, bot.id, working.at(-1)?.seq ?? null, input);
+    const round = working.at(-1) ?? null;
+    // Claim, then work: on a request shared with other bots, a bot's first entry takes a piece.
+    if (round && !input.claim && sharesRound(round, bot.id)) {
+      const claims = this.store.boardClaims(groupId, round.seq);
+      if (!claims.some((claim) => claim.authorId === bot.id)) return finishText({ seq: round.seq, state: "claim_first", taken: claims.map((claim) => claim.claim) });
+    }
+    const result = this.store.publishBoard(groupId, bot.id, round?.seq ?? null, input);
     if ("problem" in result) return `Not published: ${result.problem}`;
     this.changed(groupId);
     const joined: string[] = [];
@@ -1356,7 +1363,7 @@ export class GroupChats {
     if (seq === null) return "You aren't working on a request right now: nothing to finish.";
     if (!this.store.finishRound(groupId, seq, bot.id, "tool")) {
       const round = this.store.round(groupId, seq);
-      if (round?.reporterId === bot.id && round.answerSeq === null && !round.closedAt) return finishText({ seq, state: "last" });
+      if (round?.reporterId === bot.id && round.answerSeq === null && !round.closedAt) return finishText({ seq, state: "last", orphaned: this.orphanedClaims(groupId, seq) });
       return finishText({ seq, state: "not_working" });
     }
     this.changed(groupId);
@@ -1400,14 +1407,13 @@ export class GroupChats {
       }
       this.store.skipWaiting(groupId, seq);
     }
-    this.clearFanOut(groupId, seq);
     if (round.answerSeq !== null) {
       this.closeRound(groupId, seq);
       return finisher ? finishText({ seq, state: "answered", answer: round.answerSeq }) : null;
     }
     if (finisher) {
       this.store.setReporter(groupId, seq, finisher, true);
-      return finishText({ seq, state: "last" });
+      return finishText({ seq, state: "last", orphaned: this.orphanedClaims(groupId, seq) });
     }
     if (round.reporterId) return null;
     const last = round.members.filter((member) => member.state === "finished" && member.finishedHow !== "failed").sort((a, b) => (b.finishedAt ?? "").localeCompare(a.finishedAt ?? ""))[0];
@@ -1423,36 +1429,12 @@ export class GroupChats {
 
   /** The bots waiting on an open round join it now. Returns them. */
   private fanOutNow(groupId: string, seq: number): string[] {
-    this.clearFanOut(groupId, seq);
     const joined = this.store.fanOut(groupId, seq);
     if (joined.length) this.wake(groupId, joined);
     return joined;
   }
 
-  private armFanOut(groupId: string, seq: number, delay: number): void {
-    const key = `${groupId}:${seq}`;
-    this.clearFanOut(groupId, seq);
-    const timer = setTimeout(() => {
-      this.fanOutTimers.delete(key);
-      void this.serial(groupId, async () => {
-        const round = this.store.round(groupId, seq);
-        // A request already answered needs nobody else.
-        if (round && !round.closedAt && round.answerSeq === null) this.fanOutNow(groupId, seq);
-      });
-    }, Math.max(0, delay));
-    timer.unref?.();
-    this.fanOutTimers.set(key, timer);
-  }
-
-  private clearFanOut(groupId: string, seq: number): void {
-    const key = `${groupId}:${seq}`;
-    const timer = this.fanOutTimers.get(key);
-    if (timer) clearTimeout(timer);
-    this.fanOutTimers.delete(key);
-  }
-
   private closeRound(groupId: string, seq: number): void {
-    this.clearFanOut(groupId, seq);
     this.store.closeRound(groupId, seq);
     this.changed(groupId);
   }
@@ -1467,15 +1449,28 @@ export class GroupChats {
       if (round.reporterId === botId && round.reportTold && !round.members.some((member) => member.state === "working")) this.closeRound(groupId, round.seq);
     }
     for (const round of this.store.roundsTakenIn(groupId, botId)) {
-      if (this.store.finishRound(groupId, round.seq, botId, failed ? "failed" : "turn")) await this.settleRound(groupId, round.seq, null);
+      if (!this.store.finishRound(groupId, round.seq, botId, failed ? "failed" : "turn")) continue;
+      if (failed) this.store.releaseClaims(groupId, round.seq, botId);
+      await this.settleRound(groupId, round.seq, null);
     }
   }
 
   /** A bot that can't take part now (its seat won't start, it left): its rounds go on without it. */
   private async abandonRounds(groupId: string, botId: string): Promise<void> {
     for (const round of this.store.workingRounds(groupId, botId)) {
-      if (this.store.finishRound(groupId, round.seq, botId, "failed")) await this.settleRound(groupId, round.seq, null);
+      if (!this.store.finishRound(groupId, round.seq, botId, "failed")) continue;
+      this.store.releaseClaims(groupId, round.seq, botId);
+      await this.settleRound(groupId, round.seq, null);
     }
+  }
+
+  /** Pieces a failed bot claimed for a request that no other bot has claimed since. */
+  private orphanedClaims(groupId: string, seq: number): string[] {
+    const held = this.store.boardClaims(groupId, seq);
+    return this.store
+      .boardClaims(groupId, seq, true)
+      .filter((released) => !held.some((claim) => claimsOverlap(claim.claim, released.claim)))
+      .map((released) => `${released.claim} (B${released.number})`);
   }
 
   /** What a seat's notice says about the requests it's woken for on a board. */
@@ -1496,7 +1491,7 @@ export class GroupChats {
         notices.push({ kind: "join", seq, starter: name(round.starterId), others: joining.filter((member) => member.botId !== botId).map((member) => name(member.botId)), position: me.position, joining: joining.length, taken });
       } else notices.push({ kind: "together", seq, others: others.map((member) => name(member.botId)) });
     }
-    for (const seq of reports) notices.push({ kind: "report", seq });
+    for (const seq of reports) notices.push({ kind: "report", seq, orphaned: this.orphanedClaims(groupId, seq) });
     return notices;
   }
 
@@ -1587,10 +1582,6 @@ export class GroupChats {
         if ((!catchUp && this.store.pending(group.id, member.bot_id).length) || this.store.pendingReminderWakes(group.id, member.bot_id).length) void this.serial(group.id, () => this.pump(group.id, member.bot_id));
       }
     }
-    // An open request on a board whose bots hadn't joined yet: the rest of its minute, from when it was asked.
-    for (const round of this.store.openRounds()) {
-      if (!round.fannedOut) this.armFanOut(round.groupId, round.seq, Date.parse(round.createdAt) + this.boardFanOutMs - Date.now());
-    }
     // Reminders that came due while pocket-bots was stopped fire now, as catch-ups.
     this.closed = false;
     this.fireReminders(true);
@@ -1602,10 +1593,9 @@ export class GroupChats {
     if (this.reminderTimer) clearTimeout(this.reminderTimer);
     this.reminderTimer = null;
     for (const backoff of [...this.errorBackoffs.values(), ...this.spawnBackoffs.values()]) if (backoff.timer) clearTimeout(backoff.timer);
-    for (const timer of [...this.noticeTimers.values(), ...this.sweepTimers.values(), ...this.fanOutTimers.values()]) clearTimeout(timer);
+    for (const timer of [...this.noticeTimers.values(), ...this.sweepTimers.values()]) clearTimeout(timer);
     this.noticeTimers.clear();
     this.sweepTimers.clear();
-    this.fanOutTimers.clear();
   }
 
   // ---------------------------------------------------------------- reminders firing

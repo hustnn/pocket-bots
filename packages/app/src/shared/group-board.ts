@@ -34,12 +34,6 @@ export const BOARD_ENTRIES_MAX = 5_000;
 export const BOARD_CITE_STEP = 0.3;
 /** Every published entry decays every weight by this factor (the paper's γ, per step of the board). */
 export const BOARD_DECAY = 0.98;
-/**
- * An open request goes to one bot first; the others join when it claims a piece on the board or, if
- * it's still working, after this long (3 minutes) from the request. A minute brought everyone in on
- * work one bot finishes in three, and each bot that joins starts from nothing.
- */
-export const BOARD_FAN_OUT_MS = 3 * 60_000;
 
 export const BoardEntrySchema = z.object({
   /** B1, B2…: numbered per group, never reused. */
@@ -134,16 +128,27 @@ export function claimsOverlap(a: string, b: string): boolean {
 
 // ---------------------------------------------------------------- ranking
 
-const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+/gu;
+const CJK_RUN = /([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+)/u;
 
-/** NFKC, lower case, runs of letters and digits; a run of CJK characters adds its character pairs. */
+/**
+ * NFKC, lower case, runs of letters and digits, with CJK split from Latin letters and digits written
+ * against it ("缓存TTL为5分钟" is 缓存, ttl, 为, 5, 分钟). A CJK run, having no spaces between
+ * words, becomes its character pairs (a lone character stays as it is), so a query matches part of
+ * a phrase or a compound (长江 in 长江大桥) without a dictionary. On a labeled Chinese set this beat
+ * jieba word segmentation, which misses words inside its dictionary's compounds (docs/group-board.md).
+ */
 export function boardTokens(text: string): string[] {
-  const words = text.normalize("NFKC").toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
   const tokens: string[] = [];
-  for (const word of words) {
-    tokens.push(word);
-    for (const run of word.match(CJK) ?? []) {
-      const chars = [...run];
+  for (const word of text.normalize("NFKC").toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
+    for (const [index, part] of word.split(CJK_RUN).entries()) {
+      if (!part) continue;
+      // split() with a capture group puts the CJK runs at the odd indexes.
+      if (index % 2 === 0) {
+        tokens.push(part);
+        continue;
+      }
+      const chars = [...part];
+      if (chars.length === 1) tokens.push(part);
       for (let i = 1; i < chars.length; i++) tokens.push(chars[i - 1]! + chars[i]!);
     }
   }
@@ -247,9 +252,9 @@ export function boardSection(subAgents: boolean): string {
   return [
     "How this group works: through a shared board, not by talking to each other.",
     "- The user's requests go to the bots, which work on them in parallel and never message each other: the board is how your work reaches the other bots, and theirs reaches you. Nobody assigns work; what each bot takes on comes from the board. Your group messages reach only the user.",
-    "- An open request goes to one bot first, which does it alone unless it has several substantial pieces that can run in parallel: every bot that joins starts from nothing and reads the context again, so splitting small work costs more than it saves. To split, it publishes the plan and claims its own piece, and the other bots join.",
+    "- An open request goes to one bot first, which does it alone unless it has several substantial pieces that can run in parallel: every bot that joins starts from nothing and reads the context again, so splitting small work costs more than it saves. To split, it publishes the plan and claims its own piece, which brings the other bots in. Split by the inputs (files, documents, sections), so each piece reads its own part, not by the kind of check, which has every bot read everything.",
     "- READ BEFORE YOU WRITE: before starting a piece, board_search its wording and the names of what you'd work on (files, functions, subjects). Work an entry records is DONE: build on it and take uncovered ground.",
-    "- CLAIM, THEN WORK: when you take on a piece, publish that first, with claim: the piece's name as the plan gives it (a file you'll change, one part of the request; never the whole request). The first claim wins: a piece that overlaps one already claimed for the request is refused, so pick another.",
+    "- CLAIM, THEN WORK: when you join a request, your first entry claims a piece (board_publish with claim: the piece's name as the plan gives it, such as a file you'll change or a set of documents; never the whole request); nothing else is accepted from you until you have. The first claim wins: a piece that overlaps one already claimed for the request is refused, so pick another. A piece whose bot's turn failed is released for someone else to take.",
     "- STAY IN YOUR CLAIM: do your piece, not the others'. Don't redo or re-verify a piece whose entry gives its evidence, and leave files another bot claimed alone; if you doubt an entry, check that one thing and publish what you found.",
     "- Publish as you go, mostly intermediate work: partial results, leads, dead ends, what you ruled out. Work you don't publish is lost to the others.",
     '- An entry (board_publish): sub_task, what you did in the present perfect, in the words someone would search for ("I\'ve checked the retry limits in api.md"); artifact, the result itself, reusable without redoing the work, with how you checked it (the test or command and its outcome; label unchecked claims as such); rationale, briefly how you got it, naming every ref and what it gave ("B3 listed the files"); refs, the entries (B3) and group messages (#12) you used. A ref must exist and the rationale must name it, or the entry is refused. Cite what you used. Build on a result whose evidence holds; when you find an entry wrong, publish that, citing it.',
@@ -265,7 +270,7 @@ export type RoundNotice =
   | { kind: "join"; seq: number; starter: string | null; others: readonly string[]; position: number; joining: number; taken: readonly string[] }
   | { kind: "together"; seq: number; others: readonly string[] }
   | { kind: "solo"; seq: number }
-  | { kind: "report"; seq: number };
+  | { kind: "report"; seq: number; orphaned: readonly string[] };
 
 /** What a seat's notice says about a request it's woken for. */
 export function roundNoticeText(notice: RoundNotice): string {
@@ -273,24 +278,29 @@ export function roundNoticeText(notice: RoundNotice): string {
   const finish = `Call board_finish with request: ${seq} when your part is done; the last bot to finish answers the user.`;
   switch (notice.kind) {
     case "first":
-      return `You're first on #${seq}; ${notice.waiting} other bot${notice.waiting === 1 ? " is" : "s are"} waiting. If one bot can do it in a few minutes, do it alone and answer (group_send with reply_to: ${seq}), without claiming anything: answering is all it takes. Split it only when it has several substantial pieces that can run in parallel: publish the plan with its pieces, then claim yours; your claim brings the others in (so does still working on it after 3 minutes). ${finish}`;
+      return `You're first on #${seq}; ${notice.waiting} other bot${notice.waiting === 1 ? " is" : "s are"} waiting. If you'll do it alone, do it and answer (group_send with reply_to: ${seq}), without claiming anything: answering is all it takes, and the others are never woken. Split it only when it has several substantial pieces that can run in parallel: publish the plan with its pieces, split by its inputs (files, documents, sections), then claim yours; your claim brings the others in. ${finish}`;
     case "join": {
       const started = notice.starter ? `${notice.starter} started on #${seq}, and you` : "You";
       const company = notice.others.length ? ` join it with ${notice.others.join(", ")}` : " join it";
       const taken = notice.taken.length ? ` Claimed so far: ${notice.taken.join("; ")}.` : "";
-      return `${started}${company}: you're ${notice.position} of ${notice.joining} joining now.${taken} Search the board first (board_search), then claim a piece nobody has claimed (when several are free, try number ${notice.position} of them first), do only that piece and publish as you go. ${finish}`;
+      return `${started}${company}: you're ${notice.position} of ${notice.joining} joining now.${taken} Search the board for the plan (board_search), then make your first entry a claim on a piece nobody has claimed (when several are free, try number ${notice.position} of them first); do only that piece and publish as you go. ${finish}`;
     }
     case "together":
       return `The user asked you and ${notice.others.join(", ")} on #${seq}: work on it together through the board (board_search first, then publish as you go). ${finish}`;
     case "solo":
       return `The user asked you (#${seq}): do it and answer with group_send, reply_to: ${seq}.`;
     case "report":
-      return `Everyone working on #${seq} has finished and nobody has answered it: answer the user now, with group_send reply_to: ${seq}. Build the answer from the board (board_search it): the outcome first, what was done and found, what was checked, and what's left open.`;
+      return `Everyone working on #${seq} has finished and nobody has answered it: answer the user now, with group_send reply_to: ${seq}. Build the answer from the board (board_search it): the outcome first, what was done and found, what was checked, and what's left open.${orphanedText(notice.orphaned)}`;
   }
 }
 
+/** The pieces claimed by bots whose turn failed and that nobody claimed again, for the one answering. */
+function orphanedText(orphaned: readonly string[]): string {
+  return orphaned.length ? ` A bot whose turn failed had claimed these pieces, now released: ${orphaned.join("; ")}. Check the board for what it got done; do what's missing if you can (claim it first), or say in the answer that it's left open.` : "";
+}
+
 /** What board_finish tells a bot. */
-export function finishText(input: { seq: number } & ({ state: "not_working" } | { state: "others"; working: readonly string[] } | { state: "last" } | { state: "answered"; answer: number })): string {
+export function finishText(input: { seq: number } & ({ state: "not_working" } | { state: "others"; working: readonly string[] } | { state: "last"; orphaned?: readonly string[] } | { state: "answered"; answer: number } | { state: "claim_first"; taken: readonly string[] })): string {
   const seq = input.seq;
   switch (input.state) {
     case "not_working":
@@ -298,8 +308,10 @@ export function finishText(input: { seq: number } & ({ state: "not_working" } | 
     case "others":
       return `Noted: your part of #${seq} is done. Still working: ${input.working.join(", ")}. The last one to finish answers the user, so stop here.`;
     case "last":
-      return `You're the last on #${seq}: answer the user now, with group_send reply_to: ${seq}. Build it from the board (board_search it: the others' work isn't in your context); if the request has an overall check (a test suite, a build), run it once first. The outcome first, then what was done and found, what was checked, and what's left open.`;
+      return `You're the last on #${seq}: answer the user now, with group_send reply_to: ${seq}. Build it from the board (board_search it: the others' work isn't in your context); if the request has an overall check (a test suite, a build), run it once first. The outcome first, then what was done and found, what was checked, and what's left open.${orphanedText(input.orphaned ?? [])}`;
     case "answered":
       return `#${seq} was answered in #${input.answer} before you finished. If your part changes or adds to that answer, reply to #${input.answer} with just that; otherwise stop here.`;
+    case "claim_first":
+      return `Not published: you joined #${seq}, so your first entry must claim a piece (board_publish with claim). Claimed so far: ${input.taken.length ? input.taken.join("; ") : "nothing"}. Claim a piece nobody has, or, if every piece is taken, call board_finish.`;
   }
 }

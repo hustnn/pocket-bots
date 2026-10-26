@@ -704,7 +704,7 @@ export class GroupStore {
   /**
    * Publishes an entry, or says why it can't be (shared/group-board.ts boardEntryProblem, and a
    * claim another entry for the same request holds): checked and numbered in one transaction, so a
-   * refused entry writes nothing and takes no number.
+   * refused entry writes nothing and takes no number. A released claim no longer holds its piece.
    */
   publishBoard(groupId: string, authorId: string, round: number | null, input: { subTask: string; artifact: string; rationale: string; refs: readonly string[]; claim?: string | null }): { entry: BoardEntry } | { problem: string } {
     return this.db.tx(() => {
@@ -738,11 +738,19 @@ export class GroupStore {
     });
   }
 
-  /** The pieces claimed on the board for a request (or outside any), in the order they were claimed. */
-  boardClaims(groupId: string, round: number | null): { number: number; authorId: string; claim: string }[] {
+  /**
+   * The pieces claimed on the board for a request (or outside any), in the order they were claimed:
+   * those still held, or (`released`) those let go when their bot's turn failed.
+   */
+  boardClaims(groupId: string, round: number | null, released = false): { number: number; authorId: string; claim: string }[] {
     return this.db
-      .all<{ number: number; author_id: string; claim: string }>("SELECT number, author_id, claim FROM group_board WHERE group_id = ? AND COALESCE(round_seq, 0) = ? AND claim IS NOT NULL ORDER BY number", groupId, round ?? 0)
+      .all<{ number: number; author_id: string; claim: string }>(`SELECT number, author_id, claim FROM group_board WHERE group_id = ? AND COALESCE(round_seq, 0) = ? AND claim IS NOT NULL AND claim_released_at IS ${released ? "NOT NULL" : "NULL"} ORDER BY number`, groupId, round ?? 0)
       .map((row) => ({ number: Number(row.number), authorId: row.author_id, claim: row.claim }));
+  }
+
+  /** A bot's claims for a request are let go (its turn failed), so another bot can take its pieces. */
+  releaseClaims(groupId: string, round: number, authorId: string): void {
+    this.db.run("UPDATE group_board SET claim_released_at = ? WHERE group_id = ? AND round_seq = ? AND author_id = ? AND claim IS NOT NULL AND claim_released_at IS NULL", now(), groupId, round, authorId);
   }
 
   /** A user's request starts a round: the bots it woke work on it; for an open one, the rest wait to join. */

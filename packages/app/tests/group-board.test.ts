@@ -76,9 +76,45 @@ describe("board refs and the rules for publishing", () => {
 
 describe("board ranking", () => {
   it("splits CJK runs into character pairs, so a Chinese query matches part of a phrase", () => {
-    expect(boardTokens("登录页白屏 fix")).toEqual(["登录页白屏", "登录", "录页", "页白", "白屏", "fix"]);
+    expect(boardTokens("登录页白屏 fix")).toEqual(["登录", "录页", "页白", "白屏", "fix"]);
     const entries = [entry(1, "我已检查登录页白屏的原因"), entry(2, "I've checked the payment page")];
     expect(rankBoard(entries, "白屏").map((ranked) => ranked.number)).toEqual([1]);
+  });
+
+  it("counts a two-character word once, and splits Chinese from Latin letters and digits written without spaces", () => {
+    expect(boardTokens("白屏")).toEqual(["白屏"]);
+    expect(boardTokens("页")).toEqual(["页"]);
+    expect(boardTokens("缓存TTL为5分钟")).toEqual(["缓存", "ttl", "为", "5", "分钟"]);
+    expect(boardTokens("用Redis做分布式锁")).toEqual(["用", "redis", "做分", "分布", "布式", "式锁"]);
+    expect(boardTokens("src/wrap.js")).toEqual(["src", "wrap", "js"]);
+  });
+
+  // Cases from the labeled Chinese test in docs/group-board.md, where tokenizers differ.
+  it("finds Chinese entries by part of a compound, across glued English, and not by a shared character", () => {
+    const entries = [
+      entry(1, "我已排查登录页白屏的原因：CSP 头拦截了 bundle.js"),
+      entry(2, "我已检查首页白屏时间过长的问题：首屏加载 2MB 字体文件"),
+      entry(3, "我已认领 IP 白名单配置的改造"),
+      entry(4, "我已检查白天和夜间的流量差异"),
+      entry(5, "我已确认长江大桥项目的数据接入：桥梁监测数据每 5 秒上报一次"),
+      entry(6, "我已确认search服务缓存TTL为5分钟"),
+      entry(7, "我已用Redis做分布式锁，定时任务不再重复执行"),
+      entry(8, "我已修复npm test在CI里失败的问题"),
+      entry(9, "我已整理注册页面空白的问题"),
+    ];
+    const ranked = (query: string) => rankBoard(entries, query).map((hit) => hit.number);
+    // 白屏 is a pair of its own: 白名单 and 白天 share only 白.
+    expect(ranked("白屏").sort()).toEqual([1, 2]);
+    // A word inside a longer compound (jieba keeps 长江大桥 and 监测数据 whole and misses these).
+    expect(ranked("长江")).toEqual([5]);
+    expect(ranked("监测")).toEqual([5]);
+    // 登录页面 against 登录页: the shared pairs 登录 and 录页 put the login page first.
+    expect(ranked("登录页面")[0]).toBe(1);
+    // English and digits glued to Chinese.
+    expect(ranked("TTL")).toEqual([6]);
+    expect(ranked("Redis")).toEqual([7]);
+    expect(ranked("npm test")).toEqual([8]);
+    expect(ranked("5分钟")[0]).toBe(6);
   });
 
   it("returns only entries the query matches, best first, the earlier one on a tie", () => {

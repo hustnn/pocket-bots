@@ -448,10 +448,10 @@ const MIGRATIONS: Migration[] = [
         rationale TEXT NOT NULL,
         refs TEXT NOT NULL DEFAULT '[]',
         claim TEXT,
+        claim_released_at TEXT,
         created_at TEXT NOT NULL,
         PRIMARY KEY (group_id, number)
       );
-      CREATE UNIQUE INDEX group_board_claims ON group_board (group_id, COALESCE(round_seq, 0), claim) WHERE claim IS NOT NULL;
       CREATE TABLE group_rounds (
         group_id TEXT NOT NULL,
         seq INTEGER NOT NULL,
