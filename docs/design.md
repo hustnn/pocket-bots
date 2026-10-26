@@ -521,7 +521,7 @@ They haven't been read. Read them when it suits you: group_read with unread: tru
 | 没有 leader 的群 | 消息、被叫醒时、线程和历史、任务（认领、建任务和拆活）、提醒和 @、子 agent（能开时）、写法、礼节、约束和权限 | 约 6.9K 字符，带子 agent 约 8K |
 | leader | leader 一段（计划、派活、核对结果、请求做完后回复你的请求告诉你结果、成员一轮失败时怎么办、成员和模型），加上面除「认领、拆活」和子 agent 以外的部分 | 约 8.8K |
 | 成员 | 成员一段（只做派给它的、做完在线程里汇报一次就停（带上跑了哪些测试和检查、结果如何）、不改状态、卡住问 leader、能开子 agent 时自己做），加消息、写法、约束和权限 | 约 4.8K |
-| 共享看板群的座位 | 看板一段（`shared/group-board.ts` 的 `boardSection`：先搜再写、先认领再动手、边做边写中间结果、条目怎么写、搜索和读、做完和谁回答），加消息、写法、约束和权限（`boardGroupPrompt`） | 约 4.5K |
+| 共享看板群的座位 | 看板一段（`shared/group-board.ts` 的 `boardSection`：什么时候拆活、先搜再写、先认领再动手、只做自己认领的、边做边写中间结果、条目怎么写、搜索和读、做完和谁回答），加消息、写法、约束和权限（`boardGroupPrompt`） | 约 5.0K |
 
 **成员跑过的检查 leader 不再重复**：成员汇报时说明跑了哪些测试和检查、结果如何；leader 照样核对结果，但成员已经跑过的检查不用再跑一遍。基准测试里成员报了「typecheck 通过、435 个测试通过」，leader 还是把 typecheck 和整套测试又跑了一遍。
 
