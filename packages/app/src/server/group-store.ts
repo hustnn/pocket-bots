@@ -394,9 +394,13 @@ export class GroupStore {
    * @mentioned or the leader changed. A thread message reaches its followers and, for the same
    * send, its sender, the top message's author and whoever it @mentions; one who stopped following gets no record
    * unless @mentioned (which makes it follow again). Then the follows.
-   * In a group with a leader, the other members are reached only by what the leader or the user
-   * aims at them (fromLead): anything else reaches them as it would a muted bot (no record at the
-   * top level) and wakes none of them in a thread; one member's @mention of another reaches nobody.
+   * In a group with a leader, the other members are reached only by what's aimed at them: work
+   * the leader or the user hands them (fromLead), or another member's @mention or reply (a question
+   * between members). Anything else reaches them as it would a muted bot (no record at the top
+   * level) and wakes none of them in a thread; a member's @everyone reaches only the leader. The
+   * leader in turn is woken by a member's message only when it's aimed at the leader (an @mention, a
+   * reply, @everyone), so the members' questions to each other don't wake it; it reads them when it
+   * looks at the piece's thread.
    */
   private deliver(row: MessageRow, message: GroupMessage): string[] {
     const groupId = row.group_id;
@@ -411,7 +415,10 @@ export class GroupStore {
     const lead = !leaderId || fromLead(leaderId, { kind: row.sender_kind, senderId, causalActor: row.causal_actor_id });
     /** A member the leader leads, which this message may only reach as work. */
     const led = (id: string) => leaderId !== null && id !== leaderId && id !== GROUP_USER_ID && id !== senderId;
-    const mentioned = new Set(message.mentions.filter((id) => memberIds.has(id) && (lead || !led(id))));
+    // A member's own message (a question) may reach another member; a note a member caused (an
+    // assignment it made, say) can't hand anyone work.
+    const asks = row.sender_kind === "bot";
+    const mentioned = new Set(message.mentions.filter((id) => memberIds.has(id) && (lead || asks || !led(id))));
     const receivers = new Map<string, { suppressed: boolean }>();
     const add = (id: string, suppressed = false) => {
       if (!valid(id)) return;
@@ -450,14 +457,17 @@ export class GroupStore {
       if (suppressed && !personal) continue;
       const mutedFrom = muted.get(id);
       if (conv === 0 && !personal && !pastMute && mutedFrom !== null && mutedFrom !== undefined && row.seq >= mutedFrom) continue;
-      // Work from the leader or the user aimed at a led member reaches it; nothing else wakes it.
-      const asWork = !led(id) || (lead && (personal || repliedBot === id || message.everyone));
+      // What's aimed at a led member reaches it: work from the leader or the user, or another
+      // member's question (@mention or reply). Nothing else wakes it.
+      const asWork = !led(id) || (lead && (personal || repliedBot === id || message.everyone)) || (asks && (personal || repliedBot === id));
       if (conv === 0 && !asWork) continue;
+      // A member's message wakes the leader only when it's aimed at the leader.
+      const quiet = id === leaderId && !lead && !personal && repliedBot !== id && !message.everyone;
       // A personal @mention is unread even for the one who caused it (the mention is checked first,
       // and live delivery uses the same rule): "📌 @Ada started task #3" reaches Ada.
       const eligible = unreadEligible(subject, id, personal);
       const reason =
-        id === GROUP_USER_ID || !asWork
+        id === GROUP_USER_ID || !asWork || quiet
           ? null
           : deliveryReason({
               mode: group.wake_mode,

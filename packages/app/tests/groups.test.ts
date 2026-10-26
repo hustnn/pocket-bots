@@ -1046,14 +1046,19 @@ describe("a group with a leader", () => {
     await expect(group.groups.task(beta, group.id, { action: "create", titles: ["find the theme files"], assignee: "Gamma" })).rejects.toThrow(/Alpha hands out the work/);
     await group.groups.read(beta, group.id, { unread: true });
     await group.groups.read(beta, group.id, { topLevel: true });
-    const sent = await group.groups.send(beta, group.id, { text: "@Gamma can you find the theme files? @Delta might know." });
-    expect(sent).toContain("takes work only from the leader, Alpha, or the user");
+    // A member asks another directly: the question reaches Gamma and doesn't wake the leader.
+    const sent = await group.groups.send(beta, group.id, { text: "@Gamma where are the theme files? @Delta might know." });
+    expect(sent).not.toContain("takes work only");
     // A member has no ask_bot, so it isn't pointed to one for a bot outside the group.
     expect(sent).toContain("- @Delta — not in this group");
     expect(sent).not.toContain("ask_bot");
-    // It reaches the leader, not Gamma.
     await settle(group);
-    expect(woken).toEqual(["alpha", "alpha"]);
+    expect(woken).toEqual(["alpha", "gamma"]);
+    // A member's @everyone reaches only the leader, and the member is told so.
+    const everyone = await group.groups.send(beta, group.id, { text: "@everyone where are the theme files?" });
+    expect(everyone).toContain("- @everyone — from a member, it reaches only the leader, Alpha");
+    await settle(group);
+    expect(woken).toEqual(["alpha", "gamma", "alpha"]);
 
     woken.length = 0;
     await group.groups.read(alpha, group.id, { unread: true });
@@ -1188,5 +1193,59 @@ describe("a led member's pieces of work", () => {
     const second = seen.find((wake) => wake.text.includes("second piece"))!;
     expect(second.chat).not.toBe(firstChat);
     expect(second.text).not.toContain("first piece");
+  });
+
+  it("answers another member's question in the session it's in, without the leader", async () => {
+    const wakes: { bot: string; chat: string; text: string }[] = [];
+    const group = await setup(
+      (turn, step, botId) => {
+        if (step === 0 && delivered(turn)) wakes.push({ bot: botId, chat: turn.spec.key, text: turn.text });
+        return null;
+      },
+      ["alpha", "beta", "gamma"],
+    );
+    stop = group.stop;
+    await group.groups.update(group.id, { leaderId: "alpha" });
+    await settle(group);
+    const alpha = (await group.host.bot("alpha"))!;
+    const beta = (await group.host.bot("beta"))!;
+    const gamma = (await group.host.bot("gamma"))!;
+    const piece = async (text: string) => {
+      await group.groups.read(alpha, group.id, { unread: true });
+      await group.groups.read(alpha, group.id, { topLevel: true });
+      const sent = await group.groups.send(alpha, group.id, { text });
+      await settle(group);
+      return Number(/#(\d+)/.exec(sent)![1]);
+    };
+    const a = await piece("@Beta add dark mode to styles.css");
+    const b = await piece("@Gamma map where the theme is loaded");
+    const gammaChat = wakes.filter((wake) => wake.bot === "gamma").at(-1)!.chat;
+    expect(group.store.member(group.id, "gamma")!.seat_task).toBe(b);
+
+    // Beta asks Gamma in its own piece's thread.
+    wakes.length = 0;
+    await group.groups.read(beta, group.id, { thread: a });
+    expect(await group.groups.send(beta, group.id, { thread: a, text: "@Gamma which file loads the theme?" })).toMatch(/^Sent as/);
+    await settle(group);
+    // Only Gamma wakes, in the session for its own piece, with Beta's thread as context; its piece stays.
+    expect(wakes.map((wake) => wake.bot)).toEqual(["gamma"]);
+    expect(wakes[0]!.chat).toBe(gammaChat);
+    expect(wakes[0]!.text).toContain("which file loads the theme?");
+    expect(group.store.member(group.id, "gamma")!.seat_task).toBe(b);
+
+    // Gamma answers there: Beta wakes, the leader doesn't.
+    wakes.length = 0;
+    await group.groups.read(gamma, group.id, { thread: a });
+    expect(await group.groups.send(gamma, group.id, { thread: a, text: "@Beta src/theme/load.ts, line 12" })).toMatch(/^Sent as/);
+    await settle(group);
+    expect(wakes.map((wake) => wake.bot)).toEqual(["beta"]);
+    // The leader has both in its records, unread, to see when it reads the thread.
+    expect(group.store.unreadPlaces(group.id, "alpha").map((place) => place.conv)).toContain(a);
+    // Beta's report @mentions the leader, which wakes it.
+    wakes.length = 0;
+    await group.groups.read(beta, group.id, { thread: a });
+    expect(await group.groups.send(beta, group.id, { thread: a, text: "@Alpha done: dark mode in styles.css, npm test passes" })).toMatch(/^Sent as/);
+    await settle(group);
+    expect(wakes.map((wake) => wake.bot)).toEqual(["alpha"]);
   });
 });

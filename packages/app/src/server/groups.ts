@@ -39,6 +39,7 @@ import {
   wakeText,
   fromLead,
   pieceFor,
+  workOf,
   type GroupAttachment,
   type GroupLead,
   type GroupMessage,
@@ -314,15 +315,18 @@ export class GroupChats {
     const leaderId = this.store.leader(groupId);
     if (!leaderId || !botId) return { name: group.name, ...team };
     const bots = await this.liveBots();
-    if (botId !== leaderId) return { name: group.name, lead: { role: "member", leader: bots.get(leaderId)?.name ?? "the leader" }, ...team };
-    const members = this.store.members(groupId).flatMap((member) => {
-      const bot = member.bot_id === leaderId ? null : bots.get(member.bot_id);
-      if (!bot) return [];
-      const runtime = this.host.runtimes.get(bot.provider as never)?.label ?? bot.provider;
-      const about = [bot.title.trim(), bot.description.trim() ? foldText(bot.description, 200) : "", `runs on ${runtime}${bot.model ? ` with ${bot.model}` : ""}`].filter(Boolean).join(" · ");
-      return [{ name: bot.name, about }];
-    });
-    return { name: group.name, lead: { role: "leader", members }, ...team };
+    // The members besides the leader: for the leader, who it hands work to (and on what model);
+    // for a member, the others it may ask (and what each does).
+    const others = (withRuntime: boolean) =>
+      this.store.members(groupId).flatMap((member) => {
+        const bot = member.bot_id === leaderId || member.bot_id === botId ? null : bots.get(member.bot_id);
+        if (!bot) return [];
+        const runtime = this.host.runtimes.get(bot.provider as never)?.label ?? bot.provider;
+        const about = [bot.title.trim(), bot.description.trim() ? foldText(bot.description, 200) : "", withRuntime ? `runs on ${runtime}${bot.model ? ` with ${bot.model}` : ""}` : ""].filter(Boolean).join(" · ");
+        return [{ name: bot.name, about }];
+      });
+    if (botId !== leaderId) return { name: group.name, lead: { role: "member", leader: bots.get(leaderId)?.name ?? "the leader", peers: others(false) }, ...team };
+    return { name: group.name, lead: { role: "leader", members: others(true) }, ...team };
   }
 
   /** The ids of a team's sessions, newest activity first. */
@@ -1906,13 +1910,24 @@ export class GroupChats {
     return `Sent as #${message.seq}${conv ? ` in thread #${conv}` : ""}${attached}.${undelivered ? `\n\n${undelivered}` : ""}`;
   }
 
-  /** In a group with a leader, the members another member's @mentions didn't reach: only the leader hands them work. */
-  private async ledMentions(bot: Bot, groupId: string, mentions: Mentions): Promise<{ led?: { leader: string; members: { name: string; handle: string }[] } }> {
+  /** In a group with a leader, a member's @everyone, which reaches only the leader: members ask each other by name. */
+  private async ledMentions(bot: Bot, groupId: string, mentions: Mentions): Promise<{ led?: { leader: string } }> {
     const leaderId = this.store.leader(groupId);
-    if (!leaderId || leaderId === bot.id) return {};
-    const bots = await this.allBots();
-    const members = mentions.botIds.filter((id) => id !== leaderId && id !== bot.id).map((id) => ({ name: bots.get(id)?.name ?? id, handle: mentions.handles[id] ?? `@${bots.get(id)?.name ?? id}` }));
-    return members.length ? { led: { leader: bots.get(leaderId)?.name ?? "the leader", members } } : {};
+    if (!leaderId || leaderId === bot.id || !mentions.everyone) return {};
+    return { led: { leader: (await this.allBots()).get(leaderId)?.name ?? "the leader" } };
+  }
+
+  /**
+   * The threads among a led member's pending messages that are its pieces of work: their top
+   * message is work the leader or the user handed it (workOf). Other threads are another member's
+   * pieces, where it was asked something.
+   */
+  private piecesOf(groupId: string, leaderId: string, botId: string, pending: readonly PendingMessage[]): Set<number> {
+    const threads = [...new Set(pending.flatMap((entry) => (entry.message.thread ? [entry.message.thread] : [])))];
+    return new Set(threads.filter((thread) => {
+      const top = this.store.messageAt(groupId, thread);
+      return !!top && workOf(leaderId, botId, top) === top.seq;
+    }));
   }
 
   /** What a message's @mentions add to it in the store: the members, @everyone, and each token as written. */
@@ -1992,7 +2007,7 @@ export class GroupChats {
     const busy = !!seat && isBusy(seat.status);
     // A member the leader leads is told about one piece of work at a time (pieceFor).
     const leaderId = this.store.leader(groupId);
-    const piece = leaderId && leaderId !== botId ? pieceFor(leaderId, botId, all, seat ? member.seat_task : null) : null;
+    const piece = leaderId && leaderId !== botId ? pieceFor(leaderId, botId, all, seat ? member.seat_task : null, this.piecesOf(groupId, leaderId, botId, all)) : null;
     const pending = piece ? piece.now : all;
     // Its session is for another piece: the new one waits for the turn to end, then starts a session of its own.
     if (busy && piece?.switching) return;

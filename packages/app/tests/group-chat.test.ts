@@ -370,12 +370,22 @@ describe("a group with a leader", () => {
     expect(leader).not.toContain("group_task create");
     expect(leader).not.toContain("in_review");
     // The leader checks the result without repeating the checks the member reports it ran.
-    expect(leader).toContain("check the result before you build on it or pass it on; checks the member reports it already ran don't need repeating.");
-    const member = groupPrompt("Launch", { lead: { role: "member", leader: "Lead" } });
+    // The leader reads what a member verified, doesn't redo it, and decides whether more is worth it.
+    expect(leader).toContain("read what it says it verified and how, and what it didn't. Don't repeat checks it already ran.");
+    expect(leader).toContain("a small check (one command, a quick read of a file) you do yourself; a larger one (new tests, a full review) you hand to a member");
+    // Members' questions to each other don't wake the leader or move work.
+    expect(leader).toContain("Those exchanges don't wake you, and they don't move work");
+    const member = groupPrompt("Launch", { lead: { role: "member", leader: "Lead", peers: [{ name: "Ezra", about: "Explorer · Reads code and returns files and line numbers." }] } });
     expect(member).toContain("A new piece starts you in a fresh session that remembers nothing of earlier pieces");
     expect(member).toContain("Don't change the task's status: Lead decides when it's done.");
     expect(member).toContain("Then stop; don't wait around or keep checking.");
-    expect(member).toContain("then what you changed (files), what tests and checks you ran and their results, and anything left open. Keep it short: Lead decides what's next.");
+    expect(member).toContain("Before you report, verify your work yourself as far as you can");
+    expect(member).toContain("what you verified and how (the commands you ran and their results), and what you didn't or couldn't verify");
+    // A member asks the others directly for information, answers their questions, and hands no work.
+    expect(member).toContain("@mention it in your piece's thread with one concise question");
+    expect(member).toContain("Ask for information or a quick check only, not work: if another member should take on work, tell Lead");
+    expect(member).toContain("When another member @mentions you with a question, answer it in that thread");
+    expect(member).toContain("- The other members, besides the leader:\n  - Ezra: Explorer · Reads code and returns files and line numbers.");
     expect(member).not.toContain("in_review");
     expect(member).not.toContain("group_task create");
     expect(member).not.toContain("send short progress updates");

@@ -238,7 +238,7 @@ export function GroupComposer({
           ref={input}
           rows={1}
           value={text}
-          placeholder={placeholder ?? (replyTo && replyTo.from.kind === "bot" ? `Reply to ${replyTo.from.name}` : thread ? "Reply in thread · @ to bring a bot in" : "Message the group · @ to pick a bot")}
+          placeholder={placeholder ?? (replyTo && replyTo.from.kind === "bot" ? `Reply to ${replyTo.from.name}` : thread ? "Reply in thread · @ to bring a bot in" : "Message the team · @ to pick a bot")}
           onChange={(event) => track(event.target.value, event.target.selectionStart ?? event.target.value.length)}
           onSelect={(event) => {
             const element = event.currentTarget;

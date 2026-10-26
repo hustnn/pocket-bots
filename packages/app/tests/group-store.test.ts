@@ -164,22 +164,30 @@ describe("a group with a leader", () => {
     expect(pendingSeqs("rex")).toEqual([3, 4]);
   });
 
-  it("doesn't let a member hand work to another member: its @mention, reply or @everyone reaches only the leader", () => {
-    const ask = store.append(G, bot("cody"), { text: "@Rex search for the theme files", mentions: ["rex"] });
-    expect(records(ask.message.seq).map(([id]) => id)).toEqual(["ada", "cody", "user"]);
-    expect(ask.woken).toEqual(["ada"]);
-    const rexSaid = store.append(G, bot("rex"), { text: "@Ada found them", mentions: ["ada"] }).message.seq;
-    expect(records(rexSaid).find(([id]) => id === "ada")).toEqual(["ada", true, "handoff"]);
-    expect(store.append(G, bot("cody"), { text: "nice", replyTo: rexSaid }).woken).toEqual(["ada"]);
+  it("lets a member ask another directly without waking the leader; @everyone and assignments don't hand anyone work", () => {
+    const ask = store.append(G, bot("cody"), { text: "@Rex where are the theme files?", mentions: ["rex"] });
+    expect(records(ask.message.seq)).toEqual([
+      ["ada", true, null],
+      ["cody", false, null],
+      ["rex", true, "handoff"],
+      ["user", true, null],
+    ]);
+    expect(ask.woken).toEqual(["rex"]);
+    const rexSaid = store.append(G, bot("rex"), { text: "@Cody in src/theme", mentions: ["cody"] });
+    expect(rexSaid.woken).toEqual(["cody"]);
+    expect(store.append(G, bot("cody"), { text: "which file?", replyTo: rexSaid.message.seq }).woken).toEqual(["rex"]);
+    // Aimed at the leader, a member's message wakes it.
+    expect(store.append(G, bot("rex"), { text: "@Ada found them", mentions: ["ada"] }).woken).toEqual(["ada"]);
     expect(store.append(G, bot("cody"), { text: "@everyone ship it", everyone: true }).woken).toEqual(["ada"]);
-    // A task one member assigns another doesn't reach it; the leader's does.
-    expect(store.append(G, system, { text: "📌 Assigned @Rex to task #1", subtype: "task.assignment_receipt", causalActor: "cody", mentions: ["rex"] }).woken).toEqual(["ada"]);
+    // A task one member assigns another reaches neither; the leader's reaches the member.
+    expect(store.append(G, system, { text: "📌 Assigned @Rex to task #1", subtype: "task.assignment_receipt", causalActor: "cody", mentions: ["rex"] }).woken).toEqual([]);
     expect(store.append(G, system, { text: "📌 Assigned @Rex to task #1", subtype: "task.assignment_receipt", causalActor: "ada", mentions: ["rex"] }).woken).toEqual(["rex"]);
   });
 
-  it("keeps a member in the threads it follows without waking it for what isn't aimed at it", () => {
+  it("keeps the members' talk in a piece's thread from waking the leader or anyone it isn't aimed at", () => {
     const top = store.append(G, bot("ada"), { text: "@Cody build it; @Rex find the files", mentions: ["cody", "rex"] }).message.seq;
-    store.append(G, bot("cody"), { text: "starting", thread: top });
+    // The leader follows its piece's thread, but a member's progress there doesn't wake it.
+    expect(store.append(G, bot("cody"), { text: "starting", thread: top }).woken).toEqual([]);
     const rexReport = store.append(G, bot("rex"), { text: "@Ada the files are in src/theme", thread: top, mentions: ["ada"] });
     // Cody follows the thread (it posted there), so it has the record, but isn't woken by Rex.
     expect(records(rexReport.message.seq)).toEqual([
@@ -188,12 +196,13 @@ describe("a group with a leader", () => {
       ["rex", false, null],
     ]);
     expect(rexReport.woken).toEqual(["ada"]);
-    // The leader's answer to Cody there wakes it; a member's @mention of another doesn't, and doesn't make it follow.
     expect(store.append(G, bot("ada"), { text: "@Cody use src/theme", thread: top, mentions: ["cody"] }).woken).toEqual(["cody"]);
-    const followers = store.followers(G, top);
+    // A member's question to another wakes only that one, and brings it back into the thread.
     store.unfollow(G, top, "rex");
-    expect(store.append(G, bot("cody"), { text: "@Rex which file?", thread: top, mentions: ["rex"] }).woken).toEqual(["ada"]);
-    expect(store.followers(G, top).sort()).toEqual(followers.filter((id) => id !== "rex").sort());
+    expect(store.append(G, bot("cody"), { text: "@Rex which file?", thread: top, mentions: ["rex"] }).woken).toEqual(["rex"]);
+    expect(store.followers(G, top)).toContain("rex");
+    expect(store.append(G, bot("rex"), { text: "@Cody src/theme/dark.css", thread: top, mentions: ["cody"] }).woken).toEqual(["cody"]);
+    expect(store.append(G, bot("cody"), { text: "@Ada done: dark mode in src/theme/dark.css, npm test passes", thread: top, mentions: ["ada"] }).woken).toEqual(["ada"]);
   });
 
   it("leads only while the leader is a member, and stops when it's cleared", () => {
