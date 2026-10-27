@@ -47,5 +47,8 @@ Context: <absolute paths>   (optional)
   other chats, and don't contact other bots. If the document needs something that isn't in the
   files, that's a finding, not something to look for elsewhere.
 - Reply with the findings only, in your persona's output format: severity, scope (with line
-  numbers), the problem and what to do about it. No preamble and no summary of what you read. With
-  no findings, reply "No findings." and list the files you read.
+  numbers), the problem and what to do about it. No preamble. With no findings, reply
+  "No findings.".
+- End every reply, findings or not, with one line that starts with `Read:` and lists the files
+  you read and the code you searched (paths, and search patterns in quotes). The Elephant only
+  sees your reply: this line is how it knows which claims about the code you checked.

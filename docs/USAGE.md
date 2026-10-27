@@ -561,6 +561,7 @@ MCP 服务器给 bot 增加工具。和技能一样，服务器放在共用的�
 1. **New bot → Elephant**，工作目录可以不改：每个聊天开始时在输入框的 📁 里选项目目录就行。
 2. **New bot → Goldfish**。有 Codex 或 DeepSeek Harness 时它会用上，并设成 Read only；没有的话用默认的 agent，设成 Always Ask：读文件不问，写文件会弹卡片（它按指令不该写），拒绝即可。
 3. 两个 bot 的技能、开关都已设好，不用再动。
+4. Elephant 在 Claude 上默认是 Always Ask，每写一份 brief、草稿或报告都会弹一张审批卡。第一次弹卡时点 **Allow in folder…**，选项目目录：之后它在这个项目里读写文件、跑命令都不再问（命令写了目录外的路径照样问）。只想放行改文件、不想放行命令的话，改成在 **Model** 页签把审批模式设为 **Accept File Edits**。
 
 **用法**：在 Elephant 的新聊天里（开场页有示例可以点）：
 
@@ -572,13 +573,14 @@ MCP 服务器给 bot 增加工具。和技能一样，服务器放在共用的�
 | `egm resolve` | Elephant 逐条判断审阅意见（反驳要有金鱼能读到的证据），你决定改哪些 | `goldfish_review_report.md`，改好的文档 |
 | `egm drift report docs/designs/` | 对比设计文档和现在的代码，只报不一致的地方（不需要金鱼） | `日期_DRIFT_REPORT.md` |
 
-审阅时 Elephant 一次发出一个阶段的全部任务，告诉你在等几个审阅者，然后结束这一轮；答案一条条送回来，到齐后它写报告、问你怎么继续。每个任务在 Goldfish 下面是一个聊天，可以点进去看它读了什么。
+审阅时 Elephant 一次发出一个阶段的全部任务，告诉你在等几个审阅者，然后结束这一轮；答案一条条送回来，到齐后它写报告、问你怎么继续。每个审阅者的回答最后有一行 `Read:`，列出它读过的文件和搜过的代码，报告里跟着它的意见一起写，看得出一条关于代码的意见是对照什么得出的。每个任务在 Goldfish 下面是一个聊天，可以点进去看它读了什么。
 
 文件默认写在 Elephant 聊天的目录里；想放到别处，在消息或项目的 `AGENTS.md` 里写一行 `EGM artifact directory: .dev/egm`。
 
 **几点说明**
 
 - 命令前面不要加 `/`：`egm …` 是普通的话，由 Elephant 的技能识别；`/` 开头的是 agent 自己的斜杠命令。
+- Goldfish 的 agent 额度用完或者连不上模型时，那个阶段的审阅者会出错。Elephant 会告诉你，把这个阶段记成「没审完」，不会当成没问题，报告里也这样写。到 Goldfish 的 **Model** 页签换一个能用的 agent（换成 Claude 的话审批模式选 Always Ask，模板在 Claude 上就是这样设的），再在 Elephant 的聊天里说「Goldfish 换好了，重跑第 9 阶段」（换成没跑完的那个阶段），它会重发这一阶段并更新报告。
 - 完整一轮 review 要开 9 个审阅聊天，每个都要读文档、标准和相关代码；Goldfish 用便宜的模型可以省额度，和 Elephant 用不同的模型还能少一些共同的盲点。
 - Goldfish 不读 `AGENTS.md`、不用 `search_chats`、不碰记忆，是靠它的常驻指令和技能约束的，不是硬性限制；只读在 Codex、DeepSeek Harness 上由沙箱保证。
 - 想每周查一次文档和代码有没有对不上，给 Elephant 建一个定时任务，内容写 `egm drift report docs/designs/`。

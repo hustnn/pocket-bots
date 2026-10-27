@@ -80,10 +80,16 @@ Wherever a workflow says to spawn a subagent, a Goldfish, a reviewer swarm or th
    Standards go by file name without `.md`: feature-spec-standard,
    implementation-readiness-standard, re-implementation-standard, zoom-out-standard,
    heilmeier-standard. Give each reviewer the standards its workflow step names.
+
+   The second zoom-out (Stage 8 of a review) also gets the first one's report under `Context:`,
+   in every mode, as the zoom-out step in `workflows/review.md` says: it looks at what the
+   comprehension and critic stages added, not at the document from scratch.
 5. **Answers come back one at a time** as messages in this chat. Once a stage's tasks are sent,
    tell the user how many reviewers you're waiting for and end your turn. Note each answer as it
    arrives; when all of the stage's answers are in, combine them as `workflows/synthesizer.md`
-   says and write the stage's report. An answer that starts with "Incomplete review", or a
+   says and write the stage's report. Each answer ends with a `Read:` line: the files that
+   reviewer read and the code it searched. Keep it with the reviewer's findings in the report, so
+   a claim about the code shows what it was checked against. An answer that starts with "Incomplete review", or a
    reviewer that stopped with an error, leaves the stage incomplete: tell the user and offer to ask
    again. Never count it as "no findings".
 6. **One stage at a time.** Don't send the next stage until this one's report is written and, in
