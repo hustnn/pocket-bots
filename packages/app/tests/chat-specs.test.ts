@@ -5,6 +5,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ClaudeAdapter, CodexAdapter, GrokAdapter, OpenCodeAdapter, PiAdapter } from "@pocket-bots/runtime";
 import { botDataPath } from "../src/server/bot-home";
 import { chatSpecs, workFolder } from "../src/server/chats";
+import { appendDailyLog } from "../src/server/memory";
+import { logLine } from "../src/shared/activity";
 import type { Library } from "../src/shared/bot";
 import { GROUP_LABEL } from "../src/shared/group-chat";
 import { fakeChats, fakeHost, makeBot } from "./helpers";
@@ -155,6 +157,17 @@ describe("a chat's session setup", () => {
     expect(off.standingPrompt).not.toBe(on.standingPrompt);
     expect(off.systemPrompt).toContain("read-only for you");
     expect((await specFor({ memoryAutoWrite: true })).systemPrompt).toContain("update that file");
+  });
+
+  it("gives a new chat the bot's recent work unless the bot has it switched off", async () => {
+    const at = new Date();
+    await appendDailyLog("bot-recent", logLine({ at, chat: "Review webhooks.md", reply: "Blocker: no dedup key.", tools: [] })!, at);
+    const on = await specFor({ id: "bot-recent" });
+    expect(on.systemPrompt).toContain('you said: "Blocker: no dedup key."');
+    const off = await specFor({ id: "bot-recent", includeRecentWork: false });
+    expect(off.systemPrompt).not.toContain("Blocker: no dedup key.");
+    expect(off.systemPrompt).toContain("Your long-term memory lives in");
+    expect(off.standingPrompt).toBe(on.standingPrompt);
   });
 
   it("builds the prompt from the bot and gives the bot's memory folder when it works elsewhere", async () => {

@@ -24,6 +24,7 @@ export function makeBot(patch: Partial<Bot> = {}): Bot {
     voice: { name: null, readReplies: false },
     contactBots: "ask",
     memoryAutoWrite: false,
+    includeRecentWork: true,
     routines: [],
     playbooks: [],
     cwd: null,

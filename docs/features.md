@@ -59,6 +59,7 @@ pocket-bots 有哪些功能。每个功能怎么用见[使用指南](USAGE.md)�
 - `MEMORY.md`：长期记忆，每个新聊天都注入前 200 行（最多 24 KB）；开关打开时 bot 自己写，你也可以在 Memory 页签直接编辑。
 - 主题记忆 `memory/<topic>.md`：bot 需要时自己读。
 - **每日日志**：每轮结束 pocket-bots 自动记一行（不受 Memory writing 开关影响）；最近两天的作为 Recent work 进新聊天的 prompt；bot 用 `search_chats` 翻。
+- **Recent work 开关**（Memory 页签，每个 bot 一个，默认打开）：关掉后新聊天的 prompt 里不再有 Recent work，适合每次都该只看你给它的东西的 bot，比如审阅文档的 bot（重审时不会先看到自己上次的结论）。只影响之后新开的聊天；每日日志照常记，`search_chats` 照常能翻；导出的 bot 带着这个设置。
 - **改动记录**：记忆文件的每次改动（bot 改的、你改的、开关关闭时被恢复的）都记下，可以一键撤销，恢复也能撤销。
 
 ## 技能和 MCP

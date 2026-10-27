@@ -174,10 +174,11 @@ describe("server library", () => {
         { id: "m1", name: "gh", description: "", enabled: true, config: { type: "http", url: "https://x", headers: { Authorization: "Bearer secret" } }, tools: null, checkedAt: null, checkError: null, createdAt: NOW, updatedAt: NOW },
       ],
     };
-    const { json } = await exportBot({ bot: bot("src", { skillIds: ["shared"], mcpServerIds: ["m1"] }), includeMemory: false }, library);
+    const { json } = await exportBot({ bot: bot("src", { skillIds: ["shared"], mcpServerIds: ["m1"], includeRecentWork: false }), includeMemory: false }, library);
     expect(json).not.toContain("secret");
     const imported = await importBot({ botId: "bot-new", json });
     expect(imported.bot.skillIds).toEqual(["shared"]);
+    expect(imported.bot.includeRecentWork).toBe(false);
     expect(imported.skills.map((skill) => skill.id)).toEqual(["shared"]);
     expect(imported.mcpServers[0]).toMatchObject({ name: "gh", config: { headers: { Authorization: "<redacted>" } } });
   });
@@ -194,6 +195,7 @@ describe("server library", () => {
     const imported = await importBot({ botId: "bot-v1", json: JSON.stringify(v1) });
     expect(imported.bot.skillIds).toEqual(["old-skill"]);
     expect(imported.mcpServers.map((server) => server.name)).toEqual(["fetch"]);
+    expect(imported.bot.includeRecentWork).toBe(true);
   });
 });
 

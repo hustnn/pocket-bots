@@ -25,6 +25,7 @@ function bot(patch: Partial<Bot> = {}): Bot {
     voice: { name: null, readReplies: false },
     contactBots: "ask",
     memoryAutoWrite: false,
+    includeRecentWork: true,
     playbooks: [],
     routines: [],
     pinned: false,
@@ -108,6 +109,16 @@ describe("promptSections", () => {
     expect(memoryText({}, false)).not.toContain("likes tea");
   });
 
+  it("leaves out Recent work for a bot that has it switched off, and keeps its memory", () => {
+    const context = { memory: "likes tea", memoryPath: "/m/MEMORY.md", recentWork: ['- today 09:05 · "Review" · you said: "Blocker: no dedup key."'], playbooks: [], skills: [], botTools: false, apps: [] };
+    const titles = (patch: Partial<Bot>) => promptSections(bot(patch), context).map((section) => section.title);
+    expect(titles({})).toContain("Recent work");
+    expect(titles({ includeRecentWork: false })).toEqual(["Persona", "Standing instructions", "Project guidance", "Memory"]);
+    // Recent work isn't in the standing prompt, so a resumed session isn't told the switch flipped.
+    const standing = (patch: Partial<Bot>) => promptSections(bot(patch), context, { volatile: false }).map((section) => section.text);
+    expect(standing({ includeRecentWork: false })).toEqual(standing({}));
+  });
+
   it("leaves out memory and skills when the bot has no local folder, but still points it at AGENTS.md", () => {
     expect(promptSections(bot({ soul: "" }), { memory: "", memoryPath: null, recentWork: [], playbooks: [], skills: [], botTools: false, apps: [] }).map((section) => section.title)).toEqual(["Persona", "Project guidance"]);
   });
@@ -168,6 +179,13 @@ describe("settings schema", () => {
     expect(StoreSchema.parse({ bots: [legacy] }).bots[0]!.memoryAutoWrite).toBe(false);
     expect(StoreSchema.parse({ bots: [bot({ memoryAutoWrite: true })] }).bots[0]!.memoryAutoWrite).toBe(true);
     expect(newBot("claude").memoryAutoWrite).toBe(false);
+  });
+
+  it("gives bots saved before the Recent work switch existed their recent work, as new bots get it", () => {
+    const { includeRecentWork: _switch, ...legacy } = bot({ includeRecentWork: false });
+    expect(StoreSchema.parse({ bots: [legacy] }).bots[0]!.includeRecentWork).toBe(true);
+    expect(StoreSchema.parse({ bots: [bot({ includeRecentWork: false })] }).bots[0]!.includeRecentWork).toBe(false);
+    expect(newBot("claude").includeRecentWork).toBe(true);
   });
 
   it("says in the overview that a bot with memory writing off only reads its memory", () => {
