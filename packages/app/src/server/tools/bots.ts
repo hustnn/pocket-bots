@@ -1,8 +1,10 @@
+import { resolve } from "node:path";
 import type { PocketHost } from "../host";
 import { z } from "zod";
 import { foldText, lastTurn } from "../../shared/activity";
 import { BOT_LABEL } from "../../shared/bot";
 import { answerPrompt, askPrompt, failurePrompt } from "../../shared/peers";
+import { botDataPath } from "../bot-home";
 import { startChat } from "../chats";
 import { defineTool, type ToolCaller } from "./mcp";
 
@@ -106,6 +108,17 @@ async function mayAsk({ bot, agentId, host }: ToolCaller): Promise<boolean> {
   return !chat?.labels[ASKED_BY_LABEL];
 }
 
+/**
+ * The folder the asking chat works in, for the asked bot's chat. Never the asker's own bot folder:
+ * that holds its memory and other chats' files, which the other bot has no business reading.
+ */
+function askerFolder({ bot, agentId, host }: ToolCaller): string {
+  const cwd = host.chats.get(agentId)?.cwd;
+  if (!cwd) throw new Error("This chat's folder isn't known, so in_my_folder can't be used here.");
+  if (resolve(cwd) === resolve(botDataPath(bot.id))) throw new Error("This chat works in your own bot folder, not a project, so in_my_folder can't be used. Ask without it, and give the other bot absolute paths.");
+  return cwd;
+}
+
 export const askBot = defineTool({
   name: "ask_bot",
   description:
@@ -114,15 +127,17 @@ export const askBot = defineTool({
     bot: z.string().min(1).max(100).describe("The other bot's name or id."),
     message: z.string().min(1).max(20_000).describe("What you need, written so the other bot can act on it without this chat."),
     wait: z.boolean().optional().describe("Wait up to about 50 seconds for the answer (the default). With false, return at once; the answer comes to this chat when it's done."),
+    in_my_folder: z.boolean().optional().describe("Start its chat in the folder this chat works in (a project of the user's), so it can read and search the files there by relative path, as for a review of them. Off by default: it works in its own folder."),
   }),
   available: mayAsk,
-  async run({ bot: wanted, message, wait = true }, caller) {
+  async run({ bot: wanted, message, wait = true, in_my_folder: inMyFolder = false }, caller) {
     const { bot, host } = caller;
     const others = (await host.bots()).filter((entry) => entry.id !== bot.id && !entry.archived);
     const key = wanted.trim().toLowerCase();
     const target = others.find((entry) => entry.id === wanted.trim()) ?? others.find((entry) => entry.name.trim().toLowerCase() === key);
     if (!target) throw new Error(others.length ? `There's no other bot called "${wanted}". Ask one of: ${others.map((entry) => entry.name).join(", ")}.` : "There are no other bots to ask.");
-    const chatId = await startChat(host, target, { prompt: askPrompt(bot.name, message), title: `${bot.name}: ${foldText(message, 60)}`, labels: { [ASKED_BY_LABEL]: bot.id } });
+    const cwd = inMyFolder ? askerFolder(caller) : undefined;
+    const chatId = await startChat(host, target, { prompt: askPrompt(bot.name, message), title: `${bot.name}: ${foldText(message, 60)}`, labels: { [ASKED_BY_LABEL]: bot.id }, ...(cwd ? { cwd } : {}) });
     if (!wait) {
       if (!caller.answers) return `Asked ${target.name} in chat ${chatId}. Use check_chat with that id for the answer.`;
       await caller.answers.owe(chatId, caller.agentId);

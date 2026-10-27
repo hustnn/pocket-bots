@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { pixelAvatar, SPRITE_NAMES, SPRITE_SIZE } from "../src/shared/avatar";
-import { botLimits, botProblems, defaultModelId, EMPTY_LIBRARY, promptSections, StoreSchema, formatPairs, joinArgs, parseMcpJson, parsePairs, splitArgs, type Bot, type Library, type LibraryMcpServer } from "../src/shared/bot";
+import { botLimits, botProblems, defaultModelId, EMPTY_LIBRARY, presetFromBot, promptSections, StoreSchema, formatPairs, joinArgs, parseMcpJson, parsePairs, splitArgs, type Bot, type Library, type LibraryMcpServer } from "../src/shared/bot";
 import { BOT_TEMPLATES, newBot } from "../src/shared/templates";
 import { relativeTime } from "../src/shared/time";
 
@@ -25,6 +25,8 @@ function bot(patch: Partial<Bot> = {}): Bot {
     voice: { name: null, readReplies: false },
     contactBots: "ask",
     memoryAutoWrite: false,
+    includeRecentWork: true,
+    starters: [],
     playbooks: [],
     routines: [],
     pinned: false,
@@ -108,6 +110,16 @@ describe("promptSections", () => {
     expect(memoryText({}, false)).not.toContain("likes tea");
   });
 
+  it("leaves out Recent work for a bot that has it switched off, and keeps its memory", () => {
+    const context = { memory: "likes tea", memoryPath: "/m/MEMORY.md", recentWork: ['- today 09:05 · "Review" · you said: "Blocker: no dedup key."'], playbooks: [], skills: [], botTools: false, apps: [] };
+    const titles = (patch: Partial<Bot>) => promptSections(bot(patch), context).map((section) => section.title);
+    expect(titles({})).toContain("Recent work");
+    expect(titles({ includeRecentWork: false })).toEqual(["Persona", "Standing instructions", "Project guidance", "Memory"]);
+    // Recent work isn't in the standing prompt, so a resumed session isn't told the switch flipped.
+    const standing = (patch: Partial<Bot>) => promptSections(bot(patch), context, { volatile: false }).map((section) => section.text);
+    expect(standing({ includeRecentWork: false })).toEqual(standing({}));
+  });
+
   it("leaves out memory and skills when the bot has no local folder, but still points it at AGENTS.md", () => {
     expect(promptSections(bot({ soul: "" }), { memory: "", memoryPath: null, recentWork: [], playbooks: [], skills: [], botTools: false, apps: [] }).map((section) => section.title)).toEqual(["Persona", "Project guidance"]);
   });
@@ -168,6 +180,23 @@ describe("settings schema", () => {
     expect(StoreSchema.parse({ bots: [legacy] }).bots[0]!.memoryAutoWrite).toBe(false);
     expect(StoreSchema.parse({ bots: [bot({ memoryAutoWrite: true })] }).bots[0]!.memoryAutoWrite).toBe(true);
     expect(newBot("claude").memoryAutoWrite).toBe(false);
+  });
+
+  it("gives bots saved before the Recent work switch existed their recent work, as new bots get it", () => {
+    const { includeRecentWork: _switch, ...legacy } = bot({ includeRecentWork: false });
+    expect(StoreSchema.parse({ bots: [legacy] }).bots[0]!.includeRecentWork).toBe(true);
+    expect(StoreSchema.parse({ bots: [bot({ includeRecentWork: false })] }).bots[0]!.includeRecentWork).toBe(false);
+    expect(newBot("claude").includeRecentWork).toBe(true);
+  });
+
+  it("keeps starters out of the prompt, and in presets", () => {
+    const starters = [{ text: "egm review docs/designs/", hint: "Review a design" }];
+    const { starters: _none, ...legacy } = bot({ starters });
+    expect(StoreSchema.parse({ bots: [legacy] }).bots[0]!.starters).toEqual([]);
+    expect(StoreSchema.parse({ bots: [bot({ starters: [{ text: "Hi" }] as never })] }).bots[0]!.starters).toEqual([{ text: "Hi", hint: "" }]);
+    const context = { memory: "", memoryPath: "/m/MEMORY.md", recentWork: [], playbooks: [], skills: [], botTools: true, apps: [] };
+    expect(promptSections(bot({ starters }), context).map((section) => section.text).join("\n")).not.toContain("egm review");
+    expect(presetFromBot(bot({ starters })).starters).toEqual(starters);
   });
 
   it("says in the overview that a bot with memory writing off only reads its memory", () => {

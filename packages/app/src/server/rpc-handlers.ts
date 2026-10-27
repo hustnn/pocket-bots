@@ -2,12 +2,14 @@ import type { z } from "zod";
 import { applyChanges } from "../shared/changes";
 import { BOT_LABEL, EMPTY_LIBRARY, newRoutineId } from "../shared/bot";
 import { GROUP_LABEL } from "../shared/group-chat";
-import { setBotUses, updateSkill, upsertSkills } from "../shared/library";
+import { addBundledSkills, setBotUses, updateSkill, upsertSkills } from "../shared/library";
 import type { RpcContract } from "../shared/rpc-core";
 import * as rpc from "../shared/rpc";
+import { templateSkills } from "../shared/templates";
 import { chatTranscript } from "../shared/transcript";
 import { POCKET_VERSION } from "../shared/version";
 import { dataPath, ensureBotHome } from "./bot-home";
+import { installBundledSkills } from "./bundled-skills";
 import type { ChatCards } from "./cards";
 import { botWorkingFolder, extraFolders, listAllChats, listChats, sendToChat, startChat, workFolder } from "./chats";
 import type { CommandAllowlist, FolderGrants } from "./commands";
@@ -185,6 +187,7 @@ export function rpcHandlers(services: Services): Map<string, RpcRegistration> {
   handle(rpc.skillReadRpc, readSkill);
   handle(rpc.skillWriteRpc, writeSkill);
   handle(rpc.skillDeleteRpc, deleteSkill);
+  handle(rpc.bundledSkillsInstallRpc, installBundledSkills);
   handle(rpc.mcpProbeRpc, probeMcpServer);
   handle(rpc.mcpSourcesRpc, () => mcpSources());
   handle(rpc.uploadRpc, saveUpload);
@@ -269,7 +272,10 @@ export function rpcHandlers(services: Services): Map<string, RpcRegistration> {
     if (proposal.kind === "changes") {
       // Applied before the proposal counts as accepted: a change that no longer fits leaves it pending.
       const context = { now: new Date().toISOString(), provider: proposal.data.provider };
-      await store.update((current) => applyChanges(current, proposal.data.changes, context));
+      // A bot made in a role (Elephant, say) starts with the role's skills, which ship with pocket-bots.
+      const bundled = templateSkills(proposal.data.changes.map((change) => (change.type === "create_bot" ? change.role : undefined)));
+      const { skills } = bundled.length ? await installBundledSkills({ ids: bundled }) : { skills: [] };
+      await store.update((current) => applyChanges({ ...current, library: addBundledSkills(current.library ?? EMPTY_LIBRARY, skills) }, proposal.data.changes, context));
       return acceptProposal(id);
     }
     const accepted = await acceptProposal(id);

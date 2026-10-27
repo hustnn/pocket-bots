@@ -73,7 +73,7 @@ pocket-bots 是一个跑在你自己电脑上的个人 bot 平台。一个 bot =
 | 消息队列 | `server/queue.ts` | bot 忙时排队的消息，由后端在它空闲时逐条发出（关掉网页也照发） |
 | ask_bot 的答案 | `server/answers.ts`、`server/tools/bots.ts` | bot 之间私下求助；超时的答案在对方答完后自动送回 |
 | 记忆和活动 | `server/memory.ts`、`server/journal.ts`、`server/activity.ts`、`shared/activity.ts` | `MEMORY.md` 注入、每日日志、记忆改动记录（可撤销）、最近的工作摘要 |
-| 库 | `server/library.ts`、`server/mcp-probe.ts`、`server/mcp-sources.ts`、`shared/skills.ts` | 技能库（新建、从 GitHub 导入、审阅）、MCP 库（导入配置、测试连接） |
+| 库 | `server/library.ts`、`server/bundled-skills.ts`、`server/mcp-probe.ts`、`server/mcp-sources.ts`、`shared/skills.ts` | 技能库（新建、从 GitHub 导入、审阅、随 pocket-bots 发布的技能）、MCP 库（导入配置、测试连接） |
 | 连接的应用 | `server/composio.ts`、`shared/apps.ts` | 用你自己的 Composio 项目连接 Gmail、Slack、GitHub 等 |
 | 搜索 | `server/search.ts`、`shared/search.ts` | 单聊和群聊消息的全文搜索（FTS5 trigram） |
 | 存储 | `server/db.ts` | SQLite：WAL、版本化迁移、事务 |
@@ -251,13 +251,15 @@ ChatService 对每个聊天都做这些（常数在 `server/supervision.ts`）�
 
 | 部分 | 内容 |
 |---|---|
-| 身份 | 名字、角色、简介、头像、朗读用的声音 |
+| 身份 | 名字、角色、简介、头像、朗读用的声音；开场示例（`starters`，最多 6 条：要填进输入框的文字和一行说明，只在新聊天的开场页显示，不进 prompt；随预设和导出的 bot 文件走） |
 | 灵魂 | 常驻指令（Standing instructions）、Playbooks（带触发词的流程指引） |
 | 模型 | agent（provider）、模型、思考强度、审批模式、能否联系其他 bot、工作目录（托管的或你的项目） |
-| 记忆 | 是否允许 bot 自己写记忆（`memoryAutoWrite`，默认关；bot 不能通过提议改它，导入时重置为关；每日日志不受它影响，始终记） |
+| 记忆 | 是否允许 bot 自己写记忆（`memoryAutoWrite`，默认关；bot 不能通过提议改它，导入时重置为关；每日日志不受它影响，始终记）；新聊天的 prompt 带不带 Recent work（`includeRecentWork`，默认开；它说的是 bot 怎么工作，不是能做什么，所以随导出的 bot 文件走） |
 | 能力 | 用哪些技能、哪些 MCP 服务器、哪些连接的应用（及其工具和账号限制）、免审批的工具 |
 | 定时任务 | 计划或 webhook、要做的事、结果贴到哪个聊天 |
 | 界面 | 置顶、隐藏、归档 |
+
+**模板**（`shared/templates.ts`，New bot 里的角色）填好名字、角色、简介、头像和常驻指令；有的还带着这个角色的技能和设置：`skills`（随 pocket-bots 发布的技能，§5.5）、`providers`（偏好的 agent，就绪的第一个替换默认 agent，连同默认的模型、模式、思考强度一起换掉）、`modes`（按 agent 的审批模式）、`contactBots`、`includeRecentWork`、`starters`。New bot 对话框先照 **New bots start with** 填 agent 设置，再用 `withTemplateSettings` 套上模板的。bot 提议 `create_bot` 带 `role` 时，套用这个角色的技能和审批模式，但 `contactBots` 不随角色放宽：要放宽得在 change 里写 `contact_bots`，卡片上才看得见。现在带这些的是 EGM 的 Elephant（`egm`，Contact other bots 为 Allowed）和 Goldfish（`egm-goldfish`；偏好 Codex、DeepSeek Harness 并用 Read only，别的 agent 上用会问的那个模式；Contact other bots 为 Off；不带 Recent work）。
 
 **文件**在它的目录 `~/.pocket-bots/Bots/<botId>/`：
 
@@ -287,7 +289,7 @@ uploads/                   聊天里上传的非文本文件
 4. **Group chat**：只有群聊座位才有，讲怎么在群里协作（§6.9）；
 5. **Extra folders**：聊天有额外文件夹时，列出它们的绝对路径，说明可以按路径读写、操作可能要审批；
 6. **Memory**：`MEMORY.md` 的当前内容和记忆文件的约定。`memoryAutoWrite` 关闭时说记忆只读、值得记的事告诉用户，打开时说自己更新；这句写在常驻部分，切换开关会改变常驻 prompt；
-7. **Recent work**：最近两天每个聊天里 bot 最后说的话（来自每日日志），让新聊天知道最近在忙什么；
+7. **Recent work**：最近两天每个聊天里 bot 最后说的话（来自每日日志），让新聊天知道最近在忙什么；`includeRecentWork` 关掉时没有这一段（日志照记）。它在易变部分，所以开关不改常驻 prompt，续接的会话不会被告知；
 8. **Skills**：技能名和「什么时候用」，bot 需要时自己读 `SKILL.md`；
 9. **Playbooks**：只放触发词出现在第一条消息里的那几个；
 10. **Connected apps**：能用的应用、账号和工具范围；
@@ -333,11 +335,13 @@ bot 不能直接改自己或别人的设置，只能提议：卡片逐条列出�
 - zod 给每个整数加的安全整数上下界（±2^53）不放进列表（`tools/mcp.ts`）。
 - 群聊的座位不列出改配置的工具（上面）；有 leader 的群里，成员的座位只列出它干活用得到的工具（§6.8）。
 
-**ask_bot**：被问的 bot 开一个新聊天（标签记着是谁问的），发起方最多等约 50 秒（MCP 客户端大约一分钟放弃一次工具调用）。来得及就直接返回答案；来不及就告诉发起方「答案会自己送来」，等对方这一轮结束，答案作为一条消息送回发起的聊天（它在忙就先进队列）。
+**ask_bot**：被问的 bot 开一个新聊天（标签记着是谁问的），发起方最多等约 50 秒（MCP 客户端大约一分钟放弃一次工具调用）。来得及就直接返回答案；来不及就告诉发起方「答案会自己送来」，等对方这一轮结束，答案作为一条消息送回发起的聊天（它在忙就先进队列）。`in_my_folder` 让被问的聊天开在发起的聊天的目录（`StartChatInput.cwd`），不带它的额外文件夹；发起的聊天在发起者自己的托管目录里时拒绝，因为那里有它的记忆和别的聊天的文件。被问的 bot 自己的技能、记忆目录照常作为免审批目录给它（`botDirectories`）。
 
 ### 5.5 技能、MCP、连接的应用
 
 - **技能库**和 **MCP 库**是共用的，每个 bot 勾选自己用哪些。导入的技能、磁盘上被改过的技能要你审阅后才给 bot；新加的 MCP 服务器要先在本机测试连通（列出工具）才打开。
+- **随 pocket-bots 发布的技能**在 `packages/app/bundled-skills/<id>/`（`server/bundled-skills.ts`）。不预先放进库：模板建 bot 时，New bot 对话框调 `bots.library.install-bundled` 把文件夹复制进 `library/skills/<id>`，再在同一次提交里用 `addBundledSkills` 把它记进技能库，`reviewedSha` 是发布的那份 `SKILL.md` 的哈希，所以直接生效（它们作为 pocket-bots 的一部分审过）。提议里的 `create_bot` 带这样的角色时，后端在应用这批改动前做同样的事。`library/bundled.json` 记着每个技能上次放进去时整个文件夹的哈希：库里的副本和它一样，说明你没动过，后端启动时（`refreshBundledSkills`）发现应用带的版本变了就换掉，并更新 `reviewedSha`；不一样就是你改过的，安装和启动都不碰，也不改它的审阅状态。库里的副本被删掉了，记录也删掉，下次用模板时重新放进来。
+- **EGM**：`egm`（给 Elephant）和 `egm-goldfish`（给 Goldfish）里是 Google 的 Elephant-Goldfish Model 原样的文件（流程、设计文档模板、执行规则；审阅者 persona、评审标准；Apache-2.0，见 `NOTICE`），各加一个我们写的 `SKILL.md`，说明这些为 Claude Code、Codex 写的文件在 pocket-bots 里怎么理解：「开子 agent」就是用 `ask_bot`（`wait: false`、`in_my_folder: true`）给 Goldfish 发一个只写 persona 名、标准名和绝对路径的任务；synthesizer 的汇总由 Elephant 自己做，一个阶段的答案到齐才写报告。Goldfish 的 `SKILL.md` 让它到自己技能文件夹里的 `personas/`、`standards/` 找文件，读不全就回「Incomplete review」，`Context:` 里的文件必须读（试跑时 Haiku 为了「当新人」跳过了它），每个回答最后一行 `Read:` 列出读过的文件和搜过的代码（Elephant 只看得到回答，靠这一行知道意见对照了什么，每份阶段报告末尾按审阅者列出这些行）；第二次 zoom-out（第 8 阶段）总把第一次的报告放进 `Context:`，EGM 的一口气模式里没写这一条。金鱼的隔离靠这几层：每个任务一个新聊天；不带 Recent work；记忆默认只读且是空的；Codex、DeepSeek Harness 上是只读沙箱；不读 `AGENTS.md`、不用 `search_chats` 只是常驻指令里的要求。
 - MCP 服务器原样交给 agent（stdio 命令由 agent 在本机启动；HTTP / SSE 直接连），名字 `bots` 和 `composio` 留给 pocket-bots。
 - **连接的应用**走你自己的 Composio 项目：key 只存在本机（`composio.json`，0600），不交给 bot；bot 调 `/mcp/<botId>`，relay 只放行给这个 bot 打开的应用和工具，必要时填上固定的账号。
 
@@ -553,6 +557,7 @@ They haven't been read. Read them when it suits you: group_read with unread: tru
   config.json                可选：web.host / web.port / web.hostnames / relay.port
   Bots/<botId>/              每个 bot 的工作目录、记忆、技能、上传
   library/skills/            共用的技能库
+  library/bundled.json       随 pocket-bots 发布的技能放进库时的文件夹哈希，用来认出你改过的副本
   groups/<groupId>/files/    群聊里的附件
   composio.json、webhooks.json、logs/ …
 ```

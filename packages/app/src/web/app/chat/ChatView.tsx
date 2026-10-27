@@ -40,6 +40,10 @@ export function ChatView({ bot, chatId, at, panelOpen, onTogglePanel }: { bot: B
   const [terms, setTerms] = useState<string[]>([]);
   const [finding, setFinding] = useState(0);
   const [reply, setReply] = useState<string | null>(null);
+  // A starter picked in a new chat's splash, for the message box to take.
+  const [starter, setStarter] = useState<{ text: string; at: number } | null>(null);
+  // One still being written in the bot's settings has no text yet.
+  const starters = bot.starters.filter((entry) => entry.text.trim());
   const focusId = useRef(0);
   const show = useCallback((seq: number) => setFocus({ seq, id: ++focusId.current }), []);
   useEffect(() => {
@@ -47,6 +51,7 @@ export function ChatView({ bot, chatId, at, panelOpen, onTogglePanel }: { bot: B
     setTerms([]);
     setFinding(0);
     setReply(null);
+    setStarter(null);
   }, [chatId]);
   // A search result in the route: show it and mark the words it was found by, then take it out of the route.
   useEffect(() => {
@@ -143,6 +148,16 @@ export function ChatView({ bot, chatId, at, panelOpen, onTogglePanel }: { bot: B
           {bot.title ? <div className="muted">{bot.title}</div> : null}
           {bot.description ? <p className="muted" style={{ maxWidth: 520, margin: 0 }}>{bot.description}</p> : null}
           {bot.archived ? <div className="notice warning">This bot is archived. Restore it in its settings to chat.</div> : null}
+          {!bot.archived && starters.length ? (
+            <div className="grid-2 starters">
+              {starters.map((starter, index) => (
+                <button key={index} type="button" className="tile" onClick={() => setStarter({ text: starter.text, at: Date.now() })}>
+                  <span className="mono">{starter.text.trim()}</span>
+                  {starter.hint ? <span className="hint">{starter.hint}</span> : null}
+                </button>
+              ))}
+            </div>
+          ) : null}
         </div>
       )}
       {timeline.error ? (
@@ -164,6 +179,7 @@ export function ChatView({ bot, chatId, at, panelOpen, onTogglePanel }: { bot: B
           onReplyChange={setReply}
           botFolder={bot.cwd}
           botProvider={bot.provider}
+          fill={chatId ? null : starter}
           onStarted={(started) => navigate({ page: "bot", botId: bot.id, chatId: started })}
         />
       ) : null}

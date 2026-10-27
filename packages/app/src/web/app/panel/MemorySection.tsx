@@ -198,6 +198,15 @@ export function MemorySection({ bot }: { bot: Bot }) {
           <Toggle on={bot.memoryAutoWrite} label="Memory writing" onChange={(memoryAutoWrite) => void update(bot.id, { memoryAutoWrite })} />
         </div>
       </Section>
+      <Section
+        title="Recent work"
+        info="On, each new chat starts with the last thing the bot said in each of its chats over the last two days. Turn it off for a bot that should start every chat knowing only what it's given, like a reviewer. Chats already open keep what they started with, and the daily log is kept either way."
+      >
+        <div className="row">
+          <span style={{ flex: 1 }}>Give new chats the bot's recent work</span>
+          <Toggle on={bot.includeRecentWork} label="Recent work" onChange={(includeRecentWork) => void update(bot.id, { includeRecentWork })} />
+        </div>
+      </Section>
       <div style={{ padding: "12px 16px 0" }}>
         <Segmented
           value={view}

@@ -209,7 +209,7 @@ pocket-bots/
 │       │   │   ├── relay.ts, tools/     MCP relay on 127.0.0.1; bot tools and group chat tools
 │       │   │   ├── scheduler.ts, queue.ts, answers.ts    routines and webhooks, queued messages, ask_bot
 │       │   │   ├── memory.ts, journal.ts, activity.ts    memory, change log, daily journal
-│       │   │   ├── library.ts, mcp-probe.ts, composio.ts, search.ts    skill and MCP library, connected apps, search
+│       │   │   ├── library.ts, bundled-skills.ts, mcp-probe.ts, composio.ts, search.ts    skill and MCP library, skills that ship with the app, connected apps, search
 │       │   │   └── config.ts, instance.ts, service.ts …    config, single-instance lock, launchd / systemd service
 │       │   ├── shared/              shared by frontend and backend: zod models (bot.ts, group-chat.ts), RPC definitions (rpc.ts), pure logic
 │       │   └── web/                 React single-page app
@@ -217,6 +217,7 @@ pocket-bots/
 │       │       ├── chat/                pure chat-stream logic: timeline → rows, composer, question forms
 │       │       ├── components/          shared components
 │       │       └── lib/                 RPC client, React Query, SSE subscription, routing, drafts
+│       ├── bundled-skills/      skills that ship with the app and the roles that use them (EGM's egm and egm-goldfish)
 │       ├── tests/               vitest: unit and end-to-end tests (with the fake runtime)
 │       └── scripts/dev.mjs      runs the backend (tsx watch) and Vite together
 ├── spikes/                      early scripts that validated each CLI's protocol; not part of build or tests

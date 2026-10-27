@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { applyDefaults, DEFAULT_BOT_DEFAULTS, type Preset } from "../../shared/bot";
-import { readyProvider } from "../../shared/changes";
-import { addImportedBots } from "../../shared/library";
-import { importBotsRpc } from "../../shared/rpc";
-import { BOT_TEMPLATES, botFromPreset, newBot, type BotTemplate } from "../../shared/templates";
+import { applyDefaults, DEFAULT_BOT_DEFAULTS, EMPTY_LIBRARY, type Preset } from "../../shared/bot";
+import { readyProvider, readyProviders } from "../../shared/changes";
+import { addBundledSkills, addImportedBots } from "../../shared/library";
+import { bundledSkillsInstallRpc, importBotsRpc } from "../../shared/rpc";
+import { BOT_TEMPLATES, botFromPreset, newBot, withTemplateSettings, type BotTemplate } from "../../shared/templates";
 import { Avatar } from "../components/Avatar";
 import { Icon } from "../components/icons";
 import { Button, Modal, Segmented, useFeedback } from "../components/ui";
@@ -25,12 +25,15 @@ export function NewBotDialog({ onClose, onCreated }: { onClose: () => void; onCr
   const create = async (start: Start) => {
     setBusy(true);
     try {
-      const provider = readyProvider(providers.data?.entries ?? []);
+      const entries = providers.data?.entries ?? [];
+      const provider = readyProvider(entries);
       const defaults = doc.data?.values.defaults ?? DEFAULT_BOT_DEFAULTS;
       const base = start?.preset ? botFromPreset(provider, start.preset) : newBot(provider, start?.template);
-      const bot = applyDefaults(base, defaults, provider);
+      const bot = withTemplateSettings(applyDefaults(base, defaults, provider), start?.template, readyProviders(entries));
       if (!bot.provider) throw new Error("No agent is ready yet. Install and sign in to Claude Code, Codex or another agent CLI first.");
-      await commit((values) => ({ ...values, bots: [...values.bots, bot] }));
+      // A role's skills ship with pocket-bots: they go in the library, reviewed, along with the bot.
+      const { skills } = start?.template?.skills?.length ? await rpc(bundledSkillsInstallRpc, { ids: [...start.template.skills] }) : { skills: [] };
+      await commit((values) => ({ ...values, library: skills.length ? addBundledSkills(values.library ?? EMPTY_LIBRARY, skills) : values.library, bots: [...values.bots, bot] }));
       onCreated(bot.id);
     } catch (error) {
       feedback.error(errorText(error));

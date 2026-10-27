@@ -24,7 +24,8 @@ pocket-bots 有哪些功能。每个功能怎么用见[使用指南](USAGE.md)�
 
 ## Bot
 
-- **新建**：空白 bot、角色模板（Assistant、Inbox、Scout、Watch、Ops），或你存的预设；也可以导入 bot 文件。
+- **新建**：空白 bot、角色模板（Assistant、Inbox、Scout、Watch、Ops，以及 EGM 用的 Elephant、Goldfish），或你存的预设；也可以导入 bot 文件。有的模板还带着它要用的技能和设置：技能随 pocket-bots 发布，建 bot 时放进技能库并算已审阅；Goldfish 有 Codex 或 DeepSeek Harness 就优先用它们，并设成只读模式。
+- **开场示例（Starters）**：新聊天的开场页显示几条「可以这样问」，点一下把文字填进输入框（不发送），补完再发；不进 prompt。在 Identity 页签增删改，最多 6 条；Elephant 模板自带。
 - **身份**：名字、角色、简介、头像（像素头像、上传图片、图片 URL，或填 OpenAI key 后按描述画）、朗读用的声音。
 - **灵魂**：常驻指令；Playbooks（带触发词的流程指引，第一条消息里出现触发词才进 prompt）；预览新聊天会收到的完整 system prompt。所有 bot 的 prompt 里都有一句固定的话：开始工作前先读工作目录里的 `AGENTS.md`（有的话）。
 - **模型**：agent、模型、思考强度、审批模式；能否联系其他 bot（Ask first / Allowed / Off）。
@@ -59,11 +60,13 @@ pocket-bots 有哪些功能。每个功能怎么用见[使用指南](USAGE.md)�
 - `MEMORY.md`：长期记忆，每个新聊天都注入前 200 行（最多 24 KB）；开关打开时 bot 自己写，你也可以在 Memory 页签直接编辑。
 - 主题记忆 `memory/<topic>.md`：bot 需要时自己读。
 - **每日日志**：每轮结束 pocket-bots 自动记一行（不受 Memory writing 开关影响）；最近两天的作为 Recent work 进新聊天的 prompt；bot 用 `search_chats` 翻。
+- **Recent work 开关**（Memory 页签，每个 bot 一个，默认打开）：关掉后新聊天的 prompt 里不再有 Recent work，适合每次都该只看你给它的东西的 bot，比如审阅文档的 bot（重审时不会先看到自己上次的结论）。只影响之后新开的聊天；每日日志照常记，`search_chats` 照常能翻；导出的 bot 带着这个设置。
 - **改动记录**：记忆文件的每次改动（bot 改的、你改的、开关关闭时被恢复的）都记下，可以一键撤销，恢复也能撤销。
 
 ## 技能和 MCP
 
 - **技能库**：新建；从 GitHub 导入（`owner/repo/path`、文件夹链接、`SKILL.md` 链接）；`/learn` 让 bot 把做法整理成技能。导入或在磁盘上被改过的技能要你审阅后才生效。每个 bot 勾选自己用的技能。
+- **随 pocket-bots 发布的技能**：现在有 EGM 的 `egm`、`egm-goldfish` 两个。用带它们的模板建 bot 时才放进技能库，直接算已审阅；你没改过的，应用更新后跟着更新，改过的保留你的版本。
 - **MCP 库**：stdio 命令、HTTP、SSE；从 Claude Code、Claude Desktop、Cursor 的配置或 `.mcp.json` 导入；测试连通（列出工具）后才打开；环境变量和请求头导出时隐去。每个 bot 勾选自己用的服务器和免审批的工具。
 
 ## 定时任务（Routines）
@@ -99,8 +102,17 @@ pocket-bots 有哪些功能。每个功能怎么用见[使用指南](USAGE.md)�
 
 ## bot 之间协作（私下）
 
-- `list_bots`、`ask_bot`、`check_chat`：一个 bot 把问题交给另一个 bot（对方开一个新聊天），取回答案；超过约 50 秒的答案在对方答完后自动送回。
+- `list_bots`、`ask_bot`、`check_chat`：一个 bot 把问题交给另一个 bot（对方开一个新聊天），取回答案；超过约 50 秒的答案在对方答完后自动送回。`ask_bot` 可以让对方的聊天开在发起的聊天的目录里（比如一起看的项目），对方按相对路径读、搜那里的文件；发起者自己的 bot 目录不行。
 - 由 bot 的「Contact other bots」设置控制。
+
+## 先设计再写代码（EGM）
+
+按 Google 的 [Elephant-Goldfish Model](https://github.com/google/elephant-goldfish-model)：Elephant 带着你们讨论的全部上下文起草设计文档，Goldfish 只看它被交代的文件，像新人一样挑刺，取舍由你定。
+
+- **两个模板**：Elephant（设计伙伴）和 Goldfish（审阅者），各带一个随 pocket-bots 发布的技能（`egm`、`egm-goldfish`），里面是 EGM 原版的流程、审阅者 persona 和评审标准。
+- **用法**：在 Elephant 的聊天里说 `egm brainstorm 想法`、`egm draft`、`egm review 文档路径`、`egm resolve`、`egm drift report 目录`；开场页有这几条示例。
+- **金鱼审阅**：Elephant 用 `ask_bot` 给每个审阅者派一个任务，只写 persona、评审标准和文件路径；Goldfish 每个任务开一个新聊天，不带 Recent work，在 Elephant 的项目目录里只读。一个阶段的答案到齐，Elephant 汇总成报告，再和你逐条处理。
+- **限制**：Goldfish 的「只读」在 Codex、DeepSeek Harness 上由沙箱保证，在别的 agent 上靠审批和指令；它能不能用 `search_chats`、读 `AGENTS.md`，也只靠指令约束。
 
 ## 提议卡片
 

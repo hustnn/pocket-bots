@@ -1564,6 +1564,11 @@ pre {
   font-size: 22px;
 }
 
+.splash .starters {
+  width: min(640px, 100%);
+  margin-top: 6px;
+}
+
 /* ------------------------------------------------------------ panel and pages */
 
 /* Nine tabs don't fit in the panel's width; wrapping keeps every one reachable without a sideways scroll. */

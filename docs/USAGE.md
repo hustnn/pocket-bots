@@ -104,6 +104,18 @@ DeepSeek Harness（DSH）从一个 profile 启动，pocket-bots 用的是它的 
   | Scout | 调研，带来源的简报 |
   | Watch | 社区监控，适合配定时任务 |
   | Ops | 日程、待办和跟进 |
+  | Elephant | 先设计再写代码的设计伙伴（EGM），见[先设计再写代码（EGM）](#先设计再写代码egm) |
+  | Goldfish | 替 Elephant 审设计文档的审阅者（EGM） |
+
+  Elephant 和 Goldfish 还带着它们要用的技能和设置：
+  | | Elephant | Goldfish |
+  |---|---|---|
+  | 技能 | `egm`（随 pocket-bots 发布，放进技能库并算已审阅，见[随 pocket-bots 发布的技能](#随-pocket-bots-发布的技能)） | `egm-goldfish`（同左） |
+  | Agent | 照 **New bots start with** | Codex 或 DeepSeek Harness 有一个就绪就用它（第一个是 Codex），否则照 **New bots start with** |
+  | 审批模式 | 照 **New bots start with** | Codex、DeepSeek Harness 上是 **Read only**；别的 agent 上是 **Always Ask**，不管默认值是什么 |
+  | Contact other bots | **Allowed**：每次审阅都要问 Goldfish，逐个审批会卡住每个阶段 | **Off** |
+  | Recent work | 开 | **关** |
+  | 开场示例 | 四条 `egm …` 命令 | 无 |
 
   在设置里保存过的 **Preset**（预设）也会出现在这里。
 - **Import**：导入别人导出的 bot 文件或多个 bot 的文件，见[导出和导入](#导出和导入)。
@@ -134,6 +146,12 @@ DeepSeek Harness（DSH）从一个 profile 启动，pocket-bots 用的是它的 
 - **上下文占用**：输入框右下角的圆环和百分比，是这个聊天用掉的上下文窗口比例。
 - **每条回复**：复制、朗读（浏览器自带的语音，见 **Identity → Voice**）。
 - **回到底部**：往上翻了之后，右下角有个按钮跳回最新消息。
+
+### 开场示例（Starters）
+
+还没开始的聊天，开场页在 bot 的简介下面列出几条「可以这样问」。点一条，它的文字会填进输入框（替换已经输入的内容），光标停在末尾，补上想法或路径再发，不会自动发送。
+
+在 **Identity → Starters** 里增删改，每条有两项：要填进输入框的文字，和一行说明它是做什么的（可以不写）；最多 6 条。开场示例只给你看，不进 bot 的 prompt。改动记在 **History** 里，存预设、导出 bot 时一起带走。
 
 侧栏聊天前的小圆点：蓝色闪烁 = 正在干活，黄色 = 等你审批，红色 = 这一轮出错（下一轮正常结束后就不红了），绿色 = 有新回复还没看（打开这个聊天就消失）。已读状态由 pocket-bots 自己记，换个浏览器打开也一样。
 
@@ -263,6 +281,16 @@ bot 的长期记忆是它工作目录里的 `MEMORY.md`。每个新聊天开始�
 - 同一个 bot 同时在跑好几个聊天（群聊座位、私聊、定时任务）时，bot 在任何一个里写的改动，都在某个聊天结束时被恢复。
 - 局限：恢复只在一轮结束时发生，轮次进行中文件里是 bot 改过的样子；一轮的开始没被看到（后端重启期间结束的轮次）时没法恢复；`memory/log/` 里的每日日志不在恢复范围内；你在轮次进行中用编辑器直接改 `MEMORY.md` 或主题文件，会被当成 bot 的改动恢复掉，不过 Changes 里有这条恢复记录，可以撤销（经 Memory 页签做的编辑不受影响）。
 
+### Recent work 开关
+
+Memory writing 下面是 **Recent work** 开关，**默认打开**：新聊天的 system prompt 里有一段 Recent work，列出最近两天这个 bot 在每个聊天里最后说的话（最多 10 条，每条截到 160 字），让它知道最近在忙什么。
+
+关掉后，新聊天不再带这一段，bot 只知道 prompt 里其余的东西和你这次给它的消息。适合每次都该从头看的 bot。比如一个专门审设计文档的 bot：开着时，它重审改过的文档，prompt 里会先看到自己上次说的「Blocker：去重键没有定义」，容易变成核对上次的意见改了没有，而不是把文档当新的来读；关掉就没有这个问题。
+
+- 只影响之后新开的聊天，已经开着的聊天保持开始时的样子。
+- 每日日志照常记，Daily log 里照常能看；bot 想翻的话 `search_chats` 照常能用，`MEMORY.md` 照常注入。
+- 开关的改动记在 **History** 里；导出 bot 时带着这个设置，导入后还是一样。
+
 ### Memory 页签
 
 bot 的记忆之后在 **Memory** 页签里能看到：
@@ -280,13 +308,13 @@ bot 的记忆之后在 **Memory** 页签里能看到：
 | 页签 | 内容 |
 |---|---|
 | Overview | 概览、用量统计、「Set up with the bot」引导、导出、复制、存为预设、删除 |
-| Identity | 名字、角色、简介、头像、朗读用的声音 |
+| Identity | 名字、角色、简介、开场示例、头像、朗读用的声音 |
 | Soul | 常驻指令（Standing instructions）、Playbooks、预览 system prompt |
 | Model | provider、模型、思考强度、审批模式、能否联系其他 bot、工作目录 |
 | Skills | 从技能库里给这个 bot 勾选技能 |
 | Access | MCP 服务器、连接的应用、命令白名单、免审批的工具 |
 | Routines | 定时任务和 webhook |
-| Memory | 记忆写入开关、记忆文件、每日日志、改动记录 |
+| Memory | 记忆写入开关、Recent work 开关、记忆文件、每日日志、改动记录 |
 | History | 设置的历史快照，可恢复 |
 
 ### 预览 system prompt
@@ -317,6 +345,16 @@ bot 的记忆之后在 **Memory** 页签里能看到：
 示例：给 Assistant 打开 `standup-note` 后发「帮我写今天的站会纪要：……」，它会先读技能，再按技能规定的三段格式输出。
 
 > bot 读技能文件不会弹审批：pocket-bots 会把这个 bot 用到的技能目录告诉 Claude Code，作为它可以直接访问的目录。
+
+### 随 pocket-bots 发布的技能
+
+有的模板要用的技能是跟着 pocket-bots 一起发布的，现在有 EGM 的 `egm` 和 `egm-goldfish`。它们不会一开始就在技能库里：用 Elephant 或 Goldfish 模板建 bot 时（或者你在提议卡片上确认建这种 bot 时），pocket-bots 才把文件夹复制进技能库，并直接算已审阅，因为它们是作为 pocket-bots 的一部分审过的。来源一栏写着 `pocket-bots`。
+
+放进来以后它们就是普通的技能：可以勾给别的 bot，也可以改。
+
+- 你没改过：pocket-bots 更新后启动时，换成新版本，仍然算已审阅。
+- 你改过：一直保留你的版本，也不再自动更新；和别的技能一样，改过之后要重新审阅才生效。
+- 删掉了：之后再用模板建 bot，会重新放进来。
 
 ## 8. MCP 服务器
 
@@ -508,6 +546,44 @@ MCP 服务器给 bot 增加工具。和技能一样，服务器放在共用的�
 | Off | 不能找别的 bot |
 
 示例：对 Assistant 说「请把这个问题交给 Scout：用两句话解释什么是 MCP，拿到回答后转述给我」，Assistant 会调用 `ask_bot`，Scout 那边多出一个聊天，Assistant 拿到回答后转述给你。
+
+被问的 bot 默认在它自己的工作目录里开聊天。发起的 bot 可以让它在**发起的聊天的目录**里开（`ask_bot` 的 `in_my_folder`），比如请它审一份项目里的文档：对方就能按相对路径读、搜这个项目的文件，Claude Code 也不会每读一个文件弹一次审批。发起的聊天开在发起者自己的 bot 目录（那里有它的记忆）时不能这样用，bot 会被告知改用绝对路径。
+
+### 先设计再写代码（EGM）
+
+[Elephant-Goldfish Model](https://github.com/google/elephant-goldfish-model)（EGM）是 Google 开源的一套做法：功能先写成设计文档，再交给没有上下文的审阅者挑刺，最后由你决定改什么，批准后才写代码。pocket-bots 用两个 bot 实现它：
+
+- **Elephant**：你的设计伙伴，带着你们讨论的全部上下文，起草和修改文档。
+- **Goldfish**：审阅者。Elephant 每派一个审阅任务，它就开一个新聊天，只读任务里写的 persona、评审标准和文件，看不到你们的讨论，也不带 Recent work。
+
+**准备**
+
+1. **New bot → Elephant**，工作目录可以不改：每个聊天开始时在输入框的 📁 里选项目目录就行。
+2. **New bot → Goldfish**。有 Codex 或 DeepSeek Harness 时它会用上，并设成 Read only；没有的话用默认的 agent，设成 Always Ask：读文件不问，写文件会弹卡片（它按指令不该写），拒绝即可。
+3. 两个 bot 的技能、开关都已设好，不用再动。
+4. Elephant 在 Claude 上默认是 Always Ask，每写一份 brief、草稿或报告都会弹一张审批卡。第一次弹卡时点 **Allow in folder…**，选项目目录：之后它在这个项目里读写文件、跑命令都不再问（命令写了目录外的路径照样问）。只想放行改文件、不想放行命令的话，改成在 **Model** 页签把审批模式设为 **Accept File Edits**。
+
+**用法**：在 Elephant 的新聊天里（开场页有示例可以点）：
+
+| 说 | 做什么 | 产出 |
+|---|---|---|
+| `egm brainstorm 给项目加 webhook 投递` | 一次问一个问题把想法问清楚；你确认后，6 个金鱼从 YAGNI、成本、易用性、迁移、可观测性、维护负担挑刺 | `concepts_brief.md` |
+| `egm draft` | 把 brief 逐节写成设计文档，每节等你批准；有多个合理方案的决定交给你选 | `design_draft.md`，定稿后存到 `docs/designs/` |
+| `egm review docs/designs/webhooks.md` | 先选模式，再分 5 个阶段审：zoom-out、新人能否看懂、设计、再 zoom-out、实现计划 | 每阶段一份报告 |
+| `egm resolve` | Elephant 逐条判断审阅意见（反驳要有金鱼能读到的证据），你决定改哪些 | `goldfish_review_report.md`，改好的文档 |
+| `egm drift report docs/designs/` | 对比设计文档和现在的代码，只报不一致的地方（不需要金鱼） | `日期_DRIFT_REPORT.md` |
+
+审阅时 Elephant 一次发出一个阶段的全部任务，告诉你在等几个审阅者，然后结束这一轮；答案一条条送回来，到齐后它写报告、问你怎么继续。每个审阅者的回答最后有一行 `Read:`，列出它读过的文件和搜过的代码；每份阶段报告末尾按审阅者列出这些行，看得出一条关于代码的意见是对照什么得出的。每个任务在 Goldfish 下面是一个聊天，可以点进去看它读了什么。
+
+文件默认写在 Elephant 聊天的目录里；想放到别处，在消息或项目的 `AGENTS.md` 里写一行 `EGM artifact directory: .dev/egm`。
+
+**几点说明**
+
+- 命令前面不要加 `/`：`egm …` 是普通的话，由 Elephant 的技能识别；`/` 开头的是 agent 自己的斜杠命令。
+- Goldfish 的 agent 额度用完或者连不上模型时，那个阶段的审阅者会出错。Elephant 会告诉你，把这个阶段记成「没审完」，不会当成没问题，报告里也这样写。到 Goldfish 的 **Model** 页签换一个能用的 agent（换成 Claude 的话审批模式选 Always Ask，模板在 Claude 上就是这样设的），再在 Elephant 的聊天里说「Goldfish 换好了，重跑第 9 阶段」（换成没跑完的那个阶段），它会重发这一阶段并更新报告。
+- 完整一轮 review 要开 9 个审阅聊天，每个都要读文档、标准和相关代码；Goldfish 用便宜的模型可以省额度，和 Elephant 用不同的模型还能少一些共同的盲点。
+- Goldfish 不读 `AGENTS.md`、不用 `search_chats`、不碰记忆，是靠它的常驻指令和技能约束的，不是硬性限制；只读在 Codex、DeepSeek Harness 上由沙箱保证。
+- 想每周查一次文档和代码有没有对不上，给 Elephant 建一个定时任务，内容写 `egm drift report docs/designs/`。
 
 ## 11. 提议卡片
 

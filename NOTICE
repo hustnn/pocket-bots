@@ -17,6 +17,21 @@ Adapted from Paseo and modified for pocket-bots:
   Markdown rendering (src/web/chat/, src/web/lib/markdown.ts).
 
 ------------------------------------------------------------------------------
+Elephant-Goldfish Model (https://github.com/google/elephant-goldfish-model)
+Copyright 2026 Google LLC
+Licensed under the Apache License, Version 2.0; the license text is in
+third_party/elephant-goldfish-model-LICENSE and in each skill folder below.
+
+Included unchanged, from commit b3a35956759bf7f024af2ff061b2e0b44b438e4c, in the
+skills that ship with pocket-bots (packages/app/bundled-skills):
+- egm/workflows/: skills/egm_{brainstorm,draft,review,review_loop,resolve,
+  drift_report}/SKILL.md and agents/synthesizer.md, renamed;
+- egm/references/design_doc.md and egm/execution_instructions.md;
+- egm-goldfish/personas/: the reviewer personas in agents/;
+- egm-goldfish/standards/: resources/document_standards/.
+The two SKILL.md files are pocket-bots' own.
+
+------------------------------------------------------------------------------
 paseo-bots (https://github.com/oliexe/paseo-bots)
 pocket-bots includes code adapted from paseo-bots, used under the MIT License:
 

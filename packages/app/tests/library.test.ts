@@ -174,10 +174,13 @@ describe("server library", () => {
         { id: "m1", name: "gh", description: "", enabled: true, config: { type: "http", url: "https://x", headers: { Authorization: "Bearer secret" } }, tools: null, checkedAt: null, checkError: null, createdAt: NOW, updatedAt: NOW },
       ],
     };
-    const { json } = await exportBot({ bot: bot("src", { skillIds: ["shared"], mcpServerIds: ["m1"] }), includeMemory: false }, library);
+    const starters = [{ text: "egm review docs/designs/", hint: "Review a design" }];
+    const { json } = await exportBot({ bot: bot("src", { skillIds: ["shared"], mcpServerIds: ["m1"], includeRecentWork: false, starters }), includeMemory: false }, library);
     expect(json).not.toContain("secret");
     const imported = await importBot({ botId: "bot-new", json });
     expect(imported.bot.skillIds).toEqual(["shared"]);
+    expect(imported.bot.includeRecentWork).toBe(false);
+    expect(imported.bot.starters).toEqual(starters);
     expect(imported.skills.map((skill) => skill.id)).toEqual(["shared"]);
     expect(imported.mcpServers[0]).toMatchObject({ name: "gh", config: { headers: { Authorization: "<redacted>" } } });
   });
@@ -194,6 +197,8 @@ describe("server library", () => {
     const imported = await importBot({ botId: "bot-v1", json: JSON.stringify(v1) });
     expect(imported.bot.skillIds).toEqual(["old-skill"]);
     expect(imported.mcpServers.map((server) => server.name)).toEqual(["fetch"]);
+    expect(imported.bot.includeRecentWork).toBe(true);
+    expect(imported.bot.starters).toEqual([]);
   });
 });
 

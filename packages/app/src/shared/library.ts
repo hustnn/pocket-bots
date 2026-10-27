@@ -66,6 +66,18 @@ export function upsertSkills(library: Library, skills: readonly (Pick<LibrarySki
   return { ...library, skills: next };
 }
 
+/**
+ * Puts skills that ship with pocket-bots in the library: reviewed as they ship (`reviewedSha`).
+ * One without a hash is a copy the user changed; it keeps the review it has, or waits for one
+ * when the library doesn't list it.
+ */
+export function addBundledSkills(library: Library, skills: readonly (Pick<LibrarySkill, "id" | "description" | "source"> & { reviewedSha?: string })[]): Library {
+  return upsertSkills(
+    library,
+    skills.filter((skill) => skill.reviewedSha || !library.skills.some((entry) => entry.id === skill.id)),
+  );
+}
+
 export function updateMcpServer(library: Library, id: string, patch: Partial<LibraryMcpServer>): Library {
   return { ...library, mcpServers: library.mcpServers.map((server) => (server.id === id ? { ...server, ...patch, updatedAt: new Date().toISOString() } : server)) };
 }

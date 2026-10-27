@@ -22,6 +22,8 @@ const BotFields = BotSchema.pick({
   model: true,
   modeId: true,
   thinkingOptionId: true,
+  includeRecentWork: true,
+  starters: true,
   routines: true,
   playbooks: true,
 });
@@ -103,6 +105,9 @@ export async function exportBot({ bot, includeMemory }: { bot: Bot; includeMemor
       model: bot.model,
       modeId: bot.modeId,
       thinkingOptionId: bot.thinkingOptionId,
+      // How it works, not what it may do: a bot made to review from scratch stays that way.
+      includeRecentWork: bot.includeRecentWork,
+      starters: bot.starters,
       // Routines arrive paused.
       // Results chats only exist on this host.
       routines: bot.routines.map((routine) => ({ ...routine, enabled: false, resultsChatId: null })),
