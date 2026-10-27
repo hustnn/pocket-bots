@@ -821,9 +821,13 @@ export const teamSessionRpc = defineRpc({
 /** The latest messages, or the ones before `before`. */
 export const groupMessagesRpc = defineRpc({
   name: "pocket.groups.messages",
-  /** The top level; with `thread`, that thread's top message and its replies. */
+  /**
+   * The top level; with `thread`, that thread's top message and its replies, and its asides: what
+   * led members posted elsewhere from their seats for it (the requests they started, what they
+   * asked in other threads), which the thread shows as links.
+   */
   input: z.object({ groupId: GroupId, before: z.number().int().positive().nullable().optional(), limit: z.number().int().min(1).max(500).optional(), thread: z.number().int().positive().nullable().optional() }),
-  output: z.object({ messages: z.array(GroupMessageSchema), hasOlder: z.boolean() }),
+  output: z.object({ messages: z.array(GroupMessageSchema), hasOlder: z.boolean(), asides: z.array(GroupMessageSchema).default([]) }),
 });
 
 /** The user's message; it wakes the bots it's for. */

@@ -63,7 +63,8 @@ async function setup(options: { random?: () => number } = {}) {
     { random: options.random ?? (() => 0) },
   );
   const { id } = await groups.create({ name: "Group", memberIds: ["alpha", "beta"] });
-  const seatOf = (botId: string) => store.member(id, botId)?.seat_chat_id ?? null;
+  /** A bot's latest seat (a member the leader leads has one per conversation). */
+  const seatOf = (botId: string) => store.seats(id, botId).at(-1)?.chat_id ?? null;
   /** What was sent to a bot's seat after it started. */
   const sentTo = (botId: string) => chats.sent.filter((sent) => sent.chatId === seatOf(botId));
   /** Ends the running turn of a bot's seat, as ChatService reports it. */
@@ -499,7 +500,8 @@ describe("a failed turn on a led member's piece", () => {
     await group.groups.read(alpha, group.id, { topLevel: true });
     const piece = Number(/^Sent as #(\d+)\./.exec(await group.groups.send(alpha, group.id, { text: "@Beta fix the login page" }))?.[1]);
     await pass();
-    expect(group.store.member(group.id, "beta")?.seat_task).toBe(piece);
+    // The piece has a seat of its own.
+    expect(group.store.seat(group.id, "beta", piece)?.chat_id).toBe(group.seatOf("beta"));
     group.busy("beta");
     return piece;
   };
@@ -571,11 +573,12 @@ describe("a failed turn on a led member's piece", () => {
     const second = Number(/^Sent as #(\d+)\./.exec(await group.groups.send(alpha, group.id, { text: "@Beta now the signup page" }))?.[1]);
     await pass();
     const inThread = async () => (await group.groups.messages(group.id, { thread: second })).messages.filter((message) => message.from.kind === "system");
-    // Still retrying by itself: nothing for the leader yet.
-    expect(group.tries.beta).toBe(2);
+    // Still retrying by itself: nothing for the leader yet. (Its seats so far: the one for the
+    // note of the new leader, the first piece's, and this one's first try.)
+    expect(group.tries.beta).toBe(3);
     expect(await inThread()).toEqual([]);
     await pass(1_000 + 2_000 + 4_000 + 8_000);
-    expect(group.tries.beta).toBe(6);
+    expect(group.tries.beta).toBe(7);
     const [note] = await inThread();
     expect(note).toMatchObject({ mentions: ["alpha"] });
     expect(note!.text).toBe("⚠️ @Alpha: Beta couldn't start on this piece after 5 tries: fake isn't available here. It won't try again by itself: @mention Beta here to retry, or hand the piece to another member.");

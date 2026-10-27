@@ -216,6 +216,59 @@ describe("a group with a leader", () => {
   });
 });
 
+describe("a led member's seats", () => {
+  beforeEach(() => store.updateGroup(G, { leaderId: "ada" }));
+
+  it("keeps a seat per conversation, and scopes what a seat was told and saw to its own conversations", () => {
+    const p = store.append(G, bot("ada"), { text: "@Cody piece one", mentions: ["cody"] }).message.seq;
+    const q = store.append(G, bot("ada"), { text: "@Cody piece two", mentions: ["cody"] }).message.seq;
+    store.setSeat(G, "cody", p, "chat-p");
+    store.setSeat(G, "cody", q, "chat-q");
+    expect(store.seats(G, "cody").map((seat) => [seat.piece, seat.chat_id])).toEqual([
+      [p, "chat-p"],
+      [q, "chat-q"],
+    ]);
+    expect(store.seatByChat("chat-q")).toMatchObject({ bot_id: "cody", piece: q });
+    // From its seat for piece one, Cody asks Rex at the top level; Rex answers in that request's thread.
+    const request = store.append(G, bot("cody"), { text: "@Rex find the theme files", mentions: ["rex"], fromPiece: p }).message;
+    expect(request.fromPiece).toBe(p);
+    expect(store.seatConvs(G, "cody", p)).toEqual([p, request.seq]);
+    const answer = store.append(G, bot("rex"), { text: "@Cody src/theme.ts", mentions: ["cody"], thread: request.seq }).message.seq;
+    // A failed turn of the seat for piece one fails what it was told: its piece and its request's answer.
+    store.markNoticed(G, "cody", [p, q, answer]);
+    store.markDeliveryFailed(G, "cody", "runtime_error", undefined, p);
+    const failures = db.all<{ seq: number; delivery_failure: string | null }>("SELECT seq, delivery_failure FROM group_inbox WHERE group_id = ? AND receiver_id = 'cody' AND wake_reason IS NOT NULL ORDER BY seq", G);
+    expect(failures.map((row) => [Number(row.seq), row.delivery_failure])).toEqual([
+      [p, "runtime_error"],
+      [q, null],
+      [answer, "runtime_error"],
+    ]);
+    // A seat that didn't start is told again only its own.
+    expect(store.retellUntaken(G, "cody", q)).toEqual([q]);
+    // A seat's new model context leaves the others' ledgers alone; its own go.
+    store.recordSeen(G, "cody", request.seq, { exact: [answer] });
+    store.newSeenContext(G, "cody", q);
+    expect(isSeen(store.ledger(G, "cody", request.seq), answer)).toBe(true);
+    store.resetSeen(G, "cody", p);
+    expect(isSeen(store.ledger(G, "cody", request.seq), answer)).toBe(false);
+    store.dropSeats(G, "cody");
+    expect(store.seats(G, "cody")).toEqual([]);
+  });
+
+  it("moves the seats stored before migration 22 into their table, a led member's under its piece", () => {
+    db.run("UPDATE group_members SET seat_chat_id = 'chat-a' WHERE group_id = ? AND bot_id = 'ada'", G);
+    db.run("UPDATE group_members SET seat_chat_id = 'chat-c', seat_task = 7 WHERE group_id = ? AND bot_id = 'cody'", G);
+    db.raw.exec("DROP TABLE group_seats; ALTER TABLE group_messages DROP COLUMN from_piece; UPDATE schema_version SET version = 21");
+    db.close();
+    db = new Db(join(dir, "bots.sqlite"));
+    store = new GroupStore(db);
+    expect(store.seats(G).map((seat) => [seat.bot_id, seat.piece, seat.chat_id])).toEqual([
+      ["ada", 0, "chat-a"],
+      ["cody", 7, "chat-c"],
+    ]);
+  });
+});
+
 describe("read positions", () => {
   it("moves the user's position with their own post, and a bot's only when nothing it wasn't handed lies in between", () => {
     store.append(G, user, { text: "one" });
@@ -575,8 +628,8 @@ describe("task statuses", () => {
     store.claimTask(G, { seq: second.seq }, cody);
     db.run("UPDATE group_tasks SET status = 'in_review', completed_at = NULL, updated_at = '2026-10-01T00:00:00.000Z' WHERE number = ?", second.seq);
     db.run("INSERT INTO group_task_events (group_id, number, event, actor_kind, actor_id, actor_name, payload, created_at) VALUES (?, ?, 'status_changed', 'bot', 'cody', 'Cody', ?, '2026-10-01T00:00:00.000Z')", G, second.seq, JSON.stringify({ from: "in_progress", to: "in_review", forced: false }));
-    // (Migrations 20 and 21 are undone too, or they would add their columns again.)
-    db.raw.exec("ALTER TABLE chats DROP COLUMN extra_folders; ALTER TABLE chats DROP COLUMN folders_told; ALTER TABLE groups DROP COLUMN extra_folders; ALTER TABLE groups DROP COLUMN team_id; ALTER TABLE groups DROP COLUMN instructions");
+    // (Migrations 20 to 22 are undone too, or they would add their columns and table again.)
+    db.raw.exec("ALTER TABLE chats DROP COLUMN extra_folders; ALTER TABLE chats DROP COLUMN folders_told; ALTER TABLE groups DROP COLUMN extra_folders; ALTER TABLE groups DROP COLUMN team_id; ALTER TABLE groups DROP COLUMN instructions; DROP TABLE group_seats; ALTER TABLE group_messages DROP COLUMN from_piece");
     db.run("UPDATE schema_version SET version = 18");
     db.close();
     db = new Db(join(dir, "bots.sqlite"));

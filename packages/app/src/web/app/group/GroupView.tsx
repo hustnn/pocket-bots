@@ -1,7 +1,7 @@
 import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ChatSnapshot } from "../../../shared/chat-types";
 import type { Bot } from "../../../shared/bot";
-import { GROUP_MIN_BOTS, GROUP_USER_ID, groupQuestion, messagePreview, type GroupAttachment, type GroupMessage, type GroupQuestion, type GroupSummary, type Member, type TaskStatus } from "../../../shared/group-chat";
+import { GROUP_MIN_BOTS, GROUP_USER_ID, groupQuestion, messagePreview, pieceOf, type GroupAttachment, type GroupMessage, type GroupQuestion, type GroupSummary, type Member, type TaskStatus } from "../../../shared/group-chat";
 import { groupAnswerRpc, groupDeleteRpc, groupReactRpc, groupReadRpc, groupSearchRpc, groupTaskRpc, groupUpdateRpc } from "../../../shared/rpc";
 import { relativeTime } from "../../../shared/time";
 import { parseQuestionFormQuestions } from "../../chat/question";
@@ -148,13 +148,26 @@ interface TaskInput {
   assignee?: string | null;
 }
 
+type Seats = GroupSummary["seats"];
+const NO_SEATS: Seats = [];
+
+/**
+ * The seat chat a bot wrote a message from: the led seat it names, else its seat for the message's
+ * conversation, else its one seat, else its latest.
+ */
+function seatChat(seats: Seats, botId: string, message: GroupMessage): string | null {
+  const own = seats.filter((seat) => seat.botId === botId);
+  const piece = message.fromPiece ?? pieceOf(message);
+  return (own.find((seat) => seat.piece === piece) ?? own.find((seat) => seat.piece === 0) ?? own.at(-1))?.chatId ?? null;
+}
+
 interface RowProps {
   groupId: string;
   message: GroupMessage;
   quoted: GroupMessage | null;
   bots: ReadonlyMap<string, Bot>;
   members: readonly Member[];
-  seats: Readonly<Record<string, string | null>>;
+  seats: Seats;
   onReply: (message: GroupMessage) => void;
   onJump: (seq: number) => void;
   onTask: (input: TaskInput) => void;
@@ -385,7 +398,7 @@ const MessageRow = memo(function MessageRow({ groupId, message, quoted, bots, me
   }
   const from = message.from;
   const bot = bots.get(from.botId) ?? null;
-  const seat = seats[from.botId] ?? null;
+  const seat = seatChat(seats, from.botId, message);
   const handedTo = message.mentions.map((botId) => bots.get(botId)?.name).filter(Boolean);
   return (
     <div id={id} className="group-msg">
@@ -417,6 +430,15 @@ const MessageRow = memo(function MessageRow({ groupId, message, quoted, bots, me
           <div className="group-handoff">
             <Icon name="send" size={11} />
             {message.everyone ? "To everyone" : `Handed to ${handedTo.join(", ")}`}
+            {/* A led member's request at the top level, from its seat for another piece. */}
+            {!message.thread && message.fromPiece ? (
+              <>
+                {" · for "}
+                <button type="button" className="link" onClick={() => onThread?.(message.fromPiece!)} title={`Open #${message.fromPiece}'s thread`}>
+                  #{message.fromPiece}
+                </button>
+              </>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -430,20 +452,42 @@ interface ThreadPanelProps {
   bots: ReadonlyMap<string, Bot>;
   members: readonly Member[];
   live: readonly Bot[];
-  seats: Readonly<Record<string, string | null>>;
+  seats: Seats;
   /** A message to scroll to once it's loaded (a search hit). */
   focus: number | null;
   onFocused: () => void;
   onTask: RowProps["onTask"];
   onReact: RowProps["onReact"];
+  /** Opens another thread, at a message in it when given. */
+  onOpen: (thread: number, focus: number | null) => void;
   onClose: () => void;
   /** It has replies the user hasn't read. */
   unread: boolean;
 }
 
+/**
+ * A link in a thread to where one of its members went from it: a request it started at the top
+ * level, or a question it asked in another thread (`count`: its messages there). Not a message:
+ * the bots don't see it.
+ */
+function AsideRow({ aside, count, bots, onOpen }: { aside: GroupMessage; count: number; bots: ReadonlyMap<string, Bot>; onOpen: ThreadPanelProps["onOpen"] }) {
+  const who = aside.from.kind === "bot" ? aside.from.name : "A bot";
+  const asked = aside.mentions.map((id) => bots.get(id)?.name).filter(Boolean).join(", ");
+  const where = aside.thread ? `in #${aside.thread}` : `in a request, #${aside.seq}`;
+  return (
+    <button type="button" className="group-aside" onClick={() => (aside.thread ? onOpen(aside.thread, aside.seq) : onOpen(aside.seq, null))} title="Open where it was asked">
+      <Icon name="external" size={12} />
+      <span className="truncate">
+        {who} asked {asked || "a member"} {where}: {messagePreview(aside, 80)}
+      </span>
+      {count > 1 ? <span className="hint">· {count} messages there</span> : null}
+    </button>
+  );
+}
+
 /** One thread beside the group: its top message, the replies, and a composer that posts there. */
-function ThreadPanel({ groupId, thread, bots, members, live, seats, focus, onFocused, onTask, onReact, onClose, unread }: ThreadPanelProps) {
-  const { messages, hasOlder, loadingOlder, loadOlder, loading, error } = useGroupMessages(groupId, thread);
+function ThreadPanel({ groupId, thread, bots, members, live, seats, focus, onFocused, onTask, onReact, onOpen, onClose, unread }: ThreadPanelProps) {
+  const { messages, hasOlder, asides, loadingOlder, loadOlder, loading, error } = useGroupMessages(groupId, thread);
   // Read while it's open and on screen.
   const visible = useVisible();
   const lastReply = messages.at(-1)?.seq ?? 0;
@@ -457,6 +501,23 @@ function ThreadPanel({ groupId, thread, bots, members, live, seats, focus, onFoc
   const bySeq = useMemo(() => new Map(messages.map((message) => [message.seq, message])), [messages]);
   const top = messages[0]?.seq === thread ? messages[0] : null;
   const replies = top ? messages.slice(1) : messages;
+  // Where its members went from here: one link per place, at the first message there, with the
+  // replies shown so far (older ones wait for "Load earlier replies").
+  const elsewhere = useMemo(() => {
+    const from = hasOlder ? (replies[0]?.seq ?? thread) : thread;
+    const places = new Map<number, { first: GroupMessage; count: number }>();
+    for (const aside of asides) {
+      const place = aside.thread ?? aside.seq;
+      const entry = places.get(place);
+      if (entry) entry.count++;
+      else places.set(place, { first: aside, count: 1 });
+    }
+    return [...places.values()].filter((entry) => entry.first.seq >= from);
+  }, [asides, hasOlder, replies, thread]);
+  const stream = useMemo(
+    () => [...replies.map((message) => ({ seq: message.seq, message, aside: null })), ...elsewhere.map((aside) => ({ seq: aside.first.seq, message: null, aside }))].sort((a, b) => a.seq - b.seq),
+    [replies, elsewhere],
+  );
 
   const jump = useCallback((seq: number): boolean => {
     const target = document.getElementById(`thread-msg-${seq}`);
@@ -528,7 +589,7 @@ function ThreadPanel({ groupId, thread, bots, members, live, seats, focus, onFoc
             <>
               {top ? row(top) : null}
               <div className="group-thread-divider">{replies.length ? `${top?.replies ?? replies.length} ${(top?.replies ?? replies.length) === 1 ? "reply" : "replies"}` : "No replies yet. The bots that follow this thread get what you write here."}</div>
-              {replies.map(row)}
+              {stream.map((item) => (item.message ? row(item.message) : <AsideRow key={`aside-${item.seq}`} aside={item.aside!.first} count={item.aside!.count} bots={bots} onOpen={onOpen} />))}
             </>
           )}
           {error ? <div className="notice error">{error}</div> : null}
@@ -637,20 +698,22 @@ function TaskBoard({ groupId, onPick, onClose }: { groupId: string; onPick: (tar
  * What the members are doing: working (with the way to their side of the group), or waiting for an
  * approval that stays in the seat (a question the group shows is answered there instead).
  */
-function Activity({ members, seats, chats }: { members: readonly Bot[]; seats: Readonly<Record<string, string | null>>; chats: ReadonlyMap<string, ChatSnapshot> }) {
-  const rows = members.flatMap((bot): { bot: Bot; chatId: string; kind: "approval" | "working" }[] => {
-    const chatId = seats[bot.id];
-    const agent = chatId ? chats.get(chatId) : undefined;
-    if (!chatId || !agent) return [];
-    if (agent.pendingPermissions?.some((request) => !groupQuestion(request))) return [{ bot, chatId, kind: "approval" }];
-    if (agent.status === "running" || agent.status === "initializing") return [{ bot, chatId, kind: "working" }];
-    return [];
-  });
+function Activity({ members, seats, chats }: { members: readonly Bot[]; seats: Seats; chats: ReadonlyMap<string, ChatSnapshot> }) {
+  // One chip per seat: a member the leader leads can work in several conversations at once.
+  const rows = members.flatMap((bot) =>
+    seats.flatMap((seat): { bot: Bot; chatId: string; piece: number; kind: "approval" | "working" }[] => {
+      const agent = seat.botId === bot.id ? chats.get(seat.chatId) : undefined;
+      if (!agent) return [];
+      if (agent.pendingPermissions?.some((request) => !groupQuestion(request))) return [{ bot, chatId: seat.chatId, piece: seat.piece, kind: "approval" }];
+      if (agent.status === "running" || agent.status === "initializing") return [{ bot, chatId: seat.chatId, piece: seat.piece, kind: "working" }];
+      return [];
+    }),
+  );
   if (rows.length === 0) return null;
   return (
     <div className="group-activity">
       {rows.map((row) => (
-        <button key={row.bot.id} type="button" className={`group-activity-chip${row.kind === "approval" ? " warning" : ""}`} onClick={() => navigate({ page: "bot", botId: row.bot.id, chatId: row.chatId })} title={`Open ${row.bot.name}'s side of this group`}>
+        <button key={row.chatId} type="button" className={`group-activity-chip${row.kind === "approval" ? " warning" : ""}`} onClick={() => navigate({ page: "bot", botId: row.bot.id, chatId: row.chatId })} title={`Open ${row.bot.name}'s side of this group`}>
           <Avatar avatar={row.bot.avatar} size={16} />
           {row.kind === "approval" ? (
             <>
@@ -658,7 +721,7 @@ function Activity({ members, seats, chats }: { members: readonly Bot[]; seats: R
             </>
           ) : (
             <>
-              <span className="spinner small" /> {row.bot.name} is working…
+              <span className="spinner small" /> {row.bot.name} is working{row.piece ? ` on #${row.piece}` : ""}…
             </>
           )}
         </button>
@@ -766,7 +829,7 @@ export function GroupView({ groupId, at, atThread }: { groupId: string; at?: num
   const mentionable = useMemo(() => members.map((bot) => ({ id: bot.id, name: bot.name })), [members]);
   const chats = useMemo(() => new Map(((allChats.data ?? []) as ChatSnapshot[]).map((chat) => [chat.id, chat])), [allChats.data]);
   const bySeq = useMemo(() => new Map(messages.map((message) => [message.seq, message])), [messages]);
-  const seats = group?.seats ?? {};
+  const seats = group?.seats ?? NO_SEATS;
   const newBelow = away ? messages.filter((message) => message.seq > bottomSeq.current && message.from.kind !== "user").length : 0;
 
   // Seen while it's on screen.
@@ -901,11 +964,11 @@ export function GroupView({ groupId, at, atThread }: { groupId: string; at?: num
       feedback.error(errorText(failure));
     }
   };
-  // Each bot's side of the group: its own chat, where its work, approvals and silent turns are.
-  const sides: MenuItems = members.flatMap((bot) => {
-    const chatId = seats[bot.id];
-    return chatId ? [{ label: `${bot.name}'s side`, icon: "bot" as const, onSelect: () => navigate({ page: "bot", botId: bot.id, chatId }) }] : [];
-  });
+  // Each bot's side of the group: its own chat, where its work, approvals and silent turns are (a
+  // member the leader leads has one for each conversation it was brought into).
+  const sides: MenuItems = members.flatMap((bot) =>
+    seats.flatMap((seat) => (seat.botId === bot.id ? [{ label: `${bot.name}'s side${seat.piece ? ` · #${seat.piece}` : ""}`, icon: "bot" as const, onSelect: () => navigate({ page: "bot", botId: bot.id, chatId: seat.chatId }) }] : [])),
+  );
   const menu: MenuItems = [
     { label: "Rename", icon: "edit", onSelect: () => void rename() },
     ...(team ? [{ label: `Open ${team.name}`, icon: "users" as const, onSelect: back }] : []),
@@ -1067,6 +1130,7 @@ export function GroupView({ groupId, at, atThread }: { groupId: string; at?: num
             onFocused={threadFocused}
             onTask={onTask}
             onReact={onReact}
+            onOpen={(seq, focus) => setThread({ seq, focus })}
             onClose={() => setThread(null)}
             unread={unreadThreads.has(thread.seq)}
           />
@@ -1089,7 +1153,7 @@ export function GroupView({ groupId, at, atThread }: { groupId: string; at?: num
 /** A group's line in the bot list: its bots, name, last message and whether anything's new. */
 export function groupRowInfo(group: GroupSummary, bots: ReadonlyMap<string, Bot>, chats: ReadonlyMap<string, ChatSnapshot>) {
   const members = group.memberIds.flatMap((id) => bots.get(id) ?? []);
-  const seatChats = Object.values(group.seats).flatMap((id) => (id ? (chats.get(id) ?? []) : []));
+  const seatChats = group.seats.flatMap((seat) => chats.get(seat.chatId) ?? []);
   const working = seatChats.some((chat) => chat.status === "running" || chat.status === "initializing");
   const approval = seatChats.some((chat) => (chat.pendingPermissions?.length ?? 0) > 0);
   const last = group.last ? `${group.last.from.kind === "bot" ? `${group.last.from.name}: ` : group.last.from.kind === "user" ? "You: " : ""}${messagePreview({ text: group.last.text, attachments: [] }, 80)}` : "No messages yet";

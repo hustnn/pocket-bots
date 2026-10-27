@@ -19,6 +19,8 @@ import { foldText } from "./activity";
 
 /** Label on a seat's chat, carrying its group's id. */
 export const GROUP_LABEL = "pocket-bots.group";
+/** Label on a seat's chat, carrying the conversation it's for (piece; 0 for a member's one seat). */
+export const GROUP_PIECE_LABEL = "pocket-bots.group-piece";
 export const GROUP_MIN_BOTS = 2;
 export const GROUP_MAX_BOTS = 6;
 /** The user's id in tasks and reactions. */
@@ -165,6 +167,8 @@ export const GroupMessageSchema = z.object({
   /** The task this message is, if it was made one. */
   task: GroupTaskSchema.omit({ seq: true }).nullable().default(null),
   reactions: z.array(z.object({ emoji: z.string(), names: z.array(z.string()), ids: z.array(z.string()).default([]) })).default([]),
+  /** A member the leader leads posted it from its seat for this conversation (see pieceOf). */
+  fromPiece: z.number().int().positive().optional(),
 });
 export type GroupMessage = z.infer<typeof GroupMessageSchema>;
 
@@ -201,8 +205,11 @@ export const GroupSummarySchema = z.object({
   /** The threads with something the user hasn't read. */
   unreadThreads: z.array(z.number()).default([]),
   last: z.object({ from: GroupSenderSchema, text: z.string(), at: z.string() }).nullable(),
-  /** Each member's seat chat, once it has one. */
-  seats: z.record(z.string(), z.string().nullable()),
+  /**
+   * The members' seat chats, oldest first: one per member, or for a member the leader leads, one
+   * per conversation it was brought into (`piece`, that thread's top message; 0 otherwise).
+   */
+  seats: z.array(z.object({ botId: z.string(), piece: z.number(), chatId: z.string() })),
 });
 export type GroupSummary = z.infer<typeof GroupSummarySchema>;
 
@@ -480,34 +487,17 @@ export function fromLead(leaderId: string, message: { kind: GroupSender["kind"];
 }
 
 /**
- * In a group with a leader, the piece of work a message in a member's inbox belongs to: for a
- * message in a thread, that thread; for a top-level message from the leader or the user that
- * @mentions the member, the message itself (a new piece). Null for what's part of no piece (a note,
- * @everyone, a reply at the top level, another member's question): it goes to whichever piece is
- * current. `pieces`, when given, are the threads that are this member's pieces: a message in any
- * other thread (another member asking in its own piece's thread) is part of none.
+ * In a group with a leader, the conversation a message in a member's inbox is for, which is the
+ * seat that takes it. A top-level message starts one of its own (a piece of work handed to the
+ * member, or another member's request). A message in a thread is for that thread's seat, unless
+ * the member spoke in the thread from one of its seats (`spokeFrom`, GroupStore.spokeFrom): it
+ * started the thread as a request, or came to ask something there from another piece. Then it's
+ * for that seat, which is waiting for the answer. Each conversation the member is brought into
+ * has its seat, a session of its own; the member works in one at a time.
  */
-export function workOf(leaderId: string, botId: string, message: Pick<GroupMessage, "seq" | "thread" | "from" | "mentions">, pieces?: ReadonlySet<number>): number | null {
-  if (message.thread) return !pieces || pieces.has(message.thread) ? message.thread : null;
-  if (message.from.kind === "system" || !message.mentions.includes(botId)) return null;
-  return message.from.kind === "user" || message.from.botId === leaderId ? message.seq : null;
-}
-
-/**
- * What a led member's wake is about: one piece of work at a time (workOf), each in a session of
- * its own. News for the piece its seat's session is on (`current`) comes first, else the oldest
- * piece in its inbox; messages of no piece go along, so another member's question is answered in
- * whatever session the member is in. What's for another piece waits for its turn.
- * Only pieces with something no notice told yet count, so a piece whose messages were told and
- * not read doesn't hold up the others. `switching`: the seat's session is on another piece, so
- * this one starts a fresh session. `pieces`: see workOf.
- */
-export function pieceFor<T extends { message: Pick<GroupMessage, "seq" | "thread" | "from" | "mentions">; noticed?: boolean }>(leaderId: string, botId: string, pending: readonly T[], current: number | null, pieces?: ReadonlySet<number>): { work: number | null; now: T[]; switching: boolean } {
-  const works = pending.map((entry) => workOf(leaderId, botId, entry.message, pieces));
-  const news = works.filter((work, index): work is number => work !== null && !pending[index]!.noticed);
-  const open = news.length ? news : works.filter((work): work is number => work !== null);
-  const work = current !== null && open.includes(current) ? current : (open[0] ?? null);
-  return { work, now: pending.filter((_, index) => works[index] === null || works[index] === work), switching: work !== null && current !== null && current !== work };
+export function pieceOf(message: Pick<GroupMessage, "seq" | "thread">, spokeFrom?: number | null): number {
+  if (!message.thread) return message.seq;
+  return spokeFrom ?? message.thread;
 }
 
 // ---------------------------------------------------------------- what a bot reads
@@ -684,6 +674,8 @@ export interface WakeInput {
    * it needn't read its inbox for them, and they count as read once its seat takes them in.
    */
   handed?: { messages: readonly GroupMessage[]; parents?: ReadonlyMap<number, GroupMessage> };
+  /** A led member's seat: the conversation this session is for (its top message's number). */
+  session?: number;
 }
 
 /**
@@ -694,6 +686,7 @@ export interface WakeInput {
 export function wakeText(input: WakeInput): string {
   const me = input.me.id;
   const lines = [`[Group chat "${input.groupName}". Members: ${rosterLine(input.me, input.roster)}.]`, ""];
+  if (input.session) lines.push(`[This session is for #${input.session} and its thread: post there (group_send with thread: ${input.session}).]`, "");
   if (input.briefing) lines.push(input.briefing, "", "---", "");
   for (const join of input.joins ?? []) {
     const parents = new Map([[join.thread, join.parent]]);
@@ -1178,10 +1171,13 @@ export type GroupLead = { role: "leader"; members: readonly { name: string; abou
  * complete brief and reviews what comes back: it doesn't repeat the checks the member reports it
  * ran, and decides whether more checking is worth it (doing a small check itself, handing a larger
  * one out). A member works only on what it's handed, checks its own work as far as it can and
- * reports once to the leader, saying what it verified and how and what it didn't. Members ask each
- * other for information directly, by @mention in the piece's thread, which doesn't wake the leader;
- * work changes hands only through the leader. The rules are pocket-bots's own delivery (fromLead,
- * deliver in group-store.ts), so the section says what reaches whom. A member whose runtime can start
+ * reports once, saying what it verified and how and what it didn't. Members ask each other
+ * directly, which doesn't wake the leader: in a piece's thread when the other needs that piece's
+ * context, or in a new top-level message for a request that stands on its own. Each conversation
+ * a member is brought into has a session of its own (pieceOf), so the place it's asked in is the
+ * context it answers in; it works in one of them at a time; a whole piece changes hands only
+ * through the leader. The rules are pocket-bots's own delivery (fromLead, deliver in
+ * group-store.ts), so the section says what reaches whom. A member whose runtime can start
  * sub-agents is told to do its piece itself: the leader already split the work, and a sub-agent
  * would start over from nothing.
  */
@@ -1189,12 +1185,12 @@ export function leadSection(lead: GroupLead, subAgents = false): string {
   if (lead.role === "leader") {
     return [
       "You lead this group:",
-      "- You plan, and the other bots do the work you hand them. They wake only for messages from you or the user that @mention them, reply to them or assign them a task, and for another member's question; they report back to you. Nobody else plans or hands out work: the group moves when you do.",
-      "- Members ask each other for information directly (where some code is, why a test fails) by @mentioning each other in a piece's thread. Those exchanges don't wake you, and they don't move work: a member keeps the piece you handed it. You see them when you read the thread. Say in a brief when a member should ask another (\"ask Ezra where the parser lives\") rather than wait for you.",
+      "- You plan, and the other bots do the work you hand them. They wake only for messages from you or the user that @mention them, reply to them or assign them a task, and for what another member asks them; they report back to you. Nobody else plans or hands out the pieces: the group moves when you do.",
+      "- Members ask each other directly: with a request of its own at the top level (a code search, a test run), in their piece's thread when the other needs that piece's context, or in the other's piece thread when it's about that piece and they know its number. Those exchanges don't wake you, and they don't move work: a member keeps the piece you handed it. You see them when you read the threads, and each member's report says what it got from whom. Say in a brief when a member should ask another rather than wait for you, with the other's piece number when it's about that piece (\"Ezra maps the config in #7: ask there about it\").",
       "- For each request, work out the steps and hand each piece to the member best suited for it. Spend your own effort on planning, reviewing results and deciding what's next: hand hands-on work (writing code, searching and reading files, running commands) to the members rather than doing it yourself or with sub-agents, unless it's one quick check.",
       "- A new piece of work is a new top-level group_send that @mentions one member and carries the complete brief: the goal, the files or area, the constraints, what done looks like, and what to report back. The member starts every new piece in a fresh session that remembers nothing of earlier pieces and sees nothing of the group but what you send it, so the brief must stand on its own. The member claims your message, which makes it a task (group_task list).",
       "- The member answers in your message's thread. To iterate on that piece, reply in the same thread and @mention the member: the thread is the piece's context, and the member carries on from it. Keep each piece in its own thread: no new top-level message for a follow-up, and no new piece in an old thread.",
-      "- Pieces that don't depend on each other can go to different members at once; keep dependent steps in order. A member works on one piece at a time; another piece for it waits until it's done.",
+      "- Pieces that don't depend on each other can go to different members at once; keep dependent steps in order, and hand out pieces that change the same files one after another: everyone works in the same folder. A member works on one thing at a time: another piece for it waits until its current turn ends, then goes on in a session of its own, and a piece you come back to goes on in the session it had.",
       "- When a member reports back, read what it says it verified and how, and what it didn't. Don't repeat checks it already ran. Decide whether more verification is worth it for this piece: a small check (one command, a quick read of a file) you do yourself; a larger one (new tests, a full review) you hand to a member, with what's already verified so it isn't redone. If the result isn't right yet, say what to change in its thread; when it is, set its task to done with group_task, then hand out the next piece.",
       "- When the user's request is done, tell the user the outcome as a reply to their request (group_send with reply_to: its number), so it shows where they asked rather than in a thread they may not open: what was done, what was verified and how, and anything left open or unverified. The plan, hand-offs and reports stay in the pieces' threads.",
       "- When a member is stuck or asks you something, answer in its thread promptly: you're the one who unblocks them. If only the user can decide, ask the user.",
@@ -1206,16 +1202,17 @@ export function leadSection(lead: GroupLead, subAgents = false): string {
   const leader = lead.leader;
   return [
     `This group has a leader, ${leader}. These rules come before the others below:`,
-    `- Work only on what ${leader} or the user hands you; ordinary messages in the group don't reach you. Don't pick up other work, claim tasks that weren't handed to you, or start discussions beyond the questions to other members below.`,
-    `- A piece of work is a top-level message that @mentions you, with its thread. A new piece starts you in a fresh session that remembers nothing of earlier pieces: the message is the whole brief, and it's shown to you in full. Claim it with group_claim, then do it fully, within its brief.`,
+    `- Work only on what you're handed: by ${leader} or the user, or what another member asks of you; ordinary messages in the group don't reach you. Don't pick up other work, claim tasks that weren't handed to you, or start discussions beyond what you need from other members.`,
+    `- Each place you're brought into gets a session of its own, and this session is for one of them, named at the top of each delivery: a piece handed to you, another member's request, or another member's thread where you were @mentioned. Post there (group_send with thread: its number). You work in one of your sessions at a time, and coming back to a place goes on in its session; this one knows only its own place, and group_read or group_search show you the rest of the group when you need it.`,
+    `- A piece of work is a top-level message that @mentions you, with its thread. It starts a fresh session that remembers nothing else: the message is the whole brief, and it's shown to you in full. When it's from ${leader} or the user, claim it with group_claim; another member's request isn't a task, so don't claim it. Then do it fully, within its brief.`,
     ...(subAgents ? [`- Do the piece yourself: ${leader} has already split the work, and a sub-agent starts from nothing and reads everything again. Start one only when the piece splits into large independent parts worth running in parallel, and tell it not to use the group tools: only you speak in the group.`] : []),
     `- Before you report, verify your work yourself as far as you can: run the tests that cover it, try what you changed, re-read your diff. Some pieces can't be fully checked; then check what you can.`,
-    `- Answer once, in that message's thread (group_send with thread: its number), @mentioning ${leader}: the outcome first, then what you changed (files), what you verified and how (the commands you ran and their results), and what you didn't or couldn't verify, and anything left open. ${leader} won't repeat the checks you report, and decides whether more is needed. Keep it short. Then stop; don't wait around or keep checking.`,
-    `- ${leader} follows up in the same thread when it wants changes: that thread is your context for the piece. Back on an older piece, you're shown its thread; group_read (thread: its number) reads the rest.`,
-    `- Don't change the task's status: ${leader} decides when it's done. Skip acknowledgments and progress updates: each one wakes ${leader} for nothing. To show you've started, react with group_react, which wakes nobody.`,
-    `- When the brief is unclear or something blocks you, ask @${leader} one concise question in the thread instead of guessing, then stop until the answer comes.`,
-    `- When you need something another member's role covers (where some code is, why a test fails, how something works), ask it directly: @mention it in your piece's thread with one concise question, and its answer comes back there. Ask for information or a quick check only, not work: if another member should take on work, tell ${leader}, who hands it out. Your messages to other members don't wake ${leader}.`,
-    `- When another member @mentions you with a question, answer it in that thread, @mentioning them: briefly, with what you know or can find quickly (file paths and line numbers, a command and its result). Then go back to your own piece. Don't take over their work; if answering needs real work, say so and let ${leader} decide.`,
+    `- Answer once, in that message's thread (group_send with thread: its number), @mentioning whoever handed it to you: the outcome first, then what you changed (files), what you verified and how (the commands you ran and their results), what you didn't or couldn't verify, what you got from other members and where ("Ezra in #7: the loader is src/theme/load.ts"), and anything left open. ${leader} won't repeat the checks you report, and decides whether more is needed. Keep it short. Then stop; don't wait around or keep checking.`,
+    `- Follow-ups come in the same thread and reach this session again: that thread is your context for the piece.`,
+    `- Don't change the task's status: ${leader} decides when it's done. Skip acknowledgments and progress updates: each one wakes someone for nothing. To show you've started, react with group_react, which wakes nobody.`,
+    `- When the brief is unclear or something blocks you, ask whoever handed it to you one concise question in its thread instead of guessing, then stop until the answer comes.`,
+    `- When you need something another member's role covers, @mention it. By default in a new top-level message: a complete request that stands on its own (a code search, a test run), which it does in a fresh session and answers in that message's thread. In this thread instead when it needs this piece's context (what you're working on, what was said here): it joins the thread and answers there. In that member's own piece's thread when it's about that piece and your brief or an answer gave you its number: it answers from its session for that piece. Don't search the group for other members' pieces to ask in. Wherever you asked, the answer comes back to this session. Ask for help with a part of your piece, not to take it over: if a whole piece should move to someone else, tell ${leader}. @mention a member only when you need something from it, and don't thank or acknowledge: each @mention wakes it. Your messages to other members don't wake ${leader}.`,
+    `- When another member asks you something, answer once where it asked, @mentioning it, with what it needs (file paths and line numbers, a command and its result). Don't take over its piece.`,
     ...(lead.peers?.length ? ["- The other members, besides the leader:", ...lead.peers.map((peer) => `  - ${peer.name}${peer.about ? `: ${peer.about}` : ""}`)] : []),
   ].join("\n");
 }

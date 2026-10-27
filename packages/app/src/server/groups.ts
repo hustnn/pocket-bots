@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { answersInOrder, questionsOf } from "@pocket-bots/runtime/questions";
 import { mimeTypeFor, newAttachmentId, preflightFile, type ComposerAttachment, type WireAttachment } from "../shared/attachments";
-import type { Bot } from "../shared/bot";
+import { BOT_LABEL, type Bot } from "../shared/bot";
 import { foldText } from "../shared/activity";
 import type { ApprovalDecision, ApprovalRequest, ChatSnapshot } from "../shared/chat-types";
 import {
@@ -14,6 +14,7 @@ import {
   DELIVERY_MAX,
   deliveryFailureOf,
   GROUP_LABEL,
+  GROUP_PIECE_LABEL,
   GROUP_USER,
   GROUP_USER_ID,
   groupQuestion,
@@ -38,8 +39,7 @@ import {
   undeliveredMentionsText,
   wakeText,
   fromLead,
-  pieceFor,
-  workOf,
+  pieceOf,
   type GroupAttachment,
   type GroupLead,
   type GroupMessage,
@@ -84,7 +84,7 @@ import {
   type Recurrence,
   type ReminderStatus,
 } from "./reminders";
-import { isSeen, type AppendInput, type GroupRow, type GroupStore, type MemberRow, type TaskAmendment } from "./group-store";
+import { isSeen, type AppendInput, type GroupRow, type GroupStore, type SeatRow, type TaskAmendment } from "./group-store";
 import {
   claimAutomaticStart,
   freshBreaker,
@@ -107,7 +107,8 @@ import type { GroupSearchHit } from "./search";
 // Group chats (docs/group-chats.md walks through them). This class runs the
 // group's flows: the bots' tools, the check before a post, notices and seats. The group's state,
 // with each receiver's delivery records, read positions and model-seen ledger, lives in SQLite
-// (group-store.ts); each bot takes part through its seat, an ordinary chat of its own.
+// (group-store.ts); each bot takes part through its seat, an ordinary chat of its own (a member the
+// leader leads, through a seat for each conversation it's brought into, one running at a time).
 
 /** Starts a bot's seat chat for a group. */
 export type SeatStarter = (bot: Bot, input: StartChatInput & { group: { id: string; name: string } }) => Promise<string>;
@@ -276,6 +277,12 @@ export class GroupChats {
   /** The spawn-error retry sweep, one timer per seat a spawn error paused. */
   private readonly sweepTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly noticeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /**
+   * The seat a member the leader leads is working in, by member (group:bot), from the input that
+   * starts its turn until the turn settles: it works in one seat at a time, and a seat that was
+   * just told still looks idle until its runtime starts the turn.
+   */
+  private readonly engaged = new Map<string, number>();
   private readonly random: () => number;
   private readonly recycleAfterMs: number;
   private readonly recycleTokens: number;
@@ -354,7 +361,7 @@ export class GroupChats {
       unread: unread.length > 0,
       unreadThreads: unread.filter((place) => place.conv).map((place) => place.conv),
       last: last ? { from: last.from, text: last.text, at: last.at } : null,
-      seats: Object.fromEntries(members.map((member) => [member.bot_id, member.seat_chat_id])),
+      seats: this.store.seats(group.id).filter((seat) => members.some((member) => member.bot_id === seat.bot_id)).map((seat) => ({ botId: seat.bot_id, piece: seat.piece, chatId: seat.chat_id })),
     };
   }
 
@@ -403,11 +410,11 @@ export class GroupChats {
         this.note(groupId, `${bots.get(botId)?.name ?? "A bot"} joined the group.`, "group.membership", USER_ID);
       }
       for (const botId of current.filter((id) => !next.includes(id))) {
-        const member = this.store.member(groupId, botId);
+        const seats = this.store.seats(groupId, botId);
         this.forgetSeat(groupId, botId);
         this.store.removeMember(groupId, botId);
-        if (member?.seat_chat_id) await this.host.chats.archive(member.seat_chat_id).catch(() => undefined);
-        this.store.setSeat(groupId, botId, null);
+        for (const seat of seats) await this.host.chats.archive(seat.chat_id).catch(() => undefined);
+        this.store.dropSeats(groupId, botId);
         this.note(groupId, `${bots.get(botId)?.name ?? "A bot"} left the group.`, "group.membership", USER_ID);
       }
     }
@@ -438,8 +445,9 @@ export class GroupChats {
   private async setExtraFolders(groupId: string, folders: string[]): Promise<void> {
     this.store.updateGroup(groupId, { extraFolders: folders });
     this.note(groupId, folders.length ? `📁 the user set the group's extra folders to ${folders.join(", ")}: each bot's next turn here can use them.` : "📁 the user removed the group's extra folders.", "group.folder", USER_ID);
-    for (const member of this.store.members(groupId)) {
-      if (member.seat_chat_id) await this.host.chats.setExtraFolders(member.seat_chat_id, folders).catch(() => undefined);
+    const members = new Set(this.store.members(groupId).map((member) => member.bot_id));
+    for (const seat of this.store.seats(groupId)) {
+      if (members.has(seat.bot_id)) await this.host.chats.setExtraFolders(seat.chat_id, folders).catch(() => undefined);
     }
   }
 
@@ -463,21 +471,22 @@ export class GroupChats {
 
   async remove(groupId: string): Promise<void> {
     this.require(groupId);
-    for (const member of this.store.members(groupId, true)) {
-      this.forgetSeat(groupId, member.bot_id);
-      if (member.seat_chat_id) await this.host.chats.archive(member.seat_chat_id).catch(() => undefined);
-    }
+    for (const member of this.store.members(groupId, true)) this.forgetSeat(groupId, member.bot_id);
+    for (const seat of this.store.seats(groupId)) await this.host.chats.archive(seat.chat_id).catch(() => undefined);
     this.store.deleteGroup(groupId);
     this.changed(groupId);
   }
 
-  /** The top level, or with `thread` that thread's top message followed by its replies. */
-  async messages(groupId: string, input: { before?: number | null; limit?: number; thread?: number | null } = {}): Promise<{ messages: GroupMessage[]; hasOlder: boolean }> {
+  /**
+   * The top level, or with `thread` that thread's top message followed by its replies, and what
+   * led members posted elsewhere from their seats for it (GroupStore.asides).
+   */
+  async messages(groupId: string, input: { before?: number | null; limit?: number; thread?: number | null } = {}): Promise<{ messages: GroupMessage[]; hasOlder: boolean; asides: GroupMessage[] }> {
     this.require(groupId);
-    if (!input.thread) return this.store.page(groupId, input);
+    if (!input.thread) return { ...this.store.page(groupId, input), asides: [] };
     const page = this.store.threadPage(groupId, input.thread, input);
     if (!page.parent) throw new RequestError(`There's no message #${input.thread}.`);
-    return { messages: [...(page.hasOlder ? [] : [page.parent]), ...page.messages], hasOlder: page.hasOlder };
+    return { messages: [...(page.hasOlder ? [] : [page.parent]), ...page.messages], hasOlder: page.hasOlder, asides: this.store.asides(groupId, input.thread) };
   }
 
   /** The user read the top level (or a thread) up to `seq`. */
@@ -643,19 +652,23 @@ export class GroupChats {
   /**
    * group_send: posts at the top level or in a thread, after the check (see preflight). A reply
    * to a message in a thread goes in that thread. A top-level post right after reading a thread
-   * is asked about once, unless it replies to a top-level message.
+   * is asked about once, unless it replies to a top-level message. A led member's seat (`chatId`,
+   * the calling chat) posts in its own conversation, or starts a request at the top level.
    */
-  async send(bot: Bot, groupId: string, input: { text: string; replyTo?: number | null; thread?: number | null; idempotencyKey?: string | null; files?: readonly string[] }): Promise<string> {
+  async send(bot: Bot, groupId: string, input: { text: string; replyTo?: number | null; thread?: number | null; idempotencyKey?: string | null; files?: readonly string[] }, chatId?: string): Promise<string> {
     this.requireMember(groupId, bot.id);
     const text = input.text.slice(0, BOT_TEXT_MAX);
     // Text first: files go with a message, never instead of one.
     if (!text.trim()) throw new RequestError(input.files?.length ? "Write the message too: its text says what the files are and what you need." : "There's nothing to send.");
-    const files = await this.botFiles(groupId, bot.id, input.files ?? []);
     const replyTo = input.replyTo ?? null;
     const conv = this.venue(groupId, input.thread ?? null, replyTo) ?? 0;
     const members = await this.liveMembers(groupId);
+    const elsewhere = await this.outsideSession(bot, groupId, conv, text, members, chatId);
+    if (elsewhere) return elsewhere;
+    const files = await this.botFiles(groupId, bot.id, input.files ?? [], chatId);
     // A reply to a top-level message names the top level itself, so only a bare post is asked about.
-    if (conv === 0 && !replyTo) {
+    // A led member's top-level post is a request of its own, never a stray report.
+    if (conv === 0 && !replyTo && !this.ledBy(groupId, bot.id)) {
       const thread = this.store.latestReadThread(groupId, bot.id);
       if (thread) {
         this.store.saveDraft(groupId, bot.id, 0, { text, replyTo, held: false, files });
@@ -664,13 +677,16 @@ export class GroupChats {
     }
     const held = this.preflight(bot, groupId, conv, "send", { text, replyTo, files });
     if (held) return held;
-    return this.post(bot, groupId, conv, text, replyTo, input.idempotencyKey ?? null, members, files);
+    return this.post(bot, groupId, conv, text, replyTo, input.idempotencyKey ?? null, members, files, this.sessionPiece(groupId, bot.id, chatId));
   }
 
   /** group_send_draft: sends a held draft unchanged (checked again unless `anyway`), or drops it. */
-  async sendDraft(bot: Bot, groupId: string, input: { thread?: number | null; anyway?: boolean; discard?: boolean }): Promise<string> {
+  async sendDraft(bot: Bot, groupId: string, input: { thread?: number | null; anyway?: boolean; discard?: boolean }, chatId?: string): Promise<string> {
     this.requireMember(groupId, bot.id);
-    const conv = input.thread ? (this.venue(groupId, input.thread, null) ?? 0) : (this.store.drafts(groupId, bot.id)[0]?.conv ?? 0);
+    // A led member's seat has its own conversation's draft, if any.
+    const piece = this.sessionPiece(groupId, bot.id, chatId);
+    const latest = piece && this.store.draft(groupId, bot.id, piece) ? piece : (this.store.drafts(groupId, bot.id)[0]?.conv ?? 0);
+    const conv = input.thread ? (this.venue(groupId, input.thread, null) ?? 0) : latest;
     const draft = this.store.draft(groupId, bot.id, conv);
     if (!draft) return `There's no draft for ${placeName(conv)} (drafts are kept for 10 minutes). If it's still needed, send it again with group_send.`;
     if (input.discard) {
@@ -678,11 +694,13 @@ export class GroupChats {
       return `Dropped your draft for ${placeName(conv)}.`;
     }
     const members = await this.liveMembers(groupId);
+    const elsewhere = await this.outsideSession(bot, groupId, conv, draft.text, members, chatId);
+    if (elsewhere) return elsewhere;
     if (!input.anyway) {
       const held = this.preflight(bot, groupId, conv, "send", { text: draft.text, replyTo: draft.reply_to, files: draft.files });
       if (held) return held;
     }
-    return this.post(bot, groupId, conv, draft.text, draft.reply_to, draft.draft_key, members, draft.files);
+    return this.post(bot, groupId, conv, draft.text, draft.reply_to, draft.draft_key, members, draft.files, piece);
   }
 
   /**
@@ -695,12 +713,20 @@ export class GroupChats {
    * A place's read that joins up with the bot's read position moves its model-seen boundary (and
    * read position) to the newest message read; one that leaves a gap records each
    * message instead.
+   * A led member's seat (`chatId`) reads as its own only its conversation: its inbox is that
+   * conversation's, and reading anywhere else only looks, so what's for its other seats stays theirs.
    */
-  async read(bot: Bot, groupId: string, input: { unread?: boolean; before?: number | null; around?: number | null; limit?: number; thread?: number | null; topLevel?: boolean }): Promise<string> {
+  async read(bot: Bot, groupId: string, input: { unread?: boolean; before?: number | null; around?: number | null; limit?: number; thread?: number | null; topLevel?: boolean }, chatId?: string): Promise<string> {
     this.requireMember(groupId, bot.id);
     const limit = Math.max(1, Math.min(input.limit ?? (input.unread ? DELIVERY_MAX : 20), DELIVERY_MAX));
+    const piece = this.sessionPiece(groupId, bot.id, chatId);
+    const mine = (message: Pick<GroupMessage, "seq" | "thread">) => !piece || this.seatPiece(groupId, bot.id, message) === piece;
+    const owns = (conv: number) => !piece || (conv !== 0 && mine({ seq: conv, thread: conv }));
+    const looking = (conv: number) => `(This session is for #${piece}: reading ${placeName(conv)} doesn't mark anything there read.)`;
     if (input.unread && !input.thread && !input.topLevel) {
-      const pending = this.store.pending(groupId, bot.id);
+      const spokeFrom = (thread: number) => this.store.spokeFrom(groupId, bot.id, thread);
+      const hasSeat = (other: number) => !!this.store.seat(groupId, bot.id, other);
+      const pending = this.store.pending(groupId, bot.id).filter((entry) => !piece || this.contextOf(entry, piece, spokeFrom, hasSeat) === piece);
       if (pending.length === 0) return "Your inbox is empty: nothing new was delivered to you. group_inbox lists any place with unread messages.";
       const shown = pending.slice(0, limit).map((entry) => entry.message);
       this.store.recordSeenMessages(groupId, bot.id, shown);
@@ -712,7 +738,8 @@ export class GroupChats {
       if (!anchor) throw new RequestError(`There's no message #${input.around}.`);
       const conv = anchor.thread ?? 0;
       const page = this.store.convAround(groupId, conv, anchor.seq, limit);
-      this.store.recordSeen(groupId, bot.id, conv, { exact: page.messages.map((message) => message.seq) });
+      const own = page.messages.filter(mine);
+      this.store.recordSeen(groupId, bot.id, conv, { exact: own.map((message) => message.seq) });
       const parents = this.parents(groupId, page.messages);
       const lines = [`Around #${anchor.seq} at ${placeName(conv)}, oldest first:`];
       if (page.hasOlder) lines.push(`(Earlier messages exist: group_read with ${conv ? `thread: ${conv}, ` : ""}before: ${page.messages[0]!.seq}.)`);
@@ -722,6 +749,12 @@ export class GroupChats {
     }
     const conv = input.thread ? this.threadOf(groupId, input.thread) : 0;
     const prior = this.store.cursor(groupId, bot.id, conv);
+    if (input.unread && !owns(conv)) {
+      const page = this.store.convPage(groupId, conv, { after: prior, limit });
+      const others = page.messages.filter((message) => !(message.from.kind === "bot" && message.from.botId === bot.id));
+      if (others.length === 0) return `No unread messages at ${placeName(conv)}.`;
+      return [historyText(others, false, bot.id, { parents: this.parents(groupId, others) }), looking(conv)].join("\n\n");
+    }
     if (input.unread) {
       const page = this.store.convPage(groupId, conv, { after: prior, limit });
       const before = this.store.ledger(groupId, bot.id, conv);
@@ -743,13 +776,14 @@ export class GroupChats {
       return [body, ...notes.map((note) => `(${note})`)].join("\n\n");
     }
     const page = this.store.convPage(groupId, conv, { before: input.before ?? null, limit });
-    this.consumeRead(bot.id, groupId, conv, page.messages, !page.hasOlder || (page.messages[0]?.seq ?? Infinity) <= prior);
-    if (!conv) return historyText(page.messages, page.hasOlder, bot.id);
+    if (owns(conv)) this.consumeRead(bot.id, groupId, conv, page.messages, !page.hasOlder || (page.messages[0]?.seq ?? Infinity) <= prior);
+    const look = owns(conv) ? "" : `\n\n${looking(conv)}`;
+    if (!conv) return historyText(page.messages, page.hasOlder, bot.id) + look;
     const parent = this.store.messageAt(groupId, conv)!;
     // The top message is shown with the thread's first page; it's the top level's, seen one by one there.
-    if (!page.hasOlder) this.store.recordSeen(groupId, bot.id, 0, { exact: [parent.seq] });
+    if (!page.hasOlder && owns(conv)) this.store.recordSeen(groupId, bot.id, 0, { exact: [parent.seq] });
     const messages = page.hasOlder ? page.messages : [parent, ...page.messages];
-    return historyText(messages, page.hasOlder, bot.id, { thread: conv }) + (page.messages.length === 0 ? "\n\n(No replies in its thread yet.)" : "");
+    return historyText(messages, page.hasOlder, bot.id, { thread: conv }) + (page.messages.length === 0 ? "\n\n(No replies in its thread yet.)" : "") + look;
   }
 
   /**
@@ -992,7 +1026,10 @@ export class GroupChats {
     }
     const list = tasks.map((task) => `task #${task.number} "${this.titleOf(groupId, task)}"`).join(", ");
     const many = tasks.length === 1 ? list : `${tasks.length} new tasks: ${list}`;
-    if (assignee) {
+    if (assignee?.kind === "bot" && !self && this.ledBy(groupId, assignee.id)) {
+      // A member the leader leads takes each task in a session of its own: one receipt in each task's thread.
+      for (const task of tasks) this.note(groupId, `📌 Assigned @${assignee.name} to task #${task.number} "${this.titleOf(groupId, task)}"`, "task.assignment_receipt", bot.id, task.seq, [assignee.id]);
+    } else if (assignee) {
       const text = self ? `📌 @${bot.name} started ${many}` : `📌 Assigned ${assignee.kind === "bot" ? "@" : ""}${assignee.name} to ${many}`;
       this.note(groupId, text, "task.assignment_receipt", bot.id, null, assignee.kind === "bot" ? [assignee.id] : []);
     } else {
@@ -1014,6 +1051,8 @@ export class GroupChats {
     if (task?.assignee?.id === bot.id) return null;
     const senderId = message.from.kind === "bot" ? message.from.botId : message.from.kind;
     if (!task?.assignee && message.mentions.includes(bot.id) && fromLead(leaderId, { kind: message.from.kind, senderId, causalActor: null })) return null;
+    // Another member's request is done and answered, not tracked as a task.
+    if (message.from.kind === "bot" && message.mentions.includes(bot.id)) return `#${message.seq} is ${message.from.name}'s request, not a task: don't claim it. Do it and answer in its thread (thread: ${message.seq}), @mentioning ${message.from.name}.`;
     const leader = (await this.allBots()).get(leaderId)?.name ?? "the leader";
     return `Claim refused for #${message.seq}: in this group ${leader} hands out the work, and you take only what ${leader} or the user hands you (a message of theirs that @mentions you, or a task assigned to you). Don't start this work. If you think it should be yours, ask @${leader}.`;
   }
@@ -1222,12 +1261,16 @@ export class GroupChats {
     const leaderId = this.store.leader(groupId);
     const lines = this.store.members(groupId).map((member) => {
       const entry = bots.get(member.bot_id);
-      const chat = member.seat_chat_id ? this.host.chats.get(member.seat_chat_id) : null;
+      const working = this.store.seats(groupId, member.bot_id).filter((seat) => {
+        const chat = this.host.chats.get(seat.chat_id);
+        return !!chat && !chat.archivedAt && isBusy(chat.status);
+      });
       const tasks = this.store.tasks(groupId, { statuses: OPEN_TASKS, assigneeId: member.bot_id });
       const parts = [`${entry?.name ?? member.bot_id}${member.bot_id === bot.id ? " (you)" : ""}`];
       if (member.bot_id === leaderId) parts.push("leader: plans and hands out the work");
       if (entry?.title.trim()) parts.push(entry.title.trim());
-      parts.push(chat && isBusy(chat.status) ? "working" : "idle");
+      const on = working.flatMap((seat) => (seat.piece ? [`#${seat.piece}`] : []));
+      parts.push(working.length ? `working${on.length ? ` on ${on.join(", ")}` : ""}` : "idle");
       if (member.muted_from_seq !== null) parts.push("muted");
       if (tasks.length) parts.push(`tasks: ${tasks.map((task) => `#${task.number} (${task.status})`).join(", ")}`);
       return `- ${parts.join(" · ")}`;
@@ -1322,14 +1365,15 @@ export class GroupChats {
     }
     for (const group of this.store.groups()) {
       for (const member of this.store.members(group.id)) {
-        const seat = member.seat_chat_id ? this.host.chats.get(member.seat_chat_id) : null;
-        // A member the leader leads gets only its pieces of work, not a catch-up of the group: what
-        // it was told and didn't take in is told again, one piece at a time.
+        // A member the leader leads gets only its own conversations, not a catch-up of the group:
+        // what each of its seats was told and didn't take in is told again.
         if (this.ledBy(group.id, member.bot_id)) {
           this.store.retellUntaken(group.id, member.bot_id);
           if (this.store.pending(group.id, member.bot_id).length || this.store.pendingReminderWakes(group.id, member.bot_id).length) void this.serial(group.id, () => this.pump(group.id, member.bot_id));
           continue;
         }
+        const row = this.store.seat(group.id, member.bot_id, 0);
+        const seat = row ? this.host.chats.get(row.chat_id) : null;
         const catchUp = !!seat && !seat.archivedAt && this.store.unreadPlaces(group.id, member.bot_id).length > 0;
         if (catchUp) void this.serial(group.id, () => this.catchUp(group.id, member.bot_id));
         // A reminder's wake that hadn't reached the seat is still owed; pump skips what the catch-up told.
@@ -1414,9 +1458,24 @@ export class GroupChats {
   onAgent(agent: ChatSnapshot): void {
     const groupId = agent.labels[GROUP_LABEL];
     if (!groupId || isBusy(agent.status)) return;
-    const member = this.store.memberBySeat(agent.id);
-    if (!member || member.group_id !== groupId) return;
-    void this.serial(groupId, () => this.pump(groupId, member.bot_id));
+    // A new seat's first turn can settle before the seat is stored: its labels say whose it is.
+    const seat = this.store.seatByChat(agent.id);
+    const botId = seat?.bot_id ?? agent.labels[BOT_LABEL];
+    const piece = seat?.piece ?? Number(agent.labels[GROUP_PIECE_LABEL] ?? 0);
+    if (!botId || (seat && seat.group_id !== groupId) || !this.store.member(groupId, botId)) return;
+    this.release({ group_id: groupId, bot_id: botId, piece });
+    void this.serial(groupId, () => this.pump(groupId, botId));
+  }
+
+  /** A led member's seat is no longer the one it works in (its turn settled, or it couldn't start). */
+  private release(seat: Pick<SeatRow, "group_id" | "bot_id" | "piece">): void {
+    const key = this.key(seat.group_id, seat.bot_id);
+    if (this.engaged.get(key) === seat.piece) this.engaged.delete(key);
+  }
+
+  /** What a seat's own bookkeeping covers: a led seat's conversations, or the whole bot for its one seat. */
+  private scopeOf(seat: SeatRow): number | undefined {
+    return this.ledBy(seat.group_id, seat.bot_id) ? seat.piece : undefined;
   }
 
   /**
@@ -1430,16 +1489,16 @@ export class GroupChats {
    * counts and the breakers start over.
    */
   async onTurnEnded(agent: ChatSnapshot, end: SeatTurnEnd): Promise<void> {
-    const member = this.store.memberBySeat(agent.id);
-    if (!member) return;
-    const key = this.key(member.group_id, member.bot_id);
+    const seat = this.store.seatByChat(agent.id);
+    if (!seat) return;
+    const key = this.key(seat.group_id, seat.bot_id);
     // A start that showed nothing is a seat that couldn't start (onStartFailed has it).
     if (end.supervision === "start_failed") return;
     if (end.supervision === "stalled") {
       // Stalled recovery is a termination it meant: not a runtime error to back off from or
       // count. ChatService sends what the run hadn't taken in to its new start.
-      const bot = await this.host.bot(member.bot_id);
-      this.note(member.group_id, `${bot?.name ?? "A bot"}'s run stalled (${end.error ?? "no runtime events"}) and its process was gone, so pocket-bots restarted it.`, "seat.turn_failed", member.bot_id);
+      const bot = await this.host.bot(seat.bot_id);
+      this.note(seat.group_id, `${bot?.name ?? "A bot"}'s run stalled (${end.error ?? "no runtime events"}) and its process was gone, so pocket-bots restarted it.`, "seat.turn_failed", seat.bot_id);
       return;
     }
     if (end.outcome !== "failed") {
@@ -1456,9 +1515,10 @@ export class GroupChats {
       return;
     }
     const error = end.error ?? "";
-    this.store.markDeliveryFailed(member.group_id, member.bot_id, deliveryFailureOf(error));
+    // What this seat was told and hasn't read; the member's other seats keep theirs.
+    this.store.markDeliveryFailed(seat.group_id, seat.bot_id, deliveryFailureOf(error), undefined, this.scopeOf(seat));
     const policy = runtimeErrorPolicy(error, agent.provider);
-    const bot = await this.host.bot(member.bot_id);
+    const bot = await this.host.bot(seat.bot_id);
     const name = bot?.name ?? "A bot";
     const now = Date.now();
     const fenced = this.noteFence(key, policy);
@@ -1467,13 +1527,13 @@ export class GroupChats {
       // (fingerprint_fence).
       this.stop(key);
       this.note(
-        member.group_id,
+        seat.group_id,
         `${name} stopped after ${fenced} repeated runtime errors with the same fingerprint (${policy.fingerprint}). Last error: ${error || "(none given)"} Restart after the runtime/tooling issue is fixed: @mention ${name} to restart it, or its next message starts it again.`,
         "seat.turn_failed",
-        member.bot_id,
+        seat.bot_id,
       );
-      if (noteTerminalFailure(this.breaker(key), { kind: "fingerprint_fence", fingerprint: policy.fingerprint }, now)) this.notePaused(member.group_id, member.bot_id, name);
-      await this.notePieceFailed(member, name, error, "fenced");
+      if (noteTerminalFailure(this.breaker(key), { kind: "fingerprint_fence", fingerprint: policy.fingerprint }, now)) this.notePaused(seat.group_id, seat.bot_id, name);
+      await this.notePieceFailed(seat, name, error, "fenced");
       return;
     }
     if (policy.sticky) {
@@ -1481,33 +1541,33 @@ export class GroupChats {
       // or plan problem isn't the terminal-failure breaker's evidence, but a runtime that ends this
       // way within a minute of its start exited early (the crash-loop breaker); the rest is.
       this.stop(key);
-    } else if (policy.backoff) this.noteBackoff(member.group_id, member.bot_id, policy.backoff);
+    } else if (policy.backoff) this.noteBackoff(seat.group_id, seat.bot_id, policy.backoff);
     // A bot that keeps failing the same way (rate limited, say) is noted once, not every turn.
     const last = this.failures.get(key);
     if (!last || last.error !== error || now - last.at >= FAILURE_NOTE_MS) {
       this.failures.set(key, { error, at: now });
-      this.note(member.group_id, `${name}'s turn failed${error ? `: ${error}` : "."}`, "seat.turn_failed", member.bot_id);
+      this.note(seat.group_id, `${name}'s turn failed${error ? `: ${error}` : "."}`, "seat.turn_failed", seat.bot_id);
     }
     // Outside that once-per-ten-minutes rule: a member that fails the same way after its leader
     // had it carry on is stuck again, and only the leader can act on it.
-    await this.notePieceFailed(member, name, error, policy.sticky ? "needs_user" : "failed");
+    await this.notePieceFailed(seat, name, error, policy.sticky ? "needs_user" : "failed");
     if (!policy.sticky) return;
     if (policy.actionRequired) {
       const loop = this.crashLoop(key);
       // Text for the crash-loop block, and how to start it by hand here.
-      if (noteExit(loop, now)) this.note(member.group_id, `${name}: Automatic wake paused after ${loop.earlyExits} early exits. @mention ${name} to start it again.`, "seat.turn_failed", member.bot_id);
+      if (noteExit(loop, now)) this.note(seat.group_id, `${name}: Automatic wake paused after ${loop.earlyExits} early exits. @mention ${name} to start it again.`, "seat.turn_failed", seat.bot_id);
     } else if (noteTerminalFailure(this.breaker(key), { kind: "sticky_runtime_error", fingerprint: policy.fingerprint }, now)) {
-      this.notePaused(member.group_id, member.bot_id, name);
+      this.notePaused(seat.group_id, seat.bot_id, name);
     }
   }
 
-  /** A member the leader leads failed a turn on its piece of work: its leader is told (notePieceStuck). */
-  private async notePieceFailed(member: MemberRow, name: string, error: string, how: "failed" | "fenced" | "needs_user"): Promise<void> {
+  /** A member the leader leads failed a turn in one of its conversations: its leader is told (notePieceStuck). */
+  private async notePieceFailed(seat: SeatRow, name: string, error: string, how: "failed" | "fenced" | "needs_user"): Promise<void> {
     const next =
       how === "needs_user"
         ? `Its runtime stopped on an error only the user can fix: tell the user, or hand the piece to another member.`
         : `${name} won't pick it up again by itself.${how === "fenced" ? ` Its runtime stopped after the same error repeated; an @mention starts it again unless its automatic wakes are paused, which only the user can lift.` : ""} @mention ${name} here to have it carry on, or hand the piece to another member.`;
-    await this.notePieceStuck(member.group_id, member.bot_id, member.seat_task, `${name}'s turn on this piece failed${said(error)}. ${next}`);
+    await this.notePieceStuck(seat.group_id, seat.bot_id, seat.piece || null, `${name}'s turn on this piece failed${said(error)}. ${next}`);
   }
 
   /**
@@ -1533,8 +1593,8 @@ export class GroupChats {
    * (Every message names its sender in full, so nothing else needs showing again.)
    */
   onCompaction(chatId: string): void {
-    const member = this.store.memberBySeat(chatId);
-    if (member) this.store.newSeenContext(member.group_id, member.bot_id);
+    const seat = this.store.seatByChat(chatId);
+    if (seat) this.store.newSeenContext(seat.group_id, seat.bot_id, this.scopeOf(seat));
   }
 
   /**
@@ -1544,8 +1604,8 @@ export class GroupChats {
    */
   onSessionOpened(event: { chatId: string; resumed: boolean; reportsCompaction: boolean }): void {
     if (event.resumed && event.reportsCompaction) return;
-    const member = this.store.memberBySeat(event.chatId);
-    if (member) this.store.newSeenContext(member.group_id, member.bot_id);
+    const seat = this.store.seatByChat(event.chatId);
+    if (seat) this.store.newSeenContext(seat.group_id, seat.bot_id, this.scopeOf(seat));
   }
 
   /**
@@ -1555,20 +1615,21 @@ export class GroupChats {
    * tried again. A new seat that couldn't be created is handled where it was started (pump).
    */
   onStartFailed(event: { chatId: string; error: string }): void {
-    const member = this.store.memberBySeat(event.chatId);
-    if (!member) return;
-    const told = this.store.retellUntaken(member.group_id, member.bot_id);
+    const seat = this.store.seatByChat(event.chatId);
+    if (!seat) return;
+    this.release(seat);
+    const told = this.store.retellUntaken(seat.group_id, seat.bot_id, this.scopeOf(seat));
     // The backoff is in place before anything else looks at the seat; the note follows.
-    const noted = this.startFailed(member.group_id, member.bot_id, event.error, told);
-    void this.host.bot(member.bot_id).then((bot) => this.noteStartFailure(member.group_id, member.bot_id, bot?.name ?? "A bot", event.error, noted, false, member.seat_task));
-    this.changed(member.group_id);
+    const noted = this.startFailed(seat.group_id, seat.bot_id, event.error, told);
+    void this.host.bot(seat.bot_id).then((bot) => this.noteStartFailure(seat.group_id, seat.bot_id, bot?.name ?? "A bot", event.error, noted, false, seat.piece || null));
+    this.changed(seat.group_id);
   }
 
   /** A seat's runtime started (its first runtime event): the spawn-fail backoff is over, and so is a run of spawn errors. */
   onStartReady(event: { chatId: string }): void {
-    const member = this.store.memberBySeat(event.chatId);
-    if (!member) return;
-    const key = this.key(member.group_id, member.bot_id);
+    const seat = this.store.seatByChat(event.chatId);
+    if (!seat) return;
+    const key = this.key(seat.group_id, seat.bot_id);
     const spawn = this.spawnBackoffs.get(key);
     if (spawn?.timer) clearTimeout(spawn.timer);
     this.spawnBackoffs.delete(key);
@@ -1578,11 +1639,11 @@ export class GroupChats {
 
   /** A seat's stored session wasn't resumed (its compaction kept failing) and a new one started: the group hears why. */
   onSessionReset(event: { chatId: string; failures: number }): void {
-    const member = this.store.memberBySeat(event.chatId);
-    if (!member) return;
-    void this.host.bot(member.bot_id).then((bot) => {
+    const seat = this.store.seatByChat(event.chatId);
+    if (!seat) return;
+    void this.host.bot(seat.bot_id).then((bot) => {
       const name = bot?.name ?? "A bot";
-      this.note(member.group_id, `${name}'s session failed context compaction ${event.failures} times in a row, so it started a new session; it doesn't have the conversation from before.`, "seat.turn_failed", member.bot_id);
+      this.note(seat.group_id, `${name}'s session failed context compaction ${event.failures} times in a row, so it started a new session; it doesn't have the conversation from before.`, "seat.turn_failed", seat.bot_id);
     });
   }
 
@@ -1596,9 +1657,9 @@ export class GroupChats {
     const groupId = event.agent.labels?.[GROUP_LABEL];
     const questions = groupId ? groupQuestion(event.request) : null;
     if (!groupId || !questions) return;
-    const member = this.store.memberBySeat(event.agent.id);
-    if (!member?.active || member.group_id !== groupId) return;
-    const bot = await this.host.bot(member.bot_id);
+    const seat = this.store.seatByChat(event.agent.id);
+    if (!seat || seat.group_id !== groupId || !this.store.member(groupId, seat.bot_id)?.active) return;
+    const bot = await this.host.bot(seat.bot_id);
     if (!bot || !this.store.group(groupId)) return;
     const question: GroupQuestion = { chatId: event.agent.id, requestId: event.request.id, input: event.request.input ?? {}, status: "pending", answers: null, settledAt: null };
     this.store.append(groupId, { kind: "bot", botId: bot.id, name: bot.name }, { text: questionText(questions), subtype: "bot.question", causalActor: bot.id, question });
@@ -1634,18 +1695,24 @@ export class GroupChats {
   }
 
   onRemoved(chatId: string): void {
-    const member = this.store.memberBySeat(chatId);
-    if (!member) return;
-    this.store.setSeat(member.group_id, member.bot_id, null);
-    // Delivery backoff and waiting notices go with the process.
-    this.clearBackoff(this.key(member.group_id, member.bot_id));
-    this.clearNotice(this.key(member.group_id, member.bot_id));
+    const seat = this.store.seatByChat(chatId);
+    if (!seat) return;
+    this.store.setSeat(seat.group_id, seat.bot_id, seat.piece, null);
+    this.release(seat);
+    // Its waiting notice goes with the process, and so does the delivery backoff once no seat is left.
+    this.clearNotice(this.seatKey(seat.group_id, seat.bot_id, seat.piece));
+    if (this.store.seats(seat.group_id, seat.bot_id).length === 0) this.clearBackoff(this.key(seat.group_id, seat.bot_id));
   }
 
   // ---------------------------------------------------------------- waits, fences and restarts
 
   private key(groupId: string, botId: string): string {
     return `${groupId}:${botId}`;
+  }
+
+  /** One seat's own wait (its busy notice): the member's key and the conversation it's for. */
+  private seatKey(groupId: string, botId: string, piece: number): string {
+    return `${this.key(groupId, botId)}#${piece}`;
   }
 
   /**
@@ -1701,7 +1768,7 @@ export class GroupChats {
   private stop(key: string): void {
     this.stopped.add(key);
     this.clearBackoff(key);
-    this.clearNotice(key);
+    this.clearNotices(key);
   }
 
   private breaker(key: string): TerminalBreaker {
@@ -1860,8 +1927,9 @@ export class GroupChats {
   /** A member left (or its group was deleted): nothing of its seat's waits stays. */
   private forgetSeat(groupId: string, botId: string): void {
     const key = this.key(groupId, botId);
+    this.engaged.delete(key);
     this.clearBackoff(key);
-    this.clearNotice(key);
+    this.clearNotices(key);
     const spawn = this.spawnBackoffs.get(key);
     if (spawn?.timer) clearTimeout(spawn.timer);
     this.spawnBackoffs.delete(key);
@@ -1874,12 +1942,12 @@ export class GroupChats {
   }
 
   /** A busy seat's notice goes out after `delay`, carrying whatever came in by then. */
-  private armNotice(groupId: string, botId: string, delay: number): void {
-    const key = this.key(groupId, botId);
+  private armNotice(groupId: string, botId: string, piece: number, delay: number): void {
+    const key = this.seatKey(groupId, botId, piece);
     if (this.noticeTimers.has(key) || this.closed) return;
     const timer = setTimeout(() => {
       this.noticeTimers.delete(key);
-      void this.serial(groupId, () => this.pump(groupId, botId, true));
+      void this.serial(groupId, () => this.pump(groupId, botId, piece));
     }, delay);
     timer.unref?.();
     this.noticeTimers.set(key, timer);
@@ -1891,17 +1959,23 @@ export class GroupChats {
     this.noticeTimers.delete(key);
   }
 
+  /** Every seat's waiting notice of a member (`key`). */
+  private clearNotices(key: string): void {
+    for (const seatKey of [...this.noticeTimers.keys()]) if (seatKey.startsWith(`${key}#`)) this.clearNotice(seatKey);
+  }
+
   // ---------------------------------------------------------------- delivery
 
   /**
    * Posts, then says which @mentions reached nobody: a bot of the
    * user's outside the group, or a name that's no bot's.
    */
-  private async post(bot: Bot, groupId: string, conv: number, text: string, replyTo: number | null, idempotencyKey: string | null, members: readonly Member[], files: readonly string[] = []): Promise<string> {
+  private async post(bot: Bot, groupId: string, conv: number, text: string, replyTo: number | null, idempotencyKey: string | null, members: readonly Member[], files: readonly string[] = [], fromPiece: number | null = null): Promise<string> {
     const mentions = parseMentions(text, members, await this.outsiders(groupId));
     // The files are kept as they are now, with the group's other attachments.
     const attachments = await this.keepBotFiles(groupId, files);
-    const { message, duplicate, woken } = this.store.append(groupId, { kind: "bot", botId: bot.id, name: bot.name }, { text, replyTo, thread: conv || null, idempotencyKey, attachments, ...this.mentionFields(mentions) });
+    // `fromPiece`: the led seat it comes from, which a request's answers come back to.
+    const { message, duplicate, woken } = this.store.append(groupId, { kind: "bot", botId: bot.id, name: bot.name }, { text, replyTo, thread: conv || null, idempotencyKey, attachments, fromPiece, ...this.mentionFields(mentions) });
     this.store.dropDraft(groupId, bot.id, conv);
     if (duplicate) {
       await Promise.all(attachments.map((file) => rm(file.path, { force: true })));
@@ -1913,24 +1987,52 @@ export class GroupChats {
     return `Sent as #${message.seq}${conv ? ` in thread #${conv}` : ""}${attached}.${undelivered ? `\n\n${undelivered}` : ""}`;
   }
 
+  /**
+   * A led member's seat speaks in its own conversations (the piece of `chatId`: its thread, and
+   * the threads it spoke in from there), comes to another member's thread to ask something there,
+   * or starts a request at the top level with an @mention of whom it's for. What's said in a thread
+   * one of its other seats has goes there. Null when the post may go ahead.
+   */
+  private async outsideSession(bot: Bot, groupId: string, conv: number, text: string, members: readonly Member[], chatId?: string): Promise<string | null> {
+    const piece = this.sessionPiece(groupId, bot.id, chatId);
+    if (!piece) return null;
+    // Its own conversation, or a thread it comes to from this seat: the answers there come back to it.
+    if (conv && (this.seatPiece(groupId, bot.id, { seq: conv, thread: conv }) === piece || this.joinable(groupId, bot.id, conv))) return null;
+    if (conv) return `Not sent: this session is for #${piece}, and #${conv} has a session of its own. Post in #${piece}'s thread (thread: ${piece}), or start a new top-level message @mentioning the member you need.`;
+    if (parseMentions(text, members, await this.outsiders(groupId)).botIds.some((id) => id !== bot.id)) return null;
+    return `Not sent: at the top level you only start a request to another member, so @mention whom it's for. To answer or report, post in #${piece}'s thread (thread: ${piece}).`;
+  }
+
+  /** The seat of led member `botId` a message is for (pieceOf, with the seat it last spoke from in the thread). */
+  private seatPiece(groupId: string, botId: string, message: Pick<GroupMessage, "seq" | "thread">): number {
+    return pieceOf(message, message.thread ? this.store.spokeFrom(groupId, botId, message.thread) : null);
+  }
+
+  /**
+   * A thread a led member may come to from one of its seats, to ask something there: it has no
+   * seat of its own for it and hasn't spoken there yet, and its top message isn't addressed to it
+   * (that would be one of its own pieces, waiting for its seat).
+   */
+  private joinable(groupId: string, botId: string, thread: number): boolean {
+    if (this.store.seat(groupId, botId, thread) || this.store.spokeFrom(groupId, botId, thread) !== null) return false;
+    const top = this.store.messageAt(groupId, thread);
+    return !!top && !top.mentions.includes(botId);
+  }
+
+  /** The conversation a led member's calling seat is for, from its chat's label; null for any other caller. */
+  private sessionPiece(groupId: string, botId: string, chatId?: string): number | null {
+    if (!chatId || !this.ledBy(groupId, botId)) return null;
+    const chat = this.host.chats.get(chatId);
+    if (chat?.labels[GROUP_LABEL] !== groupId) return null;
+    const piece = Number(chat.labels[GROUP_PIECE_LABEL]);
+    return Number.isInteger(piece) && piece > 0 ? piece : null;
+  }
+
   /** In a group with a leader, a member's @everyone, which reaches only the leader: members ask each other by name. */
   private async ledMentions(bot: Bot, groupId: string, mentions: Mentions): Promise<{ led?: { leader: string } }> {
     const leaderId = this.store.leader(groupId);
     if (!leaderId || leaderId === bot.id || !mentions.everyone) return {};
     return { led: { leader: (await this.allBots()).get(leaderId)?.name ?? "the leader" } };
-  }
-
-  /**
-   * The threads among a led member's pending messages that are its pieces of work: their top
-   * message is work the leader or the user handed it (workOf). Other threads are another member's
-   * pieces, where it was asked something.
-   */
-  private piecesOf(groupId: string, leaderId: string, botId: string, pending: readonly PendingMessage[]): Set<number> {
-    const threads = [...new Set(pending.flatMap((entry) => (entry.message.thread ? [entry.message.thread] : [])))];
-    return new Set(threads.filter((thread) => {
-      const top = this.store.messageAt(groupId, thread);
-      return !!top && workOf(leaderId, botId, top) === top.seq;
-    }));
   }
 
   /** What a message's @mentions add to it in the store: the members, @everyone, and each token as written. */
@@ -1990,12 +2092,16 @@ export class GroupChats {
    * and a renewed seat with a briefing. A notice goes out only when something in the inbox hasn't
    * been in one yet (each message contributes to one notice).
    *
+   * A member the leader leads has a seat for each conversation it's brought into (pieceOf): each
+   * seat is told about its own conversation, with its messages in full, and the seats run side by
+   * side, so nothing waits for another conversation's turn to end.
+   *
    * It waits instead while its runtime is stopped or its seat stopped starting (until a wake starts
    * it again), during a delivery or spawn-fail backoff (the wait's end looks again), and for a busy
-   * seat until BUSY_NOTICE_DELAY_MS has passed (`flush`: that wait is over), so a burst is one
-   * notice.
+   * seat until BUSY_NOTICE_DELAY_MS has passed (`flush`: the seat whose wait is over), so a burst is
+   * one notice.
    */
-  private async pump(groupId: string, botId: string, flush = false): Promise<void> {
+  private async pump(groupId: string, botId: string, flush: number | null = null): Promise<void> {
     const group = this.store.group(groupId);
     const member = this.store.member(groupId, botId);
     if (!group || !member?.active) return;
@@ -2005,15 +2111,74 @@ export class GroupChats {
     // Its fired reminders whose wake hasn't reached it: they go in the same notice.
     const reminders = this.store.pendingReminderWakes(groupId, botId);
     if (all.length === 0 && reminders.length === 0) return;
-    let seat = member.seat_chat_id ? this.host.chats.get(member.seat_chat_id) : null;
+    if (!this.ledBy(groupId, botId)) return this.pumpSeat(group, bot, false, 0, all, reminders, flush === 0);
+    // A member the leader leads has a seat for each conversation it's in (contextOf) and works in
+    // one at a time: while one runs, what's for the others waits for its turn to end.
+    const seats = this.store.seats(groupId, botId).flatMap((row) => {
+      const chat = this.host.chats.get(row.chat_id);
+      return chat && !chat.archivedAt ? [{ piece: row.piece, chat }] : [];
+    });
+    const running = this.engaged.get(this.key(groupId, botId)) ?? seats.find((seat) => isBusy(seat.chat.status))?.piece ?? null;
+    // Where what isn't addressed to it goes (@everyone, a note): the seat that runs, else the one it used last.
+    const current = running ?? seats.sort((a, b) => Date.parse(b.chat.updatedAt) - Date.parse(a.chat.updatedAt))[0]?.piece ?? null;
+    const spoke = new Map<number, number | null>();
+    const spokeFrom = (thread: number) => (spoke.has(thread) ? spoke.get(thread)! : spoke.set(thread, this.store.spokeFrom(groupId, botId, thread)).get(thread)!);
+    const hasSeat = (piece: number) => seats.some((seat) => seat.piece === piece);
+    const pieces = new Map<number, { pending: typeof all; reminders: typeof reminders }>();
+    const owed = (piece: number) => {
+      let entry = pieces.get(piece);
+      if (!entry) pieces.set(piece, (entry = { pending: [], reminders: [] }));
+      return entry;
+    };
+    for (const entry of all) owed(this.contextOf(entry, current, spokeFrom, hasSeat)).pending.push(entry);
+    for (const reminder of reminders) {
+      const anchor = this.store.messageAt(groupId, reminder.anchor);
+      owed(anchor ? this.contextOf({ message: anchor, reason: "mention" }, current, spokeFrom, hasSeat) : (current ?? 0)).reminders.push(reminder);
+    }
+    if (running !== null) {
+      const entry = pieces.get(running);
+      if (entry) await this.pumpSeat(group, bot, true, running, entry.pending, entry.reminders, flush === running);
+      return;
+    }
+    // Idle: the conversation it was in goes on first, else the one that has waited longest.
+    const waiting = [...pieces].filter(([, entry]) => entry.reminders.length > 0 || entry.pending.some((item) => !item.noticed));
+    if (waiting.length === 0) return;
+    const since = (entry: { pending: typeof all }) => Math.min(...entry.pending.filter((item) => !item.noticed).map((item) => item.message.seq), Number.MAX_SAFE_INTEGER);
+    const [piece, entry] = waiting.find(([piece]) => piece === current) ?? waiting.sort((a, b) => since(a[1]) - since(b[1]))[0]!;
+    await this.pumpSeat(group, bot, true, piece, entry.pending, entry.reminders, flush === piece);
+  }
+
+  /**
+   * The conversation an inbox message is for, for a member the leader leads, each having its seat.
+   * What's addressed to it (an @mention, a reply, an assignment) has one of its own: a top-level
+   * message is a new piece of work; a thread message is that thread's, unless the member spoke in
+   * the thread from another of its conversations (spokeFrom: a request it started, a question it
+   * asked there), which waits for the answer. What isn't (@everyone, a note) goes with `current`,
+   * the conversation it's in.
+   */
+  private contextOf(entry: Pick<PendingMessage, "message" | "reason">, current: number | null, spokeFrom: (thread: number) => number | null, hasSeat: (piece: number) => boolean): number {
+    const { message } = entry;
+    const addressed = entry.reason === "mention" || entry.reason === "handoff" || entry.reason === "reply" || entry.reason === "assigned";
+    if (message.thread) {
+      const spoke = spokeFrom(message.thread);
+      if (spoke !== null) return spoke;
+      return addressed || hasSeat(message.thread) || current === null ? message.thread : current;
+    }
+    if (addressed && message.from.kind !== "system") return message.seq;
+    return current ?? 0;
+  }
+
+  /**
+   * One seat's part of pump: `piece` is the conversation it's for (0: a member's one seat, or a led
+   * member's seat for what isn't addressed to it), `led` whether the leader leads the member.
+   */
+  private async pumpSeat(group: GroupRow, bot: Bot, led: boolean, piece: number, pending: ReturnType<GroupStore["pending"]>, reminders: ReturnType<GroupStore["pendingReminderWakes"]>, flush: boolean): Promise<void> {
+    const groupId = group.id;
+    const botId = bot.id;
+    const row = this.store.seat(groupId, botId, piece);
+    let seat = row ? this.host.chats.get(row.chat_id) : null;
     if (seat?.archivedAt) seat = null;
     const busy = !!seat && isBusy(seat.status);
-    // A member the leader leads is told about one piece of work at a time (pieceFor).
-    const leaderId = this.store.leader(groupId);
-    const piece = leaderId && leaderId !== botId ? pieceFor(leaderId, botId, all, seat ? member.seat_task : null, this.piecesOf(groupId, leaderId, botId, all)) : null;
-    const pending = piece ? piece.now : all;
-    // Its session is for another piece: the new one waits for the turn to end, then starts a session of its own.
-    if (busy && piece?.switching) return;
     const fresh = pending.some((entry) => !entry.noticed);
     if (seat && !fresh && reminders.length === 0) return;
     const key = this.key(groupId, botId);
@@ -2038,18 +2203,10 @@ export class GroupChats {
     }
     // A busy seat's notice waits a moment, so what comes in meanwhile joins it; an idle seat starts at once.
     if (busy && !flush) {
-      this.armNotice(groupId, botId, BUSY_NOTICE_DELAY_MS);
+      this.armNotice(groupId, botId, piece, BUSY_NOTICE_DELAY_MS);
       return;
     }
-    this.clearNotice(key);
-    if (seat && piece?.switching) {
-      // Another piece of work: a fresh session, without a briefing. A piece it comes back to brings
-      // its thread along (threadJoins), since a new seat has been shown nothing.
-      await this.host.chats.archive(seat.id).catch(() => undefined);
-      this.store.setSeat(groupId, botId, null);
-      this.clearBackoff(key);
-      seat = null;
-    }
+    this.clearNotice(this.seatKey(groupId, botId, piece));
     let briefing = "";
     // A session whose compaction failed SESSION_NEEDS_RESET_THRESHOLD times in a row can't be
     // resumed: the seat starts over now, with a briefing, as a stale one does.
@@ -2058,27 +2215,30 @@ export class GroupChats {
     // The group's folder (or the bot's own) changed since the seat started: it starts over there, with a briefing.
     const folder = this.seatFolder(group, bot);
     const moved = !!seat && !busy && !reset && seat.cwd !== folder;
+    // A led seat's ledger is its own conversations'; the member's other seats keep theirs.
+    const own = led ? piece : undefined;
     if (seat && !busy && (reset || moved || this.stale(seat))) {
       // Cheaper to start over than to resume a big context whose cache has gone cold; the new
-      // seat starts with a briefing built from the old one.
+      // seat starts with a briefing built from the old one: what it takes part in, or for a led
+      // seat, its own conversation.
       const entries = this.host.chats.timeline(seat.id, { direction: "tail", limit: 500 }).entries;
       const inbox = new Set(pending.map((entry) => entry.message.seq));
-      const seen = this.store.history(groupId, botId, BRIEFING_MESSAGES).filter((message) => !inbox.has(message.seq));
+      const seen = (led && piece ? this.pieceHistory(groupId, piece) : this.store.history(groupId, botId, BRIEFING_MESSAGES)).filter((message) => !inbox.has(message.seq));
       briefing = await briefingPanel({ messages: seen, entries, cwd: seat.cwd, meId: bot.id, parents: this.parents(groupId, seen), ...(reset ? { reason: "reset" as const } : moved ? { reason: "moved" as const, folder } : {}) });
       await this.host.chats.archive(seat.id).catch(() => undefined);
-      this.store.setSeat(groupId, botId, null);
+      this.store.setSeat(groupId, botId, piece, null);
       this.clearBackoff(key);
       seat = null;
       // A fresh spawn of the same seat: a new model context, but threads it was shown stay shown.
-      this.store.newSeenContext(groupId, botId);
+      this.store.newSeenContext(groupId, botId, own);
     } else if (!seat) {
       // A new seat is a new model context: it has seen nothing yet, the briefing included.
-      this.store.resetSeen(groupId, botId);
+      this.store.resetSeen(groupId, botId, own);
     }
-    const joins = this.threadJoins(groupId, botId, pending, !!piece);
+    const joins = this.threadJoins(groupId, botId, pending, led);
     const shown = new Set(joins.flatMap((join) => [...join.recent.map((message) => message.seq), join.trigger.seq]));
-    // A led member gets its piece's messages in full, so it needn't read its inbox for them.
-    const handed = piece ? pending.filter((entry) => !shown.has(entry.message.seq)).slice(-HANDED_MAX).map((entry) => entry.message) : [];
+    // A led seat gets its conversation's messages in full, so it needn't read its inbox for them.
+    const handed = led ? pending.filter((entry) => !shown.has(entry.message.seq)).slice(-HANDED_MAX).map((entry) => entry.message) : [];
     for (const message of handed) shown.add(message.seq);
 
     const text = wakeText({
@@ -2091,8 +2251,9 @@ export class GroupChats {
       briefing,
       reminders: reminders.map((reminder) => reminderFiredText(reminder, reminder.catchup)),
       ...(handed.length ? { handed: { messages: handed, parents: this.parents(groupId, handed) } } : {}),
-      // A led member's session is for one piece: its other tasks come back with their threads.
-      owed: seat || piece ? [] : this.store.tasks(groupId, { statuses: OPEN_TASKS, assigneeId: botId }),
+      ...(led && piece ? { session: piece } : {}),
+      // A led seat's session is for one conversation: the member's tasks come back with their own.
+      owed: seat || led ? [] : this.store.tasks(groupId, { statuses: OPEN_TASKS, assigneeId: botId }),
     });
     const files = await this.deliveryFiles([...joins.flatMap((join) => [join.parent, ...join.recent, join.trigger]), ...handed], botId);
     const clientMessageId = randomUUID();
@@ -2104,23 +2265,27 @@ export class GroupChats {
         botId,
         joins: joins.map((join) => ({ thread: join.thread, parent: join.parent.seq, upTo: Math.max(join.trigger.seq, ...join.recent.map((message) => message.seq)) })),
         seen: handed.map((message) => ({ seq: message.seq, thread: message.thread })),
-        ...(piece?.work !== null && piece?.work !== undefined ? { piece: piece.work } : {}),
+        ...(led && piece ? { piece } : {}),
       });
     }
+    // Its turn is on this seat from now: its other seats wait until this one settles (onAgent). Set
+    // before the send, which a quick turn can outlast.
+    if (led) this.engaged.set(key, piece);
     try {
       if (!seat) {
         const chatId = await this.startSeat(bot, {
           prompt: text,
-          title: `Group · ${group.name}`,
+          title: piece ? `Group · ${group.name} · #${piece}` : `Group · ${group.name}`,
           cwd: folder,
           extraFolders: this.extraFoldersOf(this.store.group(groupId) ?? group),
-          labels: { [GROUP_LABEL]: groupId },
+          // The piece lets the seat's tools know which conversation they speak for (sessionPiece).
+          labels: { [GROUP_LABEL]: groupId, [GROUP_PIECE_LABEL]: String(piece), [BOT_LABEL]: botId },
           group: { id: groupId, name: group.name },
           clientMessageId,
           ...(files.images.length ? { images: files.images } : {}),
           ...(files.attachments.length ? { attachments: files.attachments } : {}),
         });
-        this.store.setSeat(groupId, botId, chatId);
+        this.store.setSeat(groupId, botId, piece, chatId);
         // The group's folders may have changed while the seat was starting, before it had a chat to copy them to.
         const current = this.store.group(groupId);
         if (current) await this.host.chats.setExtraFolders(chatId, this.extraFoldersOf(current)).catch(() => undefined);
@@ -2143,21 +2308,27 @@ export class GroupChats {
       }
       this.store.markNoticed(groupId, botId, told);
       this.store.markRemindersWoken(reminders.map((reminder) => reminder.id));
-      if (piece && piece.work !== null) this.store.setSeatTask(groupId, botId, piece.work);
     } catch (error) {
       this.deliveries.delete(clientMessageId);
+      if (!busy && this.engaged.get(key) === piece) this.engaged.delete(key);
       const detail = error instanceof Error ? error.message : String(error);
       if (!seat) {
         // A new seat that couldn't start. (A seat that exists and couldn't start is told by
         // ChatService's start.failed: onStartFailed.)
-        this.noteStartFailure(groupId, botId, bot.name, detail, this.startFailed(groupId, botId, detail, told), true, piece?.work ?? null);
+        this.noteStartFailure(groupId, botId, bot.name, detail, this.startFailed(groupId, botId, detail, told), true, led && piece ? piece : null);
       } else if (busy) {
         // A busy seat that didn't take its notice is tried again;
         // an idle one that couldn't take it now (compacting, say) gets it when its turn ends.
-        this.armNotice(groupId, botId, BUSY_NOTICE_RETRY_MS);
+        this.armNotice(groupId, botId, piece, BUSY_NOTICE_RETRY_MS);
       }
     }
     this.changed(groupId);
+  }
+
+  /** A led seat's conversation, for its briefing: the top message and the thread's latest replies. */
+  private pieceHistory(groupId: string, piece: number): GroupMessage[] {
+    const page = this.store.threadPage(groupId, piece, { limit: BRIEFING_MESSAGES - 1 });
+    return [...(page.parent ? [page.parent] : []), ...page.messages];
   }
 
   /**
@@ -2171,9 +2342,10 @@ export class GroupChats {
   private async catchUp(groupId: string, botId: string): Promise<void> {
     const group = this.store.group(groupId);
     const member = this.store.member(groupId, botId);
-    if (!group || !member?.active || !member.seat_chat_id) return;
+    const row = this.store.seat(groupId, botId, 0);
+    if (!group || !member?.active || !row) return;
     const bot = await this.host.bot(botId);
-    const seat = this.host.chats.get(member.seat_chat_id);
+    const seat = this.host.chats.get(row.chat_id);
     if (!bot || bot.archived || !seat || seat.archivedAt) return;
     const batch = this.store.catchUpBatch(groupId, botId);
     if (batch.places.length === 0) return;
@@ -2216,8 +2388,9 @@ export class GroupChats {
     const triggers = new Map<number, GroupMessage>();
     for (const entry of pending) {
       const thread = entry.message.thread;
-      // Decided by where it was shown up to, which a compaction keeps. `replies`: a reply to it brings the thread too (a led member's follow-up).
-      const pulled = entry.reason === "mention" || entry.reason === "handoff" || (replies && entry.reason === "reply");
+      // Decided by where it was shown up to, which a compaction keeps. `replies`: a reply to it, or a
+      // task assigned to it there, brings the thread too (a led member's seat for that thread).
+      const pulled = entry.reason === "mention" || entry.reason === "handoff" || (replies && (entry.reason === "reply" || entry.reason === "assigned"));
       if (thread && pulled && this.store.visibleBoundary(groupId, botId, thread) === null) triggers.set(thread, entry.message);
     }
     return [...triggers].flatMap(([thread, trigger]) => {
@@ -2304,12 +2477,13 @@ export class GroupChats {
 
   /**
    * The files a bot attaches to a post, checked before it's held or sent: paths on this computer
-   * (a relative one is in its seat's folder), each a file within the composer's limits.
+   * (a relative one is in the folder of the seat that posts, `chatId`, or of its first seat), each
+   * a file within the composer's limits.
    */
-  private async botFiles(groupId: string, botId: string, paths: readonly string[]): Promise<string[]> {
+  private async botFiles(groupId: string, botId: string, paths: readonly string[], chatId?: string): Promise<string[]> {
     if (paths.length === 0) return [];
     if (paths.length > BOT_FILES_MAX) throw new RequestError(`Attach at most ${BOT_FILES_MAX} files to one message.`);
-    const seat = this.store.member(groupId, botId)?.seat_chat_id;
+    const seat = chatId ?? this.store.seats(groupId, botId)[0]?.chat_id;
     const cwd = (seat ? this.host.chats.get(seat)?.cwd : null) ?? homedir();
     const checked: string[] = [];
     for (const given of paths) {

@@ -33,7 +33,7 @@ export const groupSend = defineTool({
   led: true,
   async run({ text, files, reply_to, thread, idempotency_key }, caller) {
     const { groupId, groups } = seatOf(caller);
-    return groups.send(caller.bot, groupId, { text, replyTo: reply_to ?? null, thread: thread ?? null, idempotencyKey: idempotency_key ?? null, files: files ?? [] });
+    return groups.send(caller.bot, groupId, { text, replyTo: reply_to ?? null, thread: thread ?? null, idempotencyKey: idempotency_key ?? null, files: files ?? [] }, caller.agentId);
   },
 });
 
@@ -49,7 +49,7 @@ export const groupSendDraft = defineTool({
   led: true,
   async run({ thread, anyway, discard }, caller) {
     const { groupId, groups } = seatOf(caller);
-    return groups.sendDraft(caller.bot, groupId, { thread: thread ?? null, anyway: anyway ?? false, discard: discard ?? false });
+    return groups.sendDraft(caller.bot, groupId, { thread: thread ?? null, anyway: anyway ?? false, discard: discard ?? false }, caller.agentId);
   },
 });
 
@@ -69,7 +69,7 @@ export const groupRead = defineTool({
   led: true,
   async run({ unread, thread, top_level, before, around, limit }, caller) {
     const { groupId, groups } = seatOf(caller);
-    return groups.read(caller.bot, groupId, { unread: unread ?? false, thread: thread ?? null, topLevel: top_level ?? false, before: before ?? null, around: around ?? null, ...(limit ? { limit } : {}) });
+    return groups.read(caller.bot, groupId, { unread: unread ?? false, thread: thread ?? null, topLevel: top_level ?? false, before: before ?? null, around: around ?? null, ...(limit ? { limit } : {}) }, caller.agentId);
   },
 });
 
