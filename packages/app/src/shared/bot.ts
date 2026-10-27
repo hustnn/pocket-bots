@@ -261,9 +261,33 @@ const PresetSchema = z.object({
 });
 export type Preset = z.infer<typeof PresetSchema>;
 
+export const TEAM_INSTRUCTIONS_MAX = 20_000;
+
 /**
- * The document pocket-bots keeps for bots and the library (bots.json). Teams
- * older files kept (`groups`) are dropped on read; group chats live in their own files.
+ * A team: two to six bots that work together, one of them leading, with the user's standing
+ * instructions for all of them. Each task the user gives a team runs in a session of its own (a
+ * group chat with the team's id), which keeps the members, leader, instructions and folders it
+ * started with: changing the team changes only the sessions started after.
+ */
+export const TeamSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  memberIds: z.array(z.string()).default([]),
+  /** The member that plans and hands out the work. */
+  leaderId: z.string(),
+  /** Standing instructions every member's seat gets, such as how to check work or what to deliver. */
+  instructions: z.string().default(""),
+  /** The folder a session works in, like a repo; null: each bot's own. A session may start elsewhere. */
+  cwd: z.string().nullable().default(null),
+  extraFolders: z.array(z.string()).default([]),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type Team = z.infer<typeof TeamSchema>;
+
+/**
+ * The document pocket-bots keeps for bots, teams and the library (bots.json). Older files'
+ * `groups` (an earlier kind of team) are dropped on read; group chats live in their own files.
  */
 export const STORE_VERSION = 3;
 export const StoreSchema = z.object({
@@ -273,6 +297,7 @@ export const StoreSchema = z.object({
   library: LibrarySchema.optional(),
   defaults: BotDefaultsSchema.optional(),
   presets: z.array(PresetSchema).optional(),
+  teams: z.array(TeamSchema).default([]),
 });
 export type BotSettingsValues = z.infer<typeof StoreSchema>;
 
@@ -300,6 +325,10 @@ export function pushHistory(history: readonly HistoryEntry[], previous: Bot, now
 
 export function newBotId(): string {
   return "bot-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
+export function newTeamId(): string {
+  return "team-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 }
 
 function newPresetId(): string {

@@ -164,22 +164,30 @@ describe("a group with a leader", () => {
     expect(pendingSeqs("rex")).toEqual([3, 4]);
   });
 
-  it("doesn't let a member hand work to another member: its @mention, reply or @everyone reaches only the leader", () => {
-    const ask = store.append(G, bot("cody"), { text: "@Rex search for the theme files", mentions: ["rex"] });
-    expect(records(ask.message.seq).map(([id]) => id)).toEqual(["ada", "cody", "user"]);
-    expect(ask.woken).toEqual(["ada"]);
-    const rexSaid = store.append(G, bot("rex"), { text: "@Ada found them", mentions: ["ada"] }).message.seq;
-    expect(records(rexSaid).find(([id]) => id === "ada")).toEqual(["ada", true, "handoff"]);
-    expect(store.append(G, bot("cody"), { text: "nice", replyTo: rexSaid }).woken).toEqual(["ada"]);
+  it("lets a member ask another directly without waking the leader; @everyone and assignments don't hand anyone work", () => {
+    const ask = store.append(G, bot("cody"), { text: "@Rex where are the theme files?", mentions: ["rex"] });
+    expect(records(ask.message.seq)).toEqual([
+      ["ada", true, null],
+      ["cody", false, null],
+      ["rex", true, "handoff"],
+      ["user", true, null],
+    ]);
+    expect(ask.woken).toEqual(["rex"]);
+    const rexSaid = store.append(G, bot("rex"), { text: "@Cody in src/theme", mentions: ["cody"] });
+    expect(rexSaid.woken).toEqual(["cody"]);
+    expect(store.append(G, bot("cody"), { text: "which file?", replyTo: rexSaid.message.seq }).woken).toEqual(["rex"]);
+    // Aimed at the leader, a member's message wakes it.
+    expect(store.append(G, bot("rex"), { text: "@Ada found them", mentions: ["ada"] }).woken).toEqual(["ada"]);
     expect(store.append(G, bot("cody"), { text: "@everyone ship it", everyone: true }).woken).toEqual(["ada"]);
-    // A task one member assigns another doesn't reach it; the leader's does.
-    expect(store.append(G, system, { text: "📌 Assigned @Rex to task #1", subtype: "task.assignment_receipt", causalActor: "cody", mentions: ["rex"] }).woken).toEqual(["ada"]);
+    // A task one member assigns another reaches neither; the leader's reaches the member.
+    expect(store.append(G, system, { text: "📌 Assigned @Rex to task #1", subtype: "task.assignment_receipt", causalActor: "cody", mentions: ["rex"] }).woken).toEqual([]);
     expect(store.append(G, system, { text: "📌 Assigned @Rex to task #1", subtype: "task.assignment_receipt", causalActor: "ada", mentions: ["rex"] }).woken).toEqual(["rex"]);
   });
 
-  it("keeps a member in the threads it follows without waking it for what isn't aimed at it", () => {
+  it("keeps the members' talk in a piece's thread from waking the leader or anyone it isn't aimed at", () => {
     const top = store.append(G, bot("ada"), { text: "@Cody build it; @Rex find the files", mentions: ["cody", "rex"] }).message.seq;
-    store.append(G, bot("cody"), { text: "starting", thread: top });
+    // The leader follows its piece's thread, but a member's progress there doesn't wake it.
+    expect(store.append(G, bot("cody"), { text: "starting", thread: top }).woken).toEqual([]);
     const rexReport = store.append(G, bot("rex"), { text: "@Ada the files are in src/theme", thread: top, mentions: ["ada"] });
     // Cody follows the thread (it posted there), so it has the record, but isn't woken by Rex.
     expect(records(rexReport.message.seq)).toEqual([
@@ -188,12 +196,13 @@ describe("a group with a leader", () => {
       ["rex", false, null],
     ]);
     expect(rexReport.woken).toEqual(["ada"]);
-    // The leader's answer to Cody there wakes it; a member's @mention of another doesn't, and doesn't make it follow.
     expect(store.append(G, bot("ada"), { text: "@Cody use src/theme", thread: top, mentions: ["cody"] }).woken).toEqual(["cody"]);
-    const followers = store.followers(G, top);
+    // A member's question to another wakes only that one, and brings it back into the thread.
     store.unfollow(G, top, "rex");
-    expect(store.append(G, bot("cody"), { text: "@Rex which file?", thread: top, mentions: ["rex"] }).woken).toEqual(["ada"]);
-    expect(store.followers(G, top).sort()).toEqual(followers.filter((id) => id !== "rex").sort());
+    expect(store.append(G, bot("cody"), { text: "@Rex which file?", thread: top, mentions: ["rex"] }).woken).toEqual(["rex"]);
+    expect(store.followers(G, top)).toContain("rex");
+    expect(store.append(G, bot("rex"), { text: "@Cody src/theme/dark.css", thread: top, mentions: ["cody"] }).woken).toEqual(["cody"]);
+    expect(store.append(G, bot("cody"), { text: "@Ada done: dark mode in src/theme/dark.css, npm test passes", thread: top, mentions: ["ada"] }).woken).toEqual(["ada"]);
   });
 
   it("leads only while the leader is a member, and stops when it's cleared", () => {
@@ -204,6 +213,59 @@ describe("a group with a leader", () => {
     expect(store.leader(G)).toBe("ada");
     store.updateGroup(G, { leaderId: null });
     expect(store.append(G, bot("cody"), { text: "@Rex look", mentions: ["rex"] }).woken).toEqual(["ada", "rex"]);
+  });
+});
+
+describe("a led member's seats", () => {
+  beforeEach(() => store.updateGroup(G, { leaderId: "ada" }));
+
+  it("keeps a seat per conversation, and scopes what a seat was told and saw to its own conversations", () => {
+    const p = store.append(G, bot("ada"), { text: "@Cody piece one", mentions: ["cody"] }).message.seq;
+    const q = store.append(G, bot("ada"), { text: "@Cody piece two", mentions: ["cody"] }).message.seq;
+    store.setSeat(G, "cody", p, "chat-p");
+    store.setSeat(G, "cody", q, "chat-q");
+    expect(store.seats(G, "cody").map((seat) => [seat.piece, seat.chat_id])).toEqual([
+      [p, "chat-p"],
+      [q, "chat-q"],
+    ]);
+    expect(store.seatByChat("chat-q")).toMatchObject({ bot_id: "cody", piece: q });
+    // From its seat for piece one, Cody asks Rex at the top level; Rex answers in that request's thread.
+    const request = store.append(G, bot("cody"), { text: "@Rex find the theme files", mentions: ["rex"], fromPiece: p }).message;
+    expect(request.fromPiece).toBe(p);
+    expect(store.seatConvs(G, "cody", p)).toEqual([p, request.seq]);
+    const answer = store.append(G, bot("rex"), { text: "@Cody src/theme.ts", mentions: ["cody"], thread: request.seq }).message.seq;
+    // A failed turn of the seat for piece one fails what it was told: its piece and its request's answer.
+    store.markNoticed(G, "cody", [p, q, answer]);
+    store.markDeliveryFailed(G, "cody", "runtime_error", undefined, p);
+    const failures = db.all<{ seq: number; delivery_failure: string | null }>("SELECT seq, delivery_failure FROM group_inbox WHERE group_id = ? AND receiver_id = 'cody' AND wake_reason IS NOT NULL ORDER BY seq", G);
+    expect(failures.map((row) => [Number(row.seq), row.delivery_failure])).toEqual([
+      [p, "runtime_error"],
+      [q, null],
+      [answer, "runtime_error"],
+    ]);
+    // A seat that didn't start is told again only its own.
+    expect(store.retellUntaken(G, "cody", q)).toEqual([q]);
+    // A seat's new model context leaves the others' ledgers alone; its own go.
+    store.recordSeen(G, "cody", request.seq, { exact: [answer] });
+    store.newSeenContext(G, "cody", q);
+    expect(isSeen(store.ledger(G, "cody", request.seq), answer)).toBe(true);
+    store.resetSeen(G, "cody", p);
+    expect(isSeen(store.ledger(G, "cody", request.seq), answer)).toBe(false);
+    store.dropSeats(G, "cody");
+    expect(store.seats(G, "cody")).toEqual([]);
+  });
+
+  it("moves the seats stored before migration 22 into their table, a led member's under its piece", () => {
+    db.run("UPDATE group_members SET seat_chat_id = 'chat-a' WHERE group_id = ? AND bot_id = 'ada'", G);
+    db.run("UPDATE group_members SET seat_chat_id = 'chat-c', seat_task = 7 WHERE group_id = ? AND bot_id = 'cody'", G);
+    db.raw.exec("DROP TABLE group_seats; ALTER TABLE group_messages DROP COLUMN from_piece; UPDATE schema_version SET version = 21");
+    db.close();
+    db = new Db(join(dir, "bots.sqlite"));
+    store = new GroupStore(db);
+    expect(store.seats(G).map((seat) => [seat.bot_id, seat.piece, seat.chat_id])).toEqual([
+      ["ada", 0, "chat-a"],
+      ["cody", 7, "chat-c"],
+    ]);
   });
 });
 
@@ -566,8 +628,8 @@ describe("task statuses", () => {
     store.claimTask(G, { seq: second.seq }, cody);
     db.run("UPDATE group_tasks SET status = 'in_review', completed_at = NULL, updated_at = '2026-10-01T00:00:00.000Z' WHERE number = ?", second.seq);
     db.run("INSERT INTO group_task_events (group_id, number, event, actor_kind, actor_id, actor_name, payload, created_at) VALUES (?, ?, 'status_changed', 'bot', 'cody', 'Cody', ?, '2026-10-01T00:00:00.000Z')", G, second.seq, JSON.stringify({ from: "in_progress", to: "in_review", forced: false }));
-    // (Migration 20 is undone too, or it would add its columns again.)
-    db.raw.exec("ALTER TABLE chats DROP COLUMN extra_folders; ALTER TABLE chats DROP COLUMN folders_told; ALTER TABLE groups DROP COLUMN extra_folders");
+    // (Migrations 20 to 22 are undone too, or they would add their columns and table again.)
+    db.raw.exec("ALTER TABLE chats DROP COLUMN extra_folders; ALTER TABLE chats DROP COLUMN folders_told; ALTER TABLE groups DROP COLUMN extra_folders; ALTER TABLE groups DROP COLUMN team_id; ALTER TABLE groups DROP COLUMN instructions; DROP TABLE group_seats; ALTER TABLE group_messages DROP COLUMN from_piece");
     db.run("UPDATE schema_version SET version = 18");
     db.close();
     db = new Db(join(dir, "bots.sqlite"));

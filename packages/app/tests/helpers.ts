@@ -40,8 +40,15 @@ export type FakeHost = PocketHost & { values(): Promise<BotSettingsValues>; atta
 
 /** The real PocketHost over an in-memory bots document; `attach` gives it a (fake) chat service. */
 export function fakeHost(bots: Bot[], library: Library = EMPTY_LIBRARY): FakeHost {
-  const values: BotSettingsValues = { bots, history: [], library };
-  const store = { values: async () => values };
+  const values: BotSettingsValues = { bots, history: [], library, teams: [] };
+  // `update` changes the document in place, like Store.update without the file.
+  const store = {
+    values: async () => values,
+    update: async (change: (current: BotSettingsValues) => BotSettingsValues | Promise<BotSettingsValues>) => {
+      Object.assign(values, await change(structuredClone(values)));
+      return { values, revision: "test" };
+    },
+  };
   const host = new PocketHost(store as never, new Map()) as FakeHost;
   host.attach = (chats: unknown) => {
     host.chats = chats as never;

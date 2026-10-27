@@ -6,7 +6,7 @@ import { defineTool, type ToolCaller } from "./mcp";
 // the relay knows a seat by its tools address, which names the group. Every listed tool costs
 // tokens on each of a seat's requests, so descriptions say what a call does and leave the rules
 // for when to make it to the seat's prompt (groupPrompt). A member of a group with a leader is
-// listed only the tools marked `led`: reading, claiming, reacting and reporting.
+// listed only the tools marked `led`: reading and searching, claiming, reacting and reporting.
 
 /** The group a calling chat is a seat of, and the service, or an error the bot can show. */
 function seatOf(caller: ToolCaller) {
@@ -33,7 +33,7 @@ export const groupSend = defineTool({
   led: true,
   async run({ text, files, reply_to, thread, idempotency_key }, caller) {
     const { groupId, groups } = seatOf(caller);
-    return groups.send(caller.bot, groupId, { text, replyTo: reply_to ?? null, thread: thread ?? null, idempotencyKey: idempotency_key ?? null, files: files ?? [] });
+    return groups.send(caller.bot, groupId, { text, replyTo: reply_to ?? null, thread: thread ?? null, idempotencyKey: idempotency_key ?? null, files: files ?? [] }, caller.agentId);
   },
 });
 
@@ -49,7 +49,7 @@ export const groupSendDraft = defineTool({
   led: true,
   async run({ thread, anyway, discard }, caller) {
     const { groupId, groups } = seatOf(caller);
-    return groups.sendDraft(caller.bot, groupId, { thread: thread ?? null, anyway: anyway ?? false, discard: discard ?? false });
+    return groups.sendDraft(caller.bot, groupId, { thread: thread ?? null, anyway: anyway ?? false, discard: discard ?? false }, caller.agentId);
   },
 });
 
@@ -69,7 +69,7 @@ export const groupRead = defineTool({
   led: true,
   async run({ unread, thread, top_level, before, around, limit }, caller) {
     const { groupId, groups } = seatOf(caller);
-    return groups.read(caller.bot, groupId, { unread: unread ?? false, thread: thread ?? null, topLevel: top_level ?? false, before: before ?? null, around: around ?? null, ...(limit ? { limit } : {}) });
+    return groups.read(caller.bot, groupId, { unread: unread ?? false, thread: thread ?? null, topLevel: top_level ?? false, before: before ?? null, around: around ?? null, ...(limit ? { limit } : {}) }, caller.agentId);
   },
 });
 
@@ -89,6 +89,7 @@ export const groupSearch = defineTool({
   description: "Search the group's messages for words. Results are previews: group_read around a hit for more.",
   input: z.object({ query: z.string().min(1).max(200) }),
   available: inGroup,
+  led: true,
   async run({ query }, caller) {
     const { groupId, groups } = seatOf(caller);
     return groups.search(caller.bot, groupId, query);

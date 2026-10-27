@@ -352,8 +352,10 @@ export function useGroupMessages(groupId: string, thread: number | null = null) 
     },
     [groupId, thread, scope, messages],
   );
-  return { messages, hasOlder, loadingOlder, loadOlder, reach, loading: latest.isPending, error: latest.error ? errorText(latest.error) : null, refetch: latest.refetch };
+  return { messages, hasOlder, asides: page?.asides ?? NO_MESSAGES, loadingOlder, loadOlder, reach, loading: latest.isPending, error: latest.error ? errorText(latest.error) : null, refetch: latest.refetch };
 }
+
+const NO_MESSAGES: GroupMessage[] = [];
 
 /** The bots' pending reminders in a group, refreshed with its messages. */
 export function useGroupReminders(groupId: string, enabled: boolean) {

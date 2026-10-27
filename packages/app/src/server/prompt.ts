@@ -31,6 +31,7 @@ export interface SeatGroupPrompt {
   subAgents?: boolean;
   questionTool?: string;
   lead?: GroupLead;
+  instructions?: string;
 }
 
 export interface ChatStart {
@@ -38,7 +39,7 @@ export interface ChatStart {
   message?: string;
   /**
    * The group chat this chat is the bot's seat in; `subAgents` when the bot's runtime can start sub-agents, `questionTool` its tool for asking the user,
-   * `lead` its part when the group has a leader.
+   * `lead` its part when the group has a leader, `instructions` the user's instructions for the team the group is a session of.
    */
   group?: SeatGroupPrompt;
   /** The chat's extra folders, listed in the prompt. */
@@ -52,7 +53,7 @@ export interface ChatStart {
 export async function promptContext(bot: Bot, local: boolean, library: Library, start: ChatStart = {}): Promise<PromptContext> {
   // Playbooks live in the settings, so they travel with the bot to any host.
   const playbooks = selectPlaybooks(start.message ?? "", bot.playbooks);
-  const group = start.group ? groupPrompt(start.group.name, { subAgents: start.group.subAgents ?? false, ...(start.group.questionTool ? { questionTool: start.group.questionTool } : {}), ...(start.group.lead ? { lead: start.group.lead } : {}) }) : null;
+  const group = start.group ? groupPrompt(start.group.name, { subAgents: start.group.subAgents ?? false, ...(start.group.questionTool ? { questionTool: start.group.questionTool } : {}), ...(start.group.lead ? { lead: start.group.lead } : {}), ...(start.group.instructions ? { instructions: start.group.instructions } : {}) }) : null;
   // Connected apps go through this host's relay, so bots on other hosts can't reach them.
   const folders = start.folders ?? [];
   if (!local) return { memory: "", memoryPath: null, recentWork: [], playbooks, group, skills: [], botTools: false, apps: [], folders };

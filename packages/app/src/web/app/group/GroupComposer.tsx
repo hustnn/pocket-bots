@@ -38,25 +38,34 @@ export function senderName(message: GroupMessage): string {
 /**
  * The group's composer: @ to pick a bot (or @everyone), Reply to answer one
  * message, attachments as in a bot's chat. Enter sends, Shift+Enter breaks the line.
+ * Without a group (a team's new session), `start` makes the session from the task
+ * when it's sent, and the draft is kept under `draftKey`.
  */
 export function GroupComposer({
   groupId,
+  start,
+  draftKey: newDraftKey,
+  placeholder,
   thread = null,
   members,
   replyTo,
   onCancelReply,
   onSent,
 }: {
-  groupId: string;
+  groupId: string | null;
+  /** Makes the group for a first message (its text), returning its id. */
+  start?: (task: string) => Promise<string>;
+  draftKey?: string;
+  placeholder?: string;
   /** Post in this top-level message's thread. */
   thread?: number | null;
   members: readonly Bot[];
   replyTo: GroupMessage | null;
   onCancelReply: () => void;
-  onSent: () => void;
+  onSent: (groupId: string) => void;
 }) {
   const feedback = useFeedback();
-  const draftKey = thread ? `group:${groupId}:thread:${thread}` : `group:${groupId}`;
+  const draftKey = !groupId ? (newDraftKey ?? "group:new") : thread ? `group:${groupId}:thread:${thread}` : `group:${groupId}`;
   const [text, setText] = useState(() => getDraft(draftKey)?.text ?? "");
   const [attachments, setAttachments] = useState<ComposerAttachment[]>(() => getDraft(draftKey)?.attachments ?? []);
   const [sending, setSending] = useState(false);
@@ -123,6 +132,9 @@ export function GroupComposer({
         } else if (check.kind === "text") {
           const content = await readAs(file, "text");
           setAttachments((current) => [...current, { kind: "text", id: newAttachmentId(), name: file.name, size: file.size, text: content }]);
+        } else if (!groupId) {
+          // An upload lands in the group's own folder, which a new session doesn't have yet.
+          feedback.error(`${file.name}: files like this can be attached once the session has started. Images and text files can go with the task.`);
         } else {
           const saved = await rpc(groupUploadRpc, { groupId, fileName: file.name, dataBase64: base64Of(await readAs(file, "dataUrl")) });
           setAttachments((current) => [...current, { kind: "file", id: newAttachmentId(), name: file.name, mimeType, size: saved.size, path: saved.path }]);
@@ -142,9 +154,11 @@ export function GroupComposer({
     setQuery(null);
     setSending(true);
     try {
-      await rpc(groupSendRpc, { groupId, text: kept.text.trim(), replyTo: replyTo?.seq ?? null, thread, attachments: kept.attachments, ...(asTask && !thread ? { asTask: true } : {}) });
+      const target = groupId ?? (start ? await start(kept.text.trim() || kept.attachments.map((file) => file.name).join(", ")) : null);
+      if (!target) throw new Error("There's no group to send to.");
+      await rpc(groupSendRpc, { groupId: target, text: kept.text.trim(), replyTo: replyTo?.seq ?? null, thread, attachments: kept.attachments, ...(asTask && !thread ? { asTask: true } : {}) });
       setAsTask(false);
-      onSent();
+      onSent(target);
     } catch (error) {
       setText((current) => current || kept.text);
       setAttachments((current) => (current.length ? current : kept.attachments));
@@ -224,7 +238,7 @@ export function GroupComposer({
           ref={input}
           rows={1}
           value={text}
-          placeholder={replyTo && replyTo.from.kind === "bot" ? `Reply to ${replyTo.from.name}` : thread ? "Reply in thread · @ to bring a bot in" : "Message the group · @ to pick a bot"}
+          placeholder={placeholder ?? (replyTo && replyTo.from.kind === "bot" ? `Reply to ${replyTo.from.name}` : thread ? "Reply in thread · @ to bring a bot in" : "Message the team · @ to pick a bot")}
           onChange={(event) => track(event.target.value, event.target.selectionStart ?? event.target.value.length)}
           onSelect={(event) => {
             const element = event.currentTarget;

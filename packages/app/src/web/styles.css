@@ -1839,6 +1839,42 @@ pre {
   color: var(--accent);
 }
 
+/* In a thread: where one of its members went from it (a request, a question in another thread). */
+.group-aside {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin: 2px 0;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.group-aside:hover {
+  background: var(--surface1);
+}
+.group-aside .hint {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* The piece a member's request is for: opens that piece's thread. */
+.group-handoff .link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .group-meta {
   gap: 6px;
   margin-top: 4px;

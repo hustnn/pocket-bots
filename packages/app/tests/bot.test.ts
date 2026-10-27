@@ -158,7 +158,7 @@ describe("pairs", () => {
 
 describe("settings schema", () => {
   it("defaults to no bots and accepts every template as a bot", () => {
-    expect(StoreSchema.parse({})).toEqual({ bots: [], history: [] });
+    expect(StoreSchema.parse({})).toEqual({ bots: [], history: [], teams: [] });
     const bots = BOT_TEMPLATES.map((template) => bot({ id: template.id, name: template.name, title: template.title, soul: template.soul }));
     expect(StoreSchema.parse({ bots }).bots).toHaveLength(BOT_TEMPLATES.length);
   });

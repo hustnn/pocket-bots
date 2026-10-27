@@ -23,6 +23,7 @@ import { rpcHandlers } from "./rpc-handlers";
 import { MessageQueue } from "./queue";
 import { RoutineScheduler } from "./scheduler";
 import { Store } from "./store";
+import { Teams } from "./teams";
 import { BOT_TOOLS } from "./tools";
 import { ASKED_BY_LABEL } from "./tools/bots";
 
@@ -99,7 +100,8 @@ async function main(): Promise<void> {
   scheduler.start();
   groups.resume();
 
-  const registry = rpcHandlers({ store, host, relay, scheduler, journal, commands, folders, cards, queue, groups });
+  const teams = new Teams(host, groups);
+  const registry = rpcHandlers({ store, host, relay, scheduler, journal, commands, folders, cards, queue, groups, teams });
   const webRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "dist", "web");
   const app = createApp({ registry, hub, host, webRoot, hostnames: config.hostnames });
   const server = await startHttp(app, config.webHost, config.webPort);

@@ -1,6 +1,6 @@
 import type { ChatSnapshot, ProvidersSnapshot, TimelinePage } from "./chat-types";
 import { z } from "zod";
-import { BotMcpServerSchema, BotSchema, McpServerConfigSchema, McpToolSchema, StoreSchema } from "./bot";
+import { BotMcpServerSchema, BotSchema, McpServerConfigSchema, McpToolSchema, StoreSchema, TEAM_INSTRUCTIONS_MAX } from "./bot";
 import { MAX_EXTRA_FOLDERS } from "./extra-folders";
 import { GROUP_MAX_BOTS, GROUP_NAME_MAX, GroupMessageSchema, GroupSummarySchema, GroupTaskSchema, TaskStatusSchema, USER_TEXT_MAX, WakeModeSchema } from "./group-chat";
 import { ProposalSchema } from "./proposals";
@@ -779,12 +779,55 @@ export const groupDeleteRpc = defineRpc({
   output: z.object({ ok: z.boolean() }),
 });
 
+const TeamId = z.string().regex(/^team-[a-z0-9]+$/);
+
+/**
+ * Creates a team (no `id`) or changes one: two to six bots, one of them the leader, the user's
+ * instructions for all of them, and the folders its sessions work in. Sessions already started
+ * keep the team as it was. Teams live in the bots document, which the web reads as it is.
+ */
+export const teamSaveRpc = defineRpc({
+  name: "pocket.teams.save",
+  input: z.object({
+    id: TeamId.nullable().optional(),
+    name: z.string().max(GROUP_NAME_MAX).nullable().optional(),
+    memberIds: MemberIds,
+    leaderId: BotId,
+    instructions: z.string().max(TEAM_INSTRUCTIONS_MAX).optional(),
+    cwd: WorkFolder.nullable().optional(),
+    extraFolders: ExtraFolders.optional(),
+  }),
+  output: z.object({ teamId: z.string() }),
+});
+
+/** Deletes a team and its sessions; the bots stay. */
+export const teamDeleteRpc = defineRpc({
+  name: "pocket.teams.delete",
+  input: z.object({ teamId: TeamId }),
+  output: z.object({ ok: z.boolean() }),
+});
+
+/**
+ * A new session of a team for a task: a group chat with the team's bots, leader, instructions and
+ * folders, named after `task`. The task itself is then sent with pocket.groups.send. `cwd`: work
+ * in that folder instead of the team's (null: each bot's own).
+ */
+export const teamSessionRpc = defineRpc({
+  name: "pocket.teams.session",
+  input: z.object({ teamId: TeamId, task: z.string().max(USER_TEXT_MAX), cwd: WorkFolder.nullable().optional() }),
+  output: z.object({ groupId: z.string() }),
+});
+
 /** The latest messages, or the ones before `before`. */
 export const groupMessagesRpc = defineRpc({
   name: "pocket.groups.messages",
-  /** The top level; with `thread`, that thread's top message and its replies. */
+  /**
+   * The top level; with `thread`, that thread's top message and its replies, and its asides: what
+   * led members posted elsewhere from their seats for it (the requests they started, what they
+   * asked in other threads), which the thread shows as links.
+   */
   input: z.object({ groupId: GroupId, before: z.number().int().positive().nullable().optional(), limit: z.number().int().min(1).max(500).optional(), thread: z.number().int().positive().nullable().optional() }),
-  output: z.object({ messages: z.array(GroupMessageSchema), hasOlder: z.boolean() }),
+  output: z.object({ messages: z.array(GroupMessageSchema), hasOlder: z.boolean(), asides: z.array(GroupMessageSchema).default([]) }),
 });
 
 /** The user's message; it wakes the bots it's for. */

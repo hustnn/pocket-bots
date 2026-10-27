@@ -31,6 +31,7 @@ import { computeNextFire, type Recurrence, type Reminder, type ReminderEvent, ty
 
 // A group chat's storage and its message management, all in SQLite. A
 // conversation (conv) is the top level (0) or a thread (its top message's number).
+// - the members' seats: one each, or for a member the leader leads, one per conversation;
 // - messages, numbered per group, with an FTS index and per-sender idempotency keys;
 // - delivery records: one per message per receiver it reaches,
 //   written in the message's own transaction. Each says whether the message is unread for that
@@ -54,6 +55,10 @@ export interface GroupRow {
   cwd: string | null;
   /** JSON list of the extra folders its seats may use besides the working folder. */
   extra_folders: string;
+  /** The team (bots.json) this group is a session of; null for a group made on its own. */
+  team_id: string | null;
+  /** The team's instructions when the session started; empty for a group made on its own. */
+  instructions: string;
   last_seq: number;
   created_at: string;
   updated_at: string;
@@ -62,12 +67,22 @@ export interface GroupRow {
 export interface MemberRow {
   group_id: string;
   bot_id: string;
-  seat_chat_id: string | null;
   active: number;
   joined_seq: number;
   muted_from_seq: number | null;
-  /** In a group with a leader, the piece of work the member's seat session is for: its top-level message. */
-  seat_task: number | null;
+}
+
+/**
+ * A member's seat: the chat it takes part through. A member the leader leads has one for each
+ * conversation it's brought into, `piece` being that thread's top message; any other member has
+ * one, piece 0.
+ */
+export interface SeatRow {
+  group_id: string;
+  bot_id: string;
+  piece: number;
+  chat_id: string;
+  created_at: string;
 }
 
 interface MessageRow {
@@ -86,6 +101,8 @@ interface MessageRow {
   question: string | null;
   system_subtype: string | null;
   causal_actor_id: string | null;
+  /** The piece of the led seat that posted it (GroupMessage.fromPiece). */
+  from_piece: number | null;
   created_at: string;
 }
 
@@ -228,6 +245,8 @@ export interface AppendInput {
   causalActor?: string | null;
   /** Each @mentioned member's token as written, by id. */
   mentionHandles?: Record<string, string>;
+  /** A led member's post: the piece of the seat it came from. */
+  fromPiece?: number | null;
 }
 
 export class GroupStore {
@@ -239,14 +258,30 @@ export class GroupStore {
     return this.db.all<GroupRow>("SELECT * FROM groups ORDER BY updated_at DESC");
   }
 
+  /** The sessions of a team, newest activity first. */
+  teamSessions(teamId: string): GroupRow[] {
+    return this.db.all<GroupRow>("SELECT * FROM groups WHERE team_id = ? ORDER BY updated_at DESC", teamId);
+  }
+
   group(groupId: string): GroupRow | null {
     return this.db.get<GroupRow>("SELECT * FROM groups WHERE id = ?", groupId) ?? null;
   }
 
-  createGroup(input: { id: string; name: string; memberIds: string[]; leaderId?: string | null; cwd?: string | null; extraFolders?: string[] }): void {
+  createGroup(input: { id: string; name: string; memberIds: string[]; leaderId?: string | null; cwd?: string | null; extraFolders?: string[]; teamId?: string | null; instructions?: string }): void {
     const at = now();
     this.db.tx(() => {
-      this.db.run("INSERT INTO groups (id, name, wake_mode, leader_id, cwd, extra_folders, created_at, updated_at) VALUES (?, ?, 'everyone', ?, ?, ?, ?, ?)", input.id, input.name, input.leaderId ?? null, input.cwd ?? null, JSON.stringify(input.extraFolders ?? []), at, at);
+      this.db.run(
+        "INSERT INTO groups (id, name, wake_mode, leader_id, cwd, extra_folders, team_id, instructions, created_at, updated_at) VALUES (?, ?, 'everyone', ?, ?, ?, ?, ?, ?, ?)",
+        input.id,
+        input.name,
+        input.leaderId ?? null,
+        input.cwd ?? null,
+        JSON.stringify(input.extraFolders ?? []),
+        input.teamId ?? null,
+        input.instructions ?? "",
+        at,
+        at,
+      );
       for (const botId of input.memberIds) this.db.run("INSERT INTO group_members (group_id, bot_id) VALUES (?, ?)", input.id, botId);
     });
   }
@@ -267,7 +302,7 @@ export class GroupStore {
 
   deleteGroup(groupId: string): void {
     this.db.tx(() => {
-      for (const table of ["group_members", "group_messages", "group_tasks", "group_task_events", "group_mentions", "group_reactions", "group_drafts", "group_thread_follows", "group_inbox", "group_read_cursors", "group_seen", "group_reminders", "group_reminder_events", "group_messages_fts"]) this.db.run(`DELETE FROM ${table} WHERE group_id = ?`, groupId);
+      for (const table of ["group_members", "group_seats", "group_messages", "group_tasks", "group_task_events", "group_mentions", "group_reactions", "group_drafts", "group_thread_follows", "group_inbox", "group_read_cursors", "group_seen", "group_reminders", "group_reminder_events", "group_messages_fts"]) this.db.run(`DELETE FROM ${table} WHERE group_id = ?`, groupId);
       this.db.run("DELETE FROM groups WHERE id = ?", groupId);
     });
   }
@@ -280,10 +315,6 @@ export class GroupStore {
 
   member(groupId: string, botId: string): MemberRow | null {
     return this.db.get<MemberRow>("SELECT * FROM group_members WHERE group_id = ? AND bot_id = ?", groupId, botId) ?? null;
-  }
-
-  memberBySeat(chatId: string): MemberRow | null {
-    return this.db.get<MemberRow>("SELECT * FROM group_members WHERE seat_chat_id = ?", chatId) ?? null;
   }
 
   /**
@@ -302,19 +333,80 @@ export class GroupStore {
     this.db.run("UPDATE group_members SET active = 0 WHERE group_id = ? AND bot_id = ?", groupId, botId);
   }
 
-  /** A new seat (or none) is for no piece of work yet. */
-  setSeat(groupId: string, botId: string, chatId: string | null): void {
-    this.db.run("UPDATE group_members SET seat_chat_id = ?, seat_task = CASE WHEN seat_chat_id IS ? THEN seat_task END WHERE group_id = ? AND bot_id = ?", chatId, chatId, groupId, botId);
-  }
-
-  setSeatTask(groupId: string, botId: string, task: number | null): void {
-    this.db.run("UPDATE group_members SET seat_task = ? WHERE group_id = ? AND bot_id = ?", task, groupId, botId);
-  }
-
   /** Mute: from the next message on, ordinary top-level messages don't reach the bot. */
   setMuted(groupId: string, botId: string, muted: boolean): void {
     const group = this.group(groupId);
     this.db.run("UPDATE group_members SET muted_from_seq = ? WHERE group_id = ? AND bot_id = ?", muted ? (group?.last_seq ?? 0) + 1 : null, groupId, botId);
+  }
+
+  // ---------------------------------------------------------------- seats
+
+  seat(groupId: string, botId: string, piece: number): SeatRow | null {
+    return this.db.get<SeatRow>("SELECT * FROM group_seats WHERE group_id = ? AND bot_id = ? AND piece = ?", groupId, botId, piece) ?? null;
+  }
+
+  /** A group's seats, or one member's, oldest first. */
+  seats(groupId: string, botId?: string): SeatRow[] {
+    return botId
+      ? this.db.all<SeatRow>("SELECT * FROM group_seats WHERE group_id = ? AND bot_id = ? ORDER BY created_at, piece", groupId, botId)
+      : this.db.all<SeatRow>("SELECT * FROM group_seats WHERE group_id = ? ORDER BY created_at, piece", groupId);
+  }
+
+  seatByChat(chatId: string): SeatRow | null {
+    return this.db.get<SeatRow>("SELECT * FROM group_seats WHERE chat_id = ?", chatId) ?? null;
+  }
+
+  /** The chat a member's seat for `piece` is now, or none (null). */
+  setSeat(groupId: string, botId: string, piece: number, chatId: string | null): void {
+    if (!chatId) {
+      this.db.run("DELETE FROM group_seats WHERE group_id = ? AND bot_id = ? AND piece = ?", groupId, botId, piece);
+      return;
+    }
+    this.db.run(
+      "INSERT INTO group_seats (group_id, bot_id, piece, chat_id, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (group_id, bot_id, piece) DO UPDATE SET chat_id = excluded.chat_id, created_at = excluded.created_at",
+      groupId,
+      botId,
+      piece,
+      chatId,
+      now(),
+    );
+  }
+
+  /** A member left: none of its seats stays. */
+  dropSeats(groupId: string, botId: string): void {
+    this.db.run("DELETE FROM group_seats WHERE group_id = ? AND bot_id = ?", groupId, botId);
+  }
+
+  /**
+   * The seat a led member last spoke from in a thread (its top message included), or null when it
+   * hasn't spoken there from a seat: pieceOf sends the thread's messages for it to that seat.
+   */
+  spokeFrom(groupId: string, botId: string, thread: number): number | null {
+    const row = this.db.get<{ from_piece: number }>(
+      "SELECT from_piece FROM group_messages WHERE group_id = ? AND sender_kind = 'bot' AND sender_id = ? AND from_piece IS NOT NULL AND (thread_seq = ? OR seq = ?) ORDER BY seq DESC LIMIT 1",
+      groupId,
+      botId,
+      thread,
+      thread,
+    );
+    return row ? Number(row.from_piece) : null;
+  }
+
+  /**
+   * The conversations a led member's seat for `piece` takes part in: its own thread, and the
+   * threads it spoke in from there (the requests it started, another member's thread it asked in),
+   * whose answers pieceOf sends to it.
+   */
+  seatConvs(groupId: string, botId: string, piece: number): number[] {
+    const spoken = this.db.all<{ conv: number }>("SELECT DISTINCT COALESCE(thread_seq, seq) AS conv FROM group_messages WHERE group_id = ? AND sender_kind = 'bot' AND sender_id = ? AND from_piece = ? ORDER BY conv", groupId, botId, piece);
+    return [...new Set([piece, ...spoken.map((row) => Number(row.conv))])];
+  }
+
+  /** A led seat's part of the inbox: its conversations, and the top message that starts its own (the whole inbox when none is given). */
+  private pieceScope(groupId: string, botId: string, piece: number | undefined): { sql: string; args: number[] } {
+    if (piece === undefined) return { sql: "", args: [] };
+    const convs = this.seatConvs(groupId, botId, piece);
+    return { sql: ` AND (conv IN (${convs.map(() => "?").join(",")}) OR seq = ?)`, args: [...convs, piece] };
   }
 
   // ---------------------------------------------------------------- messages and their delivery
@@ -334,7 +426,7 @@ export class GroupStore {
       const seq = this.db.get<{ last_seq: number }>("UPDATE groups SET last_seq = last_seq + 1, updated_at = ? WHERE id = ? RETURNING last_seq", now(), groupId)?.last_seq;
       if (seq === undefined) throw new RequestError("That group no longer exists.");
       this.db.run(
-        `INSERT INTO group_messages (group_id, seq, id, sender_kind, sender_id, sender_name, text, reply_to, thread_seq, everyone, mentions, attachments, question, idempotency_key, system_subtype, causal_actor_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO group_messages (group_id, seq, id, sender_kind, sender_id, sender_name, text, reply_to, thread_seq, everyone, mentions, attachments, question, idempotency_key, system_subtype, causal_actor_id, from_piece, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         groupId,
         seq,
         randomUUID(),
@@ -351,6 +443,7 @@ export class GroupStore {
         input.idempotencyKey ?? null,
         input.subtype ?? null,
         input.causalActor ?? null,
+        input.fromPiece ?? null,
         now(),
       );
       if (input.text.trim()) this.db.run("INSERT INTO group_messages_fts (text, group_id, seq) VALUES (?, ?, ?)", input.text, groupId, seq);
@@ -374,9 +467,13 @@ export class GroupStore {
    * @mentioned or the leader changed. A thread message reaches its followers and, for the same
    * send, its sender, the top message's author and whoever it @mentions; one who stopped following gets no record
    * unless @mentioned (which makes it follow again). Then the follows.
-   * In a group with a leader, the other members are reached only by what the leader or the user
-   * aims at them (fromLead): anything else reaches them as it would a muted bot (no record at the
-   * top level) and wakes none of them in a thread; one member's @mention of another reaches nobody.
+   * In a group with a leader, the other members are reached only by what's aimed at them: work
+   * the leader or the user hands them (fromLead), or another member's @mention or reply (a question
+   * between members). Anything else reaches them as it would a muted bot (no record at the top
+   * level) and wakes none of them in a thread; a member's @everyone reaches only the leader. The
+   * leader in turn is woken by a member's message only when it's aimed at the leader (an @mention, a
+   * reply, @everyone), so the members' questions to each other don't wake it; it reads them when it
+   * looks at the piece's thread.
    */
   private deliver(row: MessageRow, message: GroupMessage): string[] {
     const groupId = row.group_id;
@@ -391,7 +488,10 @@ export class GroupStore {
     const lead = !leaderId || fromLead(leaderId, { kind: row.sender_kind, senderId, causalActor: row.causal_actor_id });
     /** A member the leader leads, which this message may only reach as work. */
     const led = (id: string) => leaderId !== null && id !== leaderId && id !== GROUP_USER_ID && id !== senderId;
-    const mentioned = new Set(message.mentions.filter((id) => memberIds.has(id) && (lead || !led(id))));
+    // A member's own message (a question) may reach another member; a note a member caused (an
+    // assignment it made, say) can't hand anyone work.
+    const asks = row.sender_kind === "bot";
+    const mentioned = new Set(message.mentions.filter((id) => memberIds.has(id) && (lead || asks || !led(id))));
     const receivers = new Map<string, { suppressed: boolean }>();
     const add = (id: string, suppressed = false) => {
       if (!valid(id)) return;
@@ -430,14 +530,17 @@ export class GroupStore {
       if (suppressed && !personal) continue;
       const mutedFrom = muted.get(id);
       if (conv === 0 && !personal && !pastMute && mutedFrom !== null && mutedFrom !== undefined && row.seq >= mutedFrom) continue;
-      // Work from the leader or the user aimed at a led member reaches it; nothing else wakes it.
-      const asWork = !led(id) || (lead && (personal || repliedBot === id || message.everyone));
+      // What's aimed at a led member reaches it: work from the leader or the user, or another
+      // member's question (@mention or reply). Nothing else wakes it.
+      const asWork = !led(id) || (lead && (personal || repliedBot === id || message.everyone)) || (asks && (personal || repliedBot === id));
       if (conv === 0 && !asWork) continue;
+      // A member's message wakes the leader only when it's aimed at the leader.
+      const quiet = id === leaderId && !lead && !personal && repliedBot !== id && !message.everyone;
       // A personal @mention is unread even for the one who caused it (the mention is checked first,
       // and live delivery uses the same rule): "📌 @Ada started task #3" reaches Ada.
       const eligible = unreadEligible(subject, id, personal);
       const reason =
-        id === GROUP_USER_ID || !asWork
+        id === GROUP_USER_ID || !asWork || quiet
           ? null
           : deliveryReason({
               mode: group.wake_mode,
@@ -504,14 +607,16 @@ export class GroupStore {
 
   /**
    * The bot's runtime didn't start, so no notice reached it: what's in its inbox and its runtime
-   * didn't take in is to be told again. Returns those messages.
+   * didn't take in is to be told again. Returns those messages. `piece`: only what's for that seat.
    */
-  retellUntaken(groupId: string, botId: string): number[] {
+  retellUntaken(groupId: string, botId: string, piece?: number): number[] {
+    const scope = this.pieceScope(groupId, botId, piece);
     return this.db
       .all<{ seq: number }>(
-        "UPDATE group_inbox SET noticed = 0 WHERE group_id = ? AND receiver_id = ? AND notice_accepted = 0 AND drained_at IS NULL AND wake_reason IS NOT NULL RETURNING seq",
+        `UPDATE group_inbox SET noticed = 0 WHERE group_id = ? AND receiver_id = ? AND notice_accepted = 0 AND drained_at IS NULL AND wake_reason IS NOT NULL${scope.sql} RETURNING seq`,
         groupId,
         botId,
+        ...scope.args,
       )
       .map((row) => Number(row.seq));
   }
@@ -523,16 +628,18 @@ export class GroupStore {
 
   /**
    * Telling the bot failed: `seqs` when its seat couldn't start;
-   * otherwise its turn failed, which fails everything it was told and hasn't read.
+   * otherwise its turn failed, which fails everything it was told and hasn't read (with `piece`,
+   * everything that seat was told).
    */
-  markDeliveryFailed(groupId: string, botId: string, failure: DeliveryFailure, seqs?: readonly number[]): void {
+  markDeliveryFailed(groupId: string, botId: string, failure: DeliveryFailure, seqs?: readonly number[], piece?: number): void {
     if (seqs) {
       if (seqs.length === 0) return;
       this.db.run(`UPDATE group_inbox SET delivery_failure = ? WHERE group_id = ? AND receiver_id = ? AND drained_at IS NULL AND seq IN (${seqs.map(() => "?").join(",")})`, failure, groupId, botId, ...seqs);
       return;
     }
     // Told: in a notice that went out, or one its runtime already took in (a turn can fail before the send returns).
-    this.db.run("UPDATE group_inbox SET delivery_failure = ? WHERE group_id = ? AND receiver_id = ? AND (noticed = 1 OR notice_accepted = 1) AND drained_at IS NULL AND wake_reason IS NOT NULL", failure, groupId, botId);
+    const scope = this.pieceScope(groupId, botId, piece);
+    this.db.run(`UPDATE group_inbox SET delivery_failure = ? WHERE group_id = ? AND receiver_id = ? AND (noticed = 1 OR notice_accepted = 1) AND drained_at IS NULL AND wake_reason IS NOT NULL${scope.sql}`, failure, groupId, botId, ...scope.args);
   }
 
   /** Takes these messages out of the bot's inbox (drained once handed to the model). */
@@ -757,19 +864,26 @@ export class GroupStore {
     });
   }
 
-  /** A new seat is a new model context: nothing in the ledger is true of it. */
-  resetSeen(groupId: string, botId: string): void {
-    this.db.run("DELETE FROM group_seen WHERE group_id = ? AND bot_id = ?", groupId, botId);
+  /**
+   * A new seat is a new model context: nothing in the ledger is true of it. `piece`: a led
+   * member's seat, which owns the ledger of its own conversations only (seatConvs); its other
+   * seats keep theirs.
+   */
+  resetSeen(groupId: string, botId: string, piece?: number): void {
+    if (piece === undefined) this.db.run("DELETE FROM group_seen WHERE group_id = ? AND bot_id = ?", groupId, botId);
+    else for (const conv of this.seatConvs(groupId, botId, piece)) this.db.run("DELETE FROM group_seen WHERE group_id = ? AND bot_id = ? AND conv = ?", groupId, botId, conv);
   }
 
   /**
    * The seat's model context started over (a compaction, or a fresh session on the same seat):
    * what it saw before is no evidence now, so its boundaries, its one-by-one
    * records and its latest read are dropped. Where it was shown up to stays, so a thread it was already brought into isn't
-   * introduced again.
+   * introduced again. `piece`: as for resetSeen.
    */
-  newSeenContext(groupId: string, botId: string): void {
-    this.db.run("UPDATE group_seen SET boundary_seq = NULL, exact_seqs = '[]', read_order = NULL WHERE group_id = ? AND bot_id = ?", groupId, botId);
+  newSeenContext(groupId: string, botId: string, piece?: number): void {
+    const set = "UPDATE group_seen SET boundary_seq = NULL, exact_seqs = '[]', read_order = NULL WHERE group_id = ? AND bot_id = ?";
+    if (piece === undefined) this.db.run(set, groupId, botId);
+    else for (const conv of this.seatConvs(groupId, botId, piece)) this.db.run(`${set} AND conv = ?`, groupId, botId, conv);
   }
 
   /** The newest boundary the seat was shown up to at this place since it started, in any model context (null: never). */
@@ -918,6 +1032,14 @@ export class GroupStore {
 
   // ---------------------------------------------------------------- messages
 
+  /**
+   * What led members posted from their seats for a thread outside it, oldest first: the requests
+   * they started at the top level and what they asked in other threads (from_piece).
+   */
+  asides(groupId: string, thread: number): GroupMessage[] {
+    return this.db.all<MessageRow>("SELECT * FROM group_messages WHERE group_id = ? AND from_piece = ? AND (thread_seq IS NULL OR thread_seq != ?) ORDER BY seq", groupId, thread, thread).map((row) => this.message(row));
+  }
+
   messageAt(groupId: string, seq: number): GroupMessage | null {
     const row = this.db.get<MessageRow>("SELECT * FROM group_messages WHERE group_id = ? AND seq = ?", groupId, seq);
     return row ? this.message(row) : null;
@@ -998,6 +1120,7 @@ export class GroupStore {
       question: row.question ? (JSON.parse(row.question) as GroupQuestion) : null,
       task: task ? (({ seq: _seq, ...rest }) => rest)(taskOf(task)) : null,
       reactions: [...byEmoji].map(([emoji, entry]) => ({ emoji, ...entry })),
+      ...(row.from_piece ? { fromPiece: Number(row.from_piece) } : {}),
     };
   }
 

@@ -22,7 +22,7 @@ pocket-bots 是跑在用户自己电脑上的个人 bot 平台。一个 bot = �
 - **后端内部**：组件在 `server/main.ts` 装配，用进程内事件连接（ChatService 发 `agent.settled`、`turn.ended`、`input.accepted` 等，GroupChats、队列、活动记录订阅）。
 - **审批都由 pocket-bots 回答**：bot 自己的工具和白名单放行，其余在聊天里弹卡片。
 - **用 CLI 自己的登录**：不保存、不注入任何模型 API key。
-- **群聊**：每个 bot 在群里有自己的座位（一个普通聊天），只通过 `group_send` 等工具说话；叫醒只给提示，发言前检查它是否看过新消息。规则复杂，改群聊前先读 [docs/group-chats.md](docs/group-chats.md) 和 design.md §6；消息流程、每一步读写的状态和各种组合，见 [docs/group-protocol.md](docs/group-protocol.md)。
+- **群聊**：每个 bot 在群里有自己的座位（一个普通聊天；leader 带的成员每个地方一个，一次跑一个），只通过 `group_send` 等工具说话；叫醒只给提示，发言前检查它是否看过新消息。规则复杂，改群聊前先读 [docs/group-chats.md](docs/group-chats.md) 和 design.md §6；消息流程、每一步读写的状态和各种组合，见 [docs/group-protocol.md](docs/group-protocol.md)。
 
 ## 源码目录
 

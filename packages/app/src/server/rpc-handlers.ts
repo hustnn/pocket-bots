@@ -29,6 +29,7 @@ import type { RoutineScheduler } from "./scheduler";
 import { searchMessages } from "./search";
 import { exportBot, exportBots, importBot, importBots } from "./share";
 import type { Store } from "./store";
+import type { Teams } from "./teams";
 import { saveFile, saveUpload } from "./uploads";
 
 export interface Services {
@@ -42,6 +43,7 @@ export interface Services {
   cards: ChatCards;
   queue: MessageQueue;
   groups: GroupChats;
+  teams: Teams;
 }
 
 type Handler<C extends RpcContract> = (input: z.output<C["input"]>) => z.input<C["output"]> | Promise<z.input<C["output"]>>;
@@ -53,7 +55,7 @@ export interface RpcRegistration {
 
 /** Every RPC the web UI can call, by name. */
 export function rpcHandlers(services: Services): Map<string, RpcRegistration> {
-  const { store, host, scheduler, journal, commands, folders, cards, queue, groups } = services;
+  const { store, host, scheduler, journal, commands, folders, cards, queue, groups, teams } = services;
   const registry = new Map<string, RpcRegistration>();
   const handle = <C extends RpcContract>(contract: C, handler: Handler<C>) => {
     registry.set(contract.name, { contract, handler: handler as (input: unknown) => unknown });
@@ -190,6 +192,17 @@ export function rpcHandlers(services: Services): Map<string, RpcRegistration> {
   handle(rpc.importBotRpc, importBot);
   handle(rpc.exportBotsRpc, async (input) => exportBots(input, await library()));
   handle(rpc.importBotsRpc, importBots);
+
+  // ------------------------------------------------------------ teams
+
+  handle(rpc.teamSaveRpc, async ({ id, name, memberIds, leaderId, instructions, cwd, extraFolders }) =>
+    teams.save({ id: id ?? null, name: name ?? null, memberIds, leaderId, ...(instructions !== undefined ? { instructions } : {}), cwd: cwd ?? null, ...(extraFolders ? { extraFolders } : {}) }),
+  );
+  handle(rpc.teamDeleteRpc, async ({ teamId }) => {
+    await teams.remove(teamId);
+    return { ok: true };
+  });
+  handle(rpc.teamSessionRpc, ({ teamId, task, cwd }) => teams.startSession(teamId, { task, ...(cwd !== undefined ? { cwd } : {}) }));
 
   // ------------------------------------------------------------ group chats
 

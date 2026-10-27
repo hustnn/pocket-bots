@@ -432,6 +432,35 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE groups ADD COLUMN extra_folders TEXT NOT NULL DEFAULT '[]';
     `);
   },
+  // 21: a group can be a session of a team (bots.json): the team's id, and the team's instructions as
+  // they were when the session started, which every seat's prompt carries.
+  (db) => {
+    db.exec(`
+      ALTER TABLE groups ADD COLUMN team_id TEXT;
+      ALTER TABLE groups ADD COLUMN instructions TEXT NOT NULL DEFAULT '';
+    `);
+  },
+  // 22: seats get a table of their own. A member the leader leads has a seat for each conversation
+  // it's brought into (`piece`: a thread, or the top-level message that starts one), resumed when
+  // it comes back to it; any other member has one seat, piece 0. A led seat's piece came from
+  // seat_task; the seat columns on group_members stay, unused. A message a led seat posts records
+  // that seat's piece (`from_piece`), so the answers to what it asked come back to it.
+  (db) => {
+    db.exec(`
+      CREATE TABLE group_seats (
+        group_id TEXT NOT NULL,
+        bot_id TEXT NOT NULL,
+        piece INTEGER NOT NULL,
+        chat_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (group_id, bot_id, piece)
+      );
+      CREATE UNIQUE INDEX group_seats_by_chat ON group_seats (chat_id);
+      ALTER TABLE group_messages ADD COLUMN from_piece INTEGER;
+      INSERT OR IGNORE INTO group_seats (group_id, bot_id, piece, chat_id, created_at)
+        SELECT group_id, bot_id, COALESCE(seat_task, 0), seat_chat_id, strftime('%Y-%m-%dT%H:%M:%fZ', 'now') FROM group_members WHERE seat_chat_id IS NOT NULL;
+    `);
+  },
 ];
 
 /** How much of one message the search index takes: a long pasted attachment doesn't need all of it. */

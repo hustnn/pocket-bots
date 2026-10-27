@@ -140,7 +140,7 @@ describe("migration 20", () => {
       const db = new Db(join(dir, "bots.sqlite"));
       db.run("INSERT INTO groups (id, name, wake_mode, created_at, updated_at) VALUES ('g1', 'G', 'everyone', 'x', 'x')");
       db.run("INSERT INTO chats (id, provider, cwd, labels, status, created_at, updated_at) VALUES ('c1', 'fake', '/tmp', '{}', 'idle', 'x', 'x')");
-      db.raw.exec("ALTER TABLE chats DROP COLUMN extra_folders; ALTER TABLE chats DROP COLUMN folders_told; ALTER TABLE groups DROP COLUMN extra_folders; UPDATE schema_version SET version = 19");
+      db.raw.exec("ALTER TABLE chats DROP COLUMN extra_folders; ALTER TABLE chats DROP COLUMN folders_told; ALTER TABLE groups DROP COLUMN extra_folders; ALTER TABLE groups DROP COLUMN team_id; ALTER TABLE groups DROP COLUMN instructions; DROP TABLE group_seats; ALTER TABLE group_messages DROP COLUMN from_piece; UPDATE schema_version SET version = 19");
       db.close();
       const reopened = new Db(join(dir, "bots.sqlite"));
       expect(reopened.get("SELECT extra_folders, folders_told FROM chats WHERE id = 'c1'")).toEqual({ extra_folders: "[]", folders_told: null });

@@ -19,7 +19,7 @@ pocket-bots 是一个跑在你自己电脑上的个人 bot 平台。一个 bot =
    │  SSE：/api/events、/api/chats/:id/events
    ▼
  App 服务（一个 Node 进程，独占数据目录）
-   ├─ Store ............ bots.json：bot、技能库、MCP 库、默认值、界面状态
+   ├─ Store ............ bots.json：bot、团队、技能库、MCP 库、默认值、界面状态
    ├─ ChatService ...... 每个聊天的会话：打开 / 续接 / 发送 / 插话 / 打断 / 审批 / 时间线 / 看护
    ├─ GroupChats ....... 群聊：消息、投递、提示、发言前检查、草稿、任务、提醒、座位
    ├─ Relay ............ 127.0.0.1 上的 MCP 服务：bot 工具、连接的应用代理、webhook
@@ -63,7 +63,7 @@ pocket-bots 是一个跑在你自己电脑上的个人 bot 平台。一个 bot =
 |---|---|---|
 | 启动与装配 | `server/main.ts` | 读配置、给数据目录加锁、建各组件、把它们的事件连起来、启动 HTTP 和 relay |
 | HTTP 层 | `server/http.ts`、`server/rpc-handlers.ts`、`server/events.ts`、`server/hosts.ts` | RPC 路由、SSE 事件流、群文件下载、静态页面；按 Host 头防 DNS rebinding |
-| Store | `server/store.ts`、`shared/bot.ts` | `bots.json`：bot、技能库、MCP 库、默认值、预设、界面状态；带 revision 的乐观并发保存；每次改 bot 留历史快照 |
+| Store | `server/store.ts`、`shared/bot.ts` | `bots.json`：bot、团队、技能库、MCP 库、默认值、预设、界面状态；带 revision 的乐观并发保存；每次改 bot 留历史快照 |
 | PocketHost | `server/host.ts`、`server/providers.ts` | 把 Store、各 runtime、ChatService 包成一个门面，供工具、调度器、群聊使用；探测每个 CLI 是否安装、是否登录 |
 | ChatService | `server/chat-service.ts`、`server/supervision.ts` | 每个聊天（单聊、群聊座位、定时任务的运行、ask_bot）的 runtime 会话：打开、续接、发送、插话、打断、审批、时间线写入、空闲关闭；运行时看护（启动排队、启动超时、卡住的运行、压缩失败） |
 | 聊天配置 | `server/chats.ts`、`server/prompt.ts` | 由 bot 配置生成一个会话的 `SessionSpec`：system prompt、MCP 服务器、免审批的工具、可访问的目录 |
@@ -355,12 +355,13 @@ bot 不能直接改自己或别人的设置，只能提议：卡片逐条列出�
 
 ### 6.1 基本模型
 
-- **座位**：每个成员 bot 在每个群里有一个**座位**，就是这个 bot 的一个普通聊天（`kind = seat`），用它自己的模型、审批、技能和 MCP。座位在群第一次需要它时才建。一个 bot 在不同群里有不同的座位，互不挤占上下文，可以并行。
+- **座位**：每个成员 bot 在每个群里有一个**座位**，就是这个 bot 的一个普通聊天（带着群的标签），用它自己的模型、审批、技能和 MCP。座位在群第一次需要它时才建。一个 bot 在不同群里有不同的座位，互不挤占上下文，可以并行。有 leader 的群里，被带的成员每个地方一个座位：派给它的每件活、别的成员在线程里找它的每个线程、别的成员发给它的每个请求，各一个，一次跑一个，切回来时续接那个座位的会话（§6.6）。
 - **只通过工具说话**：bot 在座位里输出的文字不会进群；只有用 `group_send` 发出去的才是它在群里说的话。审批、密钥、登录这些私事留在座位里。
 - **成员即投递**：群里的每条消息都会写给每个收到它的成员一条**投递记录**，@ 只是在记录上标「这条是找你的」。每个 bot 都看得到全局，由它自己判断要不要说话。
 - **叫醒只给提示**：叫醒一个 bot 时只告诉它「哪里有几条新消息、有没有人找你」，不带消息内容；消息由它自己用 `group_read` 读。正在干活的 bot 也只是多收到一条提示，不会被打断。
 - **发言前检查**：bot 发言、认领任务、改任务状态之前，pocket-bots 检查它的模型有没有看过目标位置的新消息；没看过就先不发，存成草稿并给它看最新的几条。
 - **认领是锁**：一条顶层消息可以变成任务，先认领的生效，别人认领不到就不做同一件事。
+- **团队和 session**：界面上用的是团队（`bots.json` 的 `teams`：2–6 个 bot、必选的 leader、团队说明、目录）。你给团队一个任务，就按团队当时的样子开一个 session：一个有 leader 的群，`groups.team_id` 记它属于哪个团队，`groups.instructions` 存一份团队说明，每个座位的 prompt 都带上（`server/teams.ts`）。改团队只影响之后开的 session。没有 leader 的群在界面上不能再建，代码保留。
 
 ### 6.2 消息存储
 
@@ -368,7 +369,8 @@ bot 不能直接改自己或别人的设置，只能提议：卡片逐条列出�
 
 | 表 | 存什么 |
 |---|---|
-| `groups`、`group_members` | 群（名字、唤醒方式、最后编号）；成员（座位聊天、从第几条开始静音） |
+| `groups`、`group_members` | 群（名字、唤醒方式、最后编号）；成员（从第几条开始静音） |
+| `group_seats` | 座位：群、bot、`piece`（0 是 bot 唯一的座位；被带的成员是这个座位管的地方的编号）、聊天 id |
 | `group_messages` | 消息：群内递增编号 `seq`、发送者（你、某个 bot、系统）、文字、回复谁、属于哪个线程、@ 了谁、附件、幂等键、系统消息的种类和起因、bot 的提问 |
 | `group_inbox` | **投递记录**：每条消息 × 每个收到它的接收者一行：算不算未读、进没进 bot 的待读和原因、是否 @ 它、读走没有、进过哪条提示、座位收下没有、为什么没送到 |
 | `group_read_cursors` | **读位置**：每个接收者（你也是）在每个会话读到第几条 |
@@ -406,6 +408,7 @@ bot 不能直接改自己或别人的设置，只能提议：卡片逐条列出�
 - 静音的 bot 从静音那条起收不到普通顶层消息的记录（@everyone 也一样），但 @ 它的、指派给它的回执、换 leader 的通知照样有。
 - 线程里的消息：线程的关注者，加上这次发送牵涉到的人（发送者、顶层消息的作者、被 @ 的）。在线程里发言、被 @、是顶层作者都会自动关注；取消关注后，被 @ 会重新关注。
 - 系统消息（成员变化、建任务、任务状态变化…）各自声明分类：「起因者不算未读」或「不写投递记录」。bot 的轮次失败、bot 向你的提问都不写投递记录，不叫醒任何人。
+- 有 leader 的群：成员只收找它的。一种是你或 leader 派的活（@ 它、回复它、指派回执、@everyone），另一种是别的成员找它的（另一个成员发的、@ 它或回复它的消息）；别的顶层消息不写它的记录。@everyone 送到它，进它当前的座位。成员的 @everyone、成员引起的系统消息到不了别的成员，活只由 leader 派。反过来，成员发的或成员引起的消息，只有找 leader 的（@、回复、@everyone）才叫醒 leader，别的只写记录：成员之间的问答不花 leader 的模型。
 
 **进不进待读（唤醒方式）**，每个群可选：
 
@@ -430,7 +433,7 @@ They haven't been read. Read them when it suits you: group_read with unread: tru
 
 **看过的记录只在一个模型上下文里算数**：新座位、座位换新、上下文压缩、不报告压缩的 runtime（Grok）每次开会话，都让看过的记录作废（读位置和待读不动）；续接同一个会话则保留。作废之后它第一次在某处发言会先被搁置一次，看一眼最新的几条——它的模型确实不再记得了。
 
-**发言前检查**（`group_send`、`group_send_draft`、`group_claim`、`group_task` 改状态）对目标会话依次看：
+**发言前检查**（`group_send`、`group_send_draft`、`group_claim`、`group_task` 改状态）对目标会话依次看（有 leader 的群里，被带的成员在顶层不查：顶层只有派给它的活，拿来拦会把还在等的活从待读取走）：
 
 1. **待读**：这里有投递给它、它的模型没看过的消息 → 搁置，给它看最新 3 条；
 2. **第一次碰这个会话**（没有待读也没有 boundary）：最近 3 条里有没看过的 → 搁置；
@@ -460,6 +463,15 @@ They haven't been read. Read them when it suits you: group_read with unread: tru
 ### 6.6 座位的一生
 
 - **新座位**：群第一次叫醒这个 bot 时建，第一条输入是成员名单和提示。
+- **被带的成员的座位**：每个地方一个（`server/groups.ts` 的 `contextOf`）。
+  - **找它的消息**：顶层的（@ 它或回复它，不管谁发的）开它自己的座位；线程里的进这个线程的座位。它从座位 P 在这个线程里说过话的（它发起的请求，或者它去问过的别人的线程），回到座位 P，因为 P 在等答案（消息上记着 `from_piece`，取最后一条）。
+  - **不是找它的**（@everyone、系统通知）：进它当前的座位，也就是正在跑的那个，都没在跑就是最近用过的那个。
+  - **三种问法**：开发问 explorer 时，发在开发自己 #2 的线程里，explorer 就为 #2 开一个座位，带上 #2 的内容；发在 explorer 自己那件活的线程里，进 explorer 做那件活的座位；发一条顶层请求，explorer 就为这条请求开一个新座位。三种情况答案都回到开发做 #2 的座位。默认是顶层请求：别人的活派给谁、编号是多少，成员收不到（它只收找它的），只有 leader 在说明里写了才知道。
+  - **会话页**：#2 的线程里按时间插着链接，指向开发从 #2 去问过的地方（`GroupStore.asides`），只给人看；leader 靠成员汇报里写的「从谁那里拿到了什么」。
+  - **一次跑一个**：同一个成员同一时间只有一个座位在跑，别的座位的消息等这一轮结束；之后当前座位有新消息就先送它，没有就送等得最久的。切过去时续接那个座位的会话，换新时的简报是这个线程的顶层消息和最近的回复。
+  - **只在自己的地方说话**：发在自己的线程里、到别人还没进过的线程里问，或者在顶层发一条 @ 了别的成员的请求。读群里别处只是看、不记账，这样不会替别的座位把消息标成已读。
+  - **出事只影响一个座位**：一个座位换新、压缩或失败，只影响它自己那几个地方的记录（`pumpSeat`、`sessionPiece`、`outsideSession`，`server/group-store.ts` 的 `seatConvs`）。
+- **为什么每个地方一个座位、又一次只跑一个**：只有一个座位时，换一个地方就要归档正在用的会话，回来时只能开新会话、丢掉之前的过程；别的成员的提问也只能插进它正在做的那件活，带进不相干的 context。每个地方一个座位后，消息发在哪里就在哪个上下文里处理，切回来续接，不丢过程。先一次只跑一个：同一个 bot 的几个会话同时跑，会同时改同一个目录、同时发请求；代价是找一个正忙的成员要等它这一轮结束，问的一方可以先停下等答案，或者自己查。
 - **换新**：座位空闲超过 1 小时、上下文超过 128k token 时，下次被叫醒就换一个新座位（旧的归档），从一份约 8k token 以内的**简报**开始：它看过的最近 25 条消息、它正在用的文件（最多 14 个，现在重读的内容）、最近 12 次操作、分给它还没完成的任务。比续接一个缓存已经过期的大上下文便宜。简报只是参考，不算看过。
 - **重启后补课**：pocket-bots 启动时，每个还有未读的座位收到一批未读消息本身（最多 8 个地方、每处 5 条、共 20 条，@ 它的在前）；放不下时退回一条受限的提示：每个地方读一遍就停，只有明确找它的事才处理。座位续接的是同一个会话，看过的记录保留。
 - **prompt 改了**：Claude Code、Codex 续接会话时还用开始时的 system prompt。每个座位记下它的会话按哪个常驻 prompt 的哈希跑；续接时哈希变了，就在第一条输入前面放上完整的新 prompt，说明它取代原来的（之前的对话不动，prompt 缓存仍然有效）。时间线照模型收到的样子存这条输入；座位的聊天里把这段拆出来，折叠成一行「Instructions updated」，后面的提示照常显示（`shared/standing-prompt.ts`）。
@@ -502,7 +514,7 @@ They haven't been read. Read them when it suits you: group_read with unread: tru
 
 **座位没有改配置的工具**：`get_setup`、`propose_changes`、`propose_routine`、`propose_skill` 只在 bot 自己的聊天里有（§5.4）。
 
-**有 leader 的群里，成员只列出干活用得到的工具**：`group_send`、`group_send_draft`、`group_read`、`group_claim`、`group_react`、`group_members`，加上 `search_chats`（工具上标着 `led`，`tools/mcp.ts` 的 `ledMember` 按 `GroupChats.ledBy` 判断）。计划、任务、提醒、关注、静音、@ 的去向、问别的 bot、改配置这些它的规则里用不到，就不放进它每次请求都要带的工具列表；它的 prompt 里「Bot tools」一段也只提这些。只是不列出，调用照样执行：会话只在开始时取一次工具列表，换 leader 后已经开着的会话列表是旧的，下次开会话时才更新（prompt 也一样）。成员 @ 了群外的 bot，结果里不再建议用 `ask_bot`。
+**有 leader 的群里，成员只列出干活用得到的工具**：`group_send`、`group_send_draft`、`group_read`、`group_search`、`group_claim`、`group_react`、`group_members`，加上 `search_chats`（工具上标着 `led`，`tools/mcp.ts` 的 `ledMember` 按 `GroupChats.ledBy` 判断）。计划、任务、提醒、关注、静音、@ 的去向、问别的 bot、改配置这些它的规则里用不到（`group_search` 留着：一个座位只知道自己那个地方，找群里别处的东西靠它），就不放进它每次请求都要带的工具列表；它的 prompt 里「Bot tools」一段也只提这些。只是不列出，调用照样执行：会话只在开始时取一次工具列表，换 leader 后已经开着的会话列表是旧的，下次开会话时才更新（prompt 也一样）。成员 @ 了群外的 bot，结果里不再建议用 `ask_bot`。
 
 ### 6.9 座位的 prompt
 
@@ -512,13 +524,14 @@ They haven't been read. Read them when it suits you: group_read with unread: tru
 
 | 角色 | 有的部分 | 大小 |
 |---|---|---|
-| 没有 leader 的群 | 消息、被叫醒时、线程和历史、任务（认领、建任务和拆活）、提醒和 @、子 agent（能开时）、写法、礼节、约束和权限 | 约 6.9K 字符，带子 agent 约 8K |
-| leader | leader 一段（计划、派活、核对结果、请求做完后回复你的请求告诉你结果、成员一轮失败时怎么办、成员和模型），加上面除「认领、拆活」和子 agent 以外的部分 | 约 8.8K |
-| 成员 | 成员一段（只做派给它的、做完在线程里汇报一次就停（带上跑了哪些测试和检查、结果如何）、不改状态、卡住问 leader、能开子 agent 时自己做），加消息、写法、约束和权限 | 约 4.8K |
+| 没有 leader 的群 | 消息、被叫醒时、线程和历史、任务（认领、建任务和拆活）、提醒和 @、子 agent（能开时）、写法、礼节、约束和权限 | 约 6.8K 字符，带子 agent 约 7.7K |
+| leader | leader 一段（计划、派活、成员之间会直接找对方、互不依赖的活同时派、看成员验证了什么并决定要不要再验证、请求做完后回复你的请求告诉你结果、成员一轮失败时怎么办、成员和模型），加上面除「认领、拆活」和子 agent 以外的部分 | 约 9.8K（三个成员） |
+| 成员 | 成员一段（只做派给它的和别的成员找它做的、每个地方一个会话并在那里发言、做完先自己验证再在线程里汇报一次就停（说清验证了什么、怎么验证的、哪些没验证）、找别的成员时默认发顶层请求、要这件活的上下文就在这个线程问、知道对方那件活的编号才去那里问、汇报写清从谁那里拿到了什么、只在需要时 @、被找到时回答一次、不改状态、卡住问派活的、能开子 agent 时自己做、别的成员和他们的角色），加消息、写法、约束和权限 | 约 6.2K，每个别的成员再加一行 |
 
-**成员跑过的检查 leader 不再重复**：成员汇报时说明跑了哪些测试和检查、结果如何；leader 照样核对结果，但成员已经跑过的检查不用再跑一遍。基准测试里成员报了「typecheck 通过、435 个测试通过」，leader 还是把 typecheck 和整套测试又跑了一遍。
+团队的 session 里，每个座位在角色那段后面再加团队说明。三个角色的这一段原来分别是 12.5K（带子 agent 15.1K）、15.1K 和 15.8K。
 
-原来分别是 12.5K（带子 agent 15.1K）、15.1K 和 15.8K。
+**验证不重复做**：成员做完先尽量自己验证，汇报时说清验证了什么、怎么验证的（命令和结果）、哪些没验证；leader 不再跑成员已经跑过的检查，自己判断要不要再验证：小的自己做，大的派给成员并说清已经验证过什么。基准测试里成员报了「typecheck 通过、435 个测试通过」，leader 还是把 typecheck 和整套测试又跑了一遍，这就是要避免的。
+
 
 ---
 
@@ -535,7 +548,7 @@ They haven't been read. Read them when it suits you: group_read with unread: tru
 
 ```
 ~/.pocket-bots/
-  bots.json                  bot、技能库、MCP 库、默认值、预设、界面状态
+  bots.json                  bot、团队、技能库、MCP 库、默认值、预设、界面状态
   pocket-bots.sqlite         聊天、时间线、群聊（见下）
   config.json                可选：web.host / web.port / web.hostnames / relay.port
   Bots/<botId>/              每个 bot 的工作目录、记忆、技能、上传
@@ -559,7 +572,7 @@ chats            id, bot_id, provider, model, thinking, mode, cwd, title, labels
 timeline         chat_id, key, seq_start, seq_end, turn_id, ts, item(JSON)   -- 合并过流式片段的时间线条目
 turns            chat_id, turn_id, started_at, ended_at, outcome, error, usage
 timeline_fts     FTS5 trigram：单聊里你和 bot 的消息
-groups … group_reminder_events、group_messages_fts   -- 见 §6.2；groups.extra_folders 是群的额外文件夹（JSON 数组）
+groups … group_reminder_events、group_messages_fts   -- 见 §6.2；groups.extra_folders 是群的额外文件夹（JSON 数组）；groups.team_id、groups.instructions 是 session 属于哪个团队和开 session 时团队说明的拷贝（迁移 21）
 ```
 
 搜索（⌘K、聊天里的 ⌘F）用两张 FTS5 trigram 表：群消息发出时就进索引；单聊的回复是一点点流进来的，所以 `timeline_fts` 不在写入时维护，而是每次搜索前把各聊天新增的条目补进去。trigram 能查词的任意一部分和中文；不到三个字的词改成在命中的行里过滤。

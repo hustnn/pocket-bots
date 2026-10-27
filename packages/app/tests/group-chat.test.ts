@@ -13,14 +13,13 @@ import {
   mentionDeliveryText,
   messageText,
   parseMentions,
-  pieceFor,
+  pieceOf,
   questionText,
   taskHistoryText,
   threadMismatchText,
   undeliveredMentionsText,
   unreadEligible,
   wakeText,
-  workOf,
   type DeliveryInput,
   type GroupMessage,
 } from "../src/shared/group-chat";
@@ -330,34 +329,22 @@ describe("task cards and mention delivery", () => {
 
 describe("a group with a leader", () => {
   const lead = { kind: "bot" as const, botId: "lead", name: "Lead" };
-  const entry = (seq: number, patch: Partial<GroupMessage> = {}) => ({ message: message(seq, patch), noticed: false });
 
-  it("knows the piece of work a message belongs to: its thread, or a new top-level @mention from the leader or the user", () => {
-    expect(workOf("lead", "w", message(3, { from: lead, mentions: ["w"] }))).toBe(3);
-    expect(workOf("lead", "w", message(4, { mentions: ["w"] }))).toBe(4);
-    expect(workOf("lead", "w", message(5, { from: lead, thread: 3, mentions: ["w"] }))).toBe(3);
-    expect(workOf("lead", "w", message(6, { from: lead, everyone: true }))).toBeNull();
-    expect(workOf("lead", "w", message(7, { from: { kind: "system" }, mentions: ["w"] }))).toBeNull();
-    expect(workOf("lead", "w", message(8, { from: { kind: "bot", botId: "r", name: "R" }, mentions: ["w"] }))).toBeNull();
-  });
-
-  it("tells a member about one piece at a time: news for its current piece first, else the oldest, notes going along", () => {
-    const inbox = [entry(3, { from: lead, mentions: ["w"] }), entry(5, { from: lead, everyone: true }), entry(6, { from: lead, thread: 2, mentions: ["w"] })];
-    // Its session is on piece #2: the follow-up there comes first, and #3 waits.
-    expect(pieceFor("lead", "w", inbox, 2)).toEqual({ work: 2, now: [inbox[1], inbox[2]], switching: false });
-    // On another piece: the oldest goes first, in a fresh session.
-    expect(pieceFor("lead", "w", inbox, 9)).toEqual({ work: 3, now: [inbox[0], inbox[1]], switching: true });
-    // A new seat, or one that's on no piece yet, takes it up without switching; notes alone are for no piece.
-    expect(pieceFor("lead", "w", inbox, null)).toMatchObject({ work: 3, switching: false });
-    expect(pieceFor("lead", "w", [inbox[1]!], 2)).toEqual({ work: null, now: [inbox[1]], switching: false });
-    // Its current piece has only what it was already told: news for another piece goes first.
-    const told = [{ ...inbox[2]!, noticed: true }, inbox[0]!];
-    expect(pieceFor("lead", "w", told, 2)).toEqual({ work: 3, now: [inbox[0]], switching: true });
+  it("knows which of a member's seats a message is for: a new conversation of its own, its thread, or the seat it spoke there from", () => {
+    // A top-level message starts a conversation of its own, whoever sends it.
+    expect(pieceOf(message(3, { from: lead, mentions: ["w"] }))).toBe(3);
+    expect(pieceOf(message(4, { from: { kind: "bot", botId: "r", name: "R" }, mentions: ["w"] }))).toBe(4);
+    // A thread message is for that thread...
+    expect(pieceOf(message(5, { from: lead, thread: 3, mentions: ["w"] }))).toBe(3);
+    // ...unless the member spoke in the thread from one of its seats (it started it as a request, or
+    // came to ask there from piece #3): the answer goes back to that seat.
+    expect(pieceOf(message(9, { from: { kind: "bot", botId: "r", name: "R" }, thread: 8, mentions: ["w"] }), 3)).toBe(3);
   });
 
   it("shows a led member its piece in full, and gives the leader and the members their sections", () => {
-    const text = wakeText({ groupName: "Launch", me: { id: "w", name: "Writer" }, roster: [{ id: "lead", name: "Lead", title: "", leader: true }, { id: "w", name: "Writer", title: "" }], pending: [], handed: { messages: [message(3, { from: lead, text: "@Writer draft the notes", mentions: ["w"] })] } });
+    const text = wakeText({ groupName: "Launch", me: { id: "w", name: "Writer" }, roster: [{ id: "lead", name: "Lead", title: "", leader: true }, { id: "w", name: "Writer", title: "" }], pending: [], handed: { messages: [message(3, { from: lead, text: "@Writer draft the notes", mentions: ["w"] })] }, session: 3 });
     expect(text).toContain("Members: Lead (leader), Writer (you), and the user.");
+    expect(text).toContain("[This session is for #3 and its thread: post there (group_send with thread: 3).]");
     expect(text).toContain("[For you, in full (already read):]\n\n#3 · Lead (bot) · 2026-10-16 10:02Z · @mentions you\n@Writer draft the notes");
     expect(text).not.toContain("Group inbox notice");
     const leader = groupPrompt("Launch", { subAgents: true, lead: { role: "leader", members: [{ name: "Writer", about: "Writes · runs on Claude Code with claude-sonnet-5-5" }] } });
@@ -370,17 +357,43 @@ describe("a group with a leader", () => {
     expect(leader).not.toContain("group_task create");
     expect(leader).not.toContain("in_review");
     // The leader checks the result without repeating the checks the member reports it ran.
-    expect(leader).toContain("check the result before you build on it or pass it on; checks the member reports it already ran don't need repeating.");
-    const member = groupPrompt("Launch", { lead: { role: "member", leader: "Lead" } });
-    expect(member).toContain("A new piece starts you in a fresh session that remembers nothing of earlier pieces");
+    // The leader reads what a member verified, doesn't redo it, and decides whether more is worth it.
+    expect(leader).toContain("read what it says it verified and how, and what it didn't. Don't repeat checks it already ran.");
+    expect(leader).toContain("a small check (one command, a quick read of a file) you do yourself; a larger one (new tests, a full review) you hand to a member");
+    // Members' questions to each other don't wake the leader or move work.
+    expect(leader).toContain("Those exchanges don't wake you, and they don't move work");
+    // A brief names another member's piece when the member should ask there.
+    expect(leader).toContain('with the other\'s piece number when it\'s about that piece ("Ezra maps the config in #7: ask there about it")');
+    // A member works on one thing at a time, and comes back to a piece in its session; pieces that change the same files go in order.
+    expect(leader).toContain("A member works on one thing at a time: another piece for it waits until its current turn ends, then goes on in a session of its own, and a piece you come back to goes on in the session it had.");
+    expect(leader).toContain("hand out pieces that change the same files one after another");
+    const member = groupPrompt("Launch", { lead: { role: "member", leader: "Lead", peers: [{ name: "Ezra", about: "Explorer · Reads code and returns files and line numbers." }] } });
+    expect(member).toContain("It starts a fresh session that remembers nothing else");
+    // Each place it's brought into is a session of its own; it posts there.
+    expect(member).toContain("Each place you're brought into gets a session of its own");
     expect(member).toContain("Don't change the task's status: Lead decides when it's done.");
     expect(member).toContain("Then stop; don't wait around or keep checking.");
-    expect(member).toContain("then what you changed (files), what tests and checks you ran and their results, and anything left open. Keep it short: Lead decides what's next.");
+    expect(member).toContain("Before you report, verify your work yourself as far as you can");
+    expect(member).toContain("what you verified and how (the commands you ran and their results), what you didn't or couldn't verify");
+    // A member asks another in a request at the top level by default, in its thread when the other
+    // needs the piece's context, and in the other's piece thread only when its number was given; a
+    // whole piece moves only through the leader.
+    expect(member).toContain("In this thread instead when it needs this piece's context");
+    expect(member).toContain("By default in a new top-level message: a complete request that stands on its own (a code search, a test run)");
+    expect(member).toContain("In that member's own piece's thread when it's about that piece and your brief or an answer gave you its number");
+    expect(member).toContain("Don't search the group for other members' pieces to ask in.");
+    expect(member).toContain("Wherever you asked, the answer comes back to this session.");
+    // The report says what it got from other members, so the leader needn't look for it.
+    expect(member).toContain('what you got from other members and where ("Ezra in #7: the loader is src/theme/load.ts")');
+    expect(member).toContain("if a whole piece should move to someone else, tell Lead");
+    expect(member).toContain("another member's request isn't a task, so don't claim it");
+    expect(member).toContain("When another member asks you something, answer once where it asked");
+    expect(member).toContain("- The other members, besides the leader:\n  - Ezra: Explorer · Reads code and returns files and line numbers.");
     expect(member).not.toContain("in_review");
     expect(member).not.toContain("group_task create");
     expect(member).not.toContain("send short progress updates");
     // Nor the tools a member isn't listed (tools/mcp.ts ledMember).
-    for (const tool of ["group_task", "group_reminder", "group_follow", "group_mute", "group_inbox", "group_search", "group_mention_delivery"]) expect(member).not.toContain(tool);
+    for (const tool of ["group_task", "group_reminder", "group_follow", "group_mute", "group_inbox", "group_mention_delivery"]) expect(member).not.toContain(tool);
     expect(member.length).toBeLessThan(leader.length * 0.7);
   });
 });
