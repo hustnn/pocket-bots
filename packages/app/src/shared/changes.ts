@@ -236,8 +236,13 @@ export function providerInfo(entries: readonly ProviderEntry[]): ProviderInfo[] 
 
 /** The provider a new bot gets when nothing names one: Claude when it's ready, else the first ready one. */
 export function readyProvider(entries: readonly ProviderEntry[]): string {
-  const ready = entries.filter((entry) => entry.enabled && entry.status === "ready");
-  return (ready.find((entry) => entry.provider === "claude") ?? ready[0])?.provider ?? "";
+  const ready = readyProviders(entries);
+  return (ready.find((provider) => provider === "claude") ?? ready[0]) ?? "";
+}
+
+/** The providers that are on, installed and signed in. */
+export function readyProviders(entries: readonly ProviderEntry[]): string[] {
+  return entries.filter((entry) => entry.enabled && entry.status === "ready").map((entry) => entry.provider);
 }
 
 export interface ApplyContext {
@@ -437,6 +442,10 @@ function applyChange(values: BotSettingsValues, change: Change, context: ApplyCo
         createdAt: context.now,
       };
       bot = withFields(bot, change, context);
+      // The role's approval mode on the agent the bot ends up with, unless the change picks one. Contact with
+      // other bots doesn't widen with the role: only when the change says so, where the card shows it.
+      const roleMode = template?.modes?.[bot.provider];
+      if (roleMode && change.mode === undefined) bot = { ...bot, modeId: roleMode };
       bot = withLibraryItems(bot, library, "skill", change.skills);
       bot = withLibraryItems(bot, library, "mcp", change.mcp_servers);
       bot = withApps(bot, change.apps, [], context);

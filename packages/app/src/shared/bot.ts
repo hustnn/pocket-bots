@@ -128,6 +128,15 @@ const PlaybookSchema = z.object({
 });
 export type Playbook = z.infer<typeof PlaybookSchema>;
 
+export const MAX_STARTERS = 6;
+
+/** An example of what to ask the bot: `text` goes into the message box, `hint` says what it does. */
+const StarterSchema = z.object({
+  text: z.string().max(2000),
+  hint: z.string().max(200).default(""),
+});
+export type Starter = z.infer<typeof StarterSchema>;
+
 /**
  * How a bot may use one connected app: its tools ("all", "read" for the ones
  * Composio marks read-only, or exact tool names) and the account it must use
@@ -180,6 +189,8 @@ export const BotSchema = z.object({
   memoryAutoWrite: z.boolean().default(false),
   /** Whether a new chat's prompt carries Recent work (the last thing the bot said in each chat lately). Off for a bot that should start every chat knowing only what it's given, like a reviewer; the daily log is kept either way. */
   includeRecentWork: z.boolean().default(true),
+  /** Examples of what to ask, shown in a new chat with the bot; picking one fills the message box. Never in the prompt. */
+  starters: z.array(StarterSchema).max(MAX_STARTERS).default([]),
   routines: z.array(RoutineSchema).default([]),
   playbooks: z.array(PlaybookSchema).default([]),
   /** Working folder. Null means the shared managed folder on the storing host. */
@@ -259,6 +270,7 @@ const PresetSchema = z.object({
   soul: z.string().default(""),
   playbooks: z.array(PlaybookSchema).default([]),
   skillIds: z.array(z.string()).default([]),
+  starters: z.array(StarterSchema).max(MAX_STARTERS).default([]),
   createdAt: z.string(),
 });
 export type Preset = z.infer<typeof PresetSchema>;
@@ -338,7 +350,7 @@ function newPresetId(): string {
 }
 
 export function presetFromBot(bot: Bot, now: string = new Date().toISOString()): Preset {
-  return { id: newPresetId(), name: bot.name, title: bot.title, description: bot.description, avatar: bot.avatar, soul: bot.soul, playbooks: bot.playbooks, skillIds: bot.skillIds, createdAt: now };
+  return { id: newPresetId(), name: bot.name, title: bot.title, description: bot.description, avatar: bot.avatar, soul: bot.soul, playbooks: bot.playbooks, skillIds: bot.skillIds, starters: bot.starters, createdAt: now };
 }
 
 /** "Inbox", or "Inbox 2", "Inbox 3"... when a bot already has the name (as imports are named). */

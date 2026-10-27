@@ -1,12 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { randomSeed } from "../../../shared/avatar";
-import type { Bot } from "../../../shared/bot";
+import { MAX_STARTERS, type Bot, type Starter } from "../../../shared/bot";
 import { PALETTE_COUNT, paletteSwatch } from "../../../shared/pixel";
 import { avatarGenerateRpc, avatarKeyStatusRpc } from "../../../shared/rpc";
 import { voiceGroups } from "../../../shared/speech";
 import { Avatar } from "../../components/Avatar";
-import { Button, CommitInput, Field, Segmented, Toggle, useAction } from "../../components/ui";
+import { Button, CommitInput, Field, IconButton, Segmented, Toggle, useAction } from "../../components/ui";
 import { rpc } from "../../lib/api";
 import { squareImage } from "../../lib/images";
 import { canSpeak, speak } from "../../lib/speech";
@@ -46,6 +46,8 @@ export function IdentitySection({ bot }: { bot: Bot }) {
   // Changes apply to the bot as saved, so two quick ones (a new face, then a shape) both stick.
   const setAvatar = (patch: Partial<Bot["avatar"]>) => void update(bot.id, (current) => ({ ...current, avatar: { ...current.avatar, ...patch } }));
   const setVoice = (patch: Partial<Bot["voice"]>) => void update(bot.id, (current) => ({ ...current, voice: { ...current.voice, ...patch } }));
+  const setStarter = (index: number, patch: Partial<Starter>) =>
+    void update(bot.id, (current) => ({ ...current, starters: current.starters.map((starter, at) => (at === index ? { ...starter, ...patch } : starter)) }));
 
   const pickPicture = (file: File) =>
     run("picture", async () => {
@@ -70,6 +72,24 @@ export function IdentitySection({ bot }: { bot: Bot }) {
         <Field label="About" hint="Shown in the bot list and given to the agent.">
           <CommitInput multiline rows={3} value={bot.description} onCommit={(description) => void update(bot.id, { description })} />
         </Field>
+      </Section>
+      <Section title="Starters" info="Examples of what to ask, shown in a new chat with the bot. Picking one puts its text in the message box, to finish and send. They aren't given to the agent.">
+        {bot.starters.map((starter, index) => (
+          <div key={index} className="row" style={{ alignItems: "flex-start" }}>
+            <div className="stack grow" style={{ gap: 6 }}>
+              <CommitInput mono value={starter.text} placeholder="What to ask, like: summarize today's mail" onCommit={(text) => setStarter(index, { text })} />
+              <CommitInput value={starter.hint} placeholder="What it does (optional)" onCommit={(hint) => setStarter(index, { hint })} />
+            </div>
+            <IconButton icon="x" title="Remove starter" onClick={() => void update(bot.id, (current) => ({ ...current, starters: current.starters.filter((_, at) => at !== index) }))} />
+          </div>
+        ))}
+        {bot.starters.length < MAX_STARTERS ? (
+          <div>
+            <Button small icon="plus" onClick={() => void update(bot.id, (current) => ({ ...current, starters: [...current.starters, { text: "", hint: "" }] }))}>
+              Add starter
+            </Button>
+          </div>
+        ) : null}
       </Section>
       <Section title="Avatar">
         <div className="row" style={{ gap: 14 }}>

@@ -48,6 +48,7 @@ packages/
     │   └── scheduler.ts、queue.ts、answers.ts、memory.ts、journal.ts、library.ts、composio.ts、search.ts …
     ├── src/shared/              前后端共用：zod 模型（bot.ts、group-chat.ts）、RPC（rpc.ts、rpc-core.ts）、纯逻辑
     ├── src/web/                 React SPA：app/ 页面，chat/ 聊天流纯逻辑，components/，lib/（RPC 客户端、SSE、路由）
+    ├── bundled-skills/          随应用发布的技能（EGM 的 egm、egm-goldfish），模板建 bot 时放进技能库（server/bundled-skills.ts）
     ├── tests/                   vitest；helpers.ts 有 makeBot 等工厂
     └── scripts/dev.mjs
 docs/                            features.md、USAGE.md、design.md、group-chats.md、group-protocol.md（中文）

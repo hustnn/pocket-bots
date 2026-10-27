@@ -18,6 +18,7 @@ function differences(before: Bot, after: Bot): string[] {
     ["contactBots", "contact other bots"],
     ["memoryAutoWrite", "memory writing"],
     ["includeRecentWork", "recent work"],
+    ["starters", "starters"],
     ["skillIds", "skills"],
     ["mcpServerIds", "MCP servers"],
     ["alwaysAllow", "tool grants"],

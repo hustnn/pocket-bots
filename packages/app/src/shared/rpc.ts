@@ -124,6 +124,16 @@ export const skillWriteRpc = defineRpc({
   output: z.object({ description: z.string(), sha: z.string() }),
 });
 
+/**
+ * Puts skills that ship with pocket-bots (a template's) in the library folder; the caller adds them
+ * to the library. Each comes with its SKILL.md hash, except a copy the user changed, which stays.
+ */
+export const bundledSkillsInstallRpc = defineRpc({
+  name: "bots.library.install-bundled",
+  input: z.object({ ids: z.array(SkillName).min(1).max(10) }),
+  output: z.object({ skills: z.array(ImportedSkillSchema.extend({ reviewedSha: z.string().optional() })) }),
+});
+
 export const skillDeleteRpc = defineRpc({
   name: "bots.library.delete-skill",
   input: z.object({ id: SkillName }),

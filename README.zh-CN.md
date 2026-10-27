@@ -207,7 +207,7 @@ pocket-bots/
 │       │   │   ├── relay.ts、tools/     127.0.0.1 上的 MCP relay；bot 工具和群聊工具
 │       │   │   ├── scheduler.ts、queue.ts、answers.ts    定时任务和 webhook、排队消息、ask_bot
 │       │   │   ├── memory.ts、journal.ts、activity.ts    记忆、改动记录、每日日志
-│       │   │   ├── library.ts、mcp-probe.ts、composio.ts、search.ts    技能和 MCP 库、连接的应用、搜索
+│       │   │   ├── library.ts、bundled-skills.ts、mcp-probe.ts、composio.ts、search.ts    技能和 MCP 库、随应用发布的技能、连接的应用、搜索
 │       │   │   └── config.ts、instance.ts、service.ts …    配置、单实例锁、launchd / systemd 服务
 │       │   ├── shared/              前后端共用：zod 模型（bot.ts、group-chat.ts）、RPC 定义（rpc.ts）、纯逻辑
 │       │   └── web/                 React 单页应用
@@ -215,6 +215,7 @@ pocket-bots/
 │       │       ├── chat/                聊天流的纯逻辑：时间线 → 行、输入框、提问表单
 │       │       ├── components/          通用组件
 │       │       └── lib/                 RPC 客户端、React Query、SSE 订阅、路由、草稿
+│       ├── bundled-skills/      随应用发布、给某些角色用的技能（EGM 的 egm 和 egm-goldfish）
 │       ├── tests/               vitest：单元测试和端到端测试（用 fake runtime）
 │       └── scripts/dev.mjs      同时跑后端（tsx watch）和 Vite
 ├── spikes/                      早期验证各 CLI 协议的脚本，不参与构建和测试

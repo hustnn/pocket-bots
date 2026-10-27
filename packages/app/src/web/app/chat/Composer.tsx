@@ -124,6 +124,8 @@ interface ComposerProps {
   botFolder?: string | null;
   /** The bot's CLI, for what a new chat's extra folders mean on it. */
   botProvider?: string;
+  /** Text to put in the box (a starter the user picked); `at` makes picking the same one again count. */
+  fill?: { text: string; at: number } | null;
 }
 
 /** One composer per chat, so each keeps its own draft. */
@@ -138,7 +140,7 @@ export function Composer(props: ComposerProps) {
  * or waits in the queue, as Settings say; Cmd/Ctrl+Enter does the other.
  * Stop ends the running turn (and denies a pending request, if any).
  */
-function ChatComposer({ botId, chatId, agent, placeholder, onStarted, botName = "the bot", reply = null, onReplyChange, botFolder = null, botProvider, draft }: ComposerProps & { draft: string }) {
+function ChatComposer({ botId, chatId, agent, placeholder, onStarted, botName = "the bot", reply = null, onReplyChange, botFolder = null, botProvider, fill = null, draft }: ComposerProps & { draft: string }) {
   // A new chat's folder, remembered per bot: the next new chat starts in the same project.
   const [folder, setFolder] = useLocalState<string | null>(`pocket.chatFolder.${botId}`, null);
   // A new chat's extra folders, picked for this chat only.
@@ -159,6 +161,14 @@ function ChatComposer({ botId, chatId, agent, placeholder, onStarted, botName = 
   const [attachments, setAttachments] = useState<ComposerAttachment[]>(() => getDraft(draft)?.attachments ?? []);
   // What's typed is kept per chat, so leaving the chat or reloading doesn't lose it.
   useEffect(() => setDraft(draft, { text, attachments }), [draft, text, attachments]);
+  // A starter picked in the splash replaces what's typed, ready to finish and send.
+  useEffect(() => {
+    if (!fill) return;
+    setText(fill.text);
+    const box = input.current;
+    box?.focus();
+    box?.setSelectionRange(fill.text.length, fill.text.length);
+  }, [fill]);
   const latest = useRef({ text, attachments });
   latest.current = { text, attachments };
   const [sending, setSending] = useState(false);

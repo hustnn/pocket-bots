@@ -4,9 +4,9 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { fakeChats, fakeHost, makeBot, type FakeChat } from "./helpers";
 
-const started: { botId: string; prompt: string; title: string; labels: Record<string, string> }[] = [];
+const started: { botId: string; prompt: string; title: string; labels: Record<string, string>; cwd?: string }[] = [];
 vi.mock("../src/server/chats", () => ({
-  startChat: vi.fn(async (_host: unknown, bot: { id: string }, input: { prompt: string; title: string; labels: Record<string, string> }) => {
+  startChat: vi.fn(async (_host: unknown, bot: { id: string }, input: { prompt: string; title: string; labels: Record<string, string>; cwd?: string }) => {
     started.push({ botId: bot.id, ...input });
     return "chat-new";
   }),
@@ -37,6 +37,26 @@ describe("asking other bots", () => {
     asked.attach(fakeChats(chats));
     expect(await askBot.available!({ ...caller, host: asked })).toBe(false);
     expect(await askBot.available!({ ...caller, bot: { ...scout, contactBots: "off" } })).toBe(false);
+  });
+
+  it("starts the asked bot's chat in the asking chat's project folder, never in the asker's own bot folder", async () => {
+    const { askBot } = await import("../src/server/tools/bots");
+    const { botDataPath } = await import("../src/server/bot-home");
+    const scout = makeBot({ id: "bot-scout", name: "Scout" });
+    const host = fakeHost([scout, makeBot({ id: "bot-fish", name: "Goldfish" })]);
+    const chats: Record<string, FakeChat> = {
+      "in-project": { status: "running", cwd: "/work/site", labels: { "pocket-bots.bot": "bot-scout" } },
+      "in-own-folder": { status: "running", cwd: botDataPath("bot-scout"), labels: { "pocket-bots.bot": "bot-scout" } },
+      "chat-new": { status: "running", labels: {} },
+    };
+    host.attach(fakeChats(chats));
+    const caller = (agentId: string) => ({ bot: scout, agentId, host, relay: null as never });
+
+    await askBot.run({ bot: "Goldfish", message: "Review docs/x.md", wait: false, in_my_folder: true }, caller("in-project"));
+    expect(started.at(-1)).toMatchObject({ botId: "bot-fish", cwd: "/work/site" });
+    await askBot.run({ bot: "Goldfish", message: "Hello", wait: false }, caller("in-project"));
+    expect(started.at(-1)).not.toHaveProperty("cwd");
+    await expect(askBot.run({ bot: "Goldfish", message: "x", wait: false, in_my_folder: true }, caller("in-own-folder"))).rejects.toThrow("your own bot folder");
   });
 
   it("checks only the bot's own chats and the ones it asked", async () => {

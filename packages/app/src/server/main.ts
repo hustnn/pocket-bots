@@ -1,10 +1,13 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ClaudeAdapter, CodexAdapter, DshAdapter, FakeAdapter, GrokAdapter, OpenCodeAdapter, PiAdapter, type ProviderId, type RuntimeAdapter } from "@pocket-bots/runtime";
+import { EMPTY_LIBRARY } from "../shared/bot";
 import { GROUP_LABEL } from "../shared/group-chat";
+import { addBundledSkills } from "../shared/library";
 import { savedApprovals, wireActivity } from "./activity";
 import { AskedAnswers } from "./answers";
 import { dataPath, ensureBotsHome } from "./bot-home";
+import { refreshBundledSkills } from "./bundled-skills";
 import { ChatCards } from "./cards";
 import { ChatService } from "./chat-service";
 import { chatSpecs, startChat } from "./chats";
@@ -43,6 +46,12 @@ async function main(): Promise<void> {
   const store = new Store();
   // An unreadable bots file shouldn't keep pocket-bots down: the web UI shows the error and can reset it.
   await store.read().catch((error: unknown) => console.error(`pocket-bots: can't read the bots file (${error instanceof Error ? error.message : String(error)}). Open the web UI to reset it.`));
+  // Skills that ship with the app, and haven't been changed in the library, follow this version of it.
+  await refreshBundledSkills()
+    .then(async (skills) => {
+      if (skills.length) await store.update((values) => ({ ...values, library: addBundledSkills(values.library ?? EMPTY_LIBRARY, skills) }));
+    })
+    .catch((error: unknown) => console.error(`pocket-bots: can't update the bundled skills (${error instanceof Error ? error.message : String(error)}).`));
   const db = new Db(join(dataPath(), "pocket-bots.sqlite"));
   const host = new PocketHost(store, runtimes());
   const hub = new EventHub();

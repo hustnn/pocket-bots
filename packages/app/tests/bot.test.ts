@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { pixelAvatar, SPRITE_NAMES, SPRITE_SIZE } from "../src/shared/avatar";
-import { botLimits, botProblems, defaultModelId, EMPTY_LIBRARY, promptSections, StoreSchema, formatPairs, joinArgs, parseMcpJson, parsePairs, splitArgs, type Bot, type Library, type LibraryMcpServer } from "../src/shared/bot";
+import { botLimits, botProblems, defaultModelId, EMPTY_LIBRARY, presetFromBot, promptSections, StoreSchema, formatPairs, joinArgs, parseMcpJson, parsePairs, splitArgs, type Bot, type Library, type LibraryMcpServer } from "../src/shared/bot";
 import { BOT_TEMPLATES, newBot } from "../src/shared/templates";
 import { relativeTime } from "../src/shared/time";
 
@@ -26,6 +26,7 @@ function bot(patch: Partial<Bot> = {}): Bot {
     contactBots: "ask",
     memoryAutoWrite: false,
     includeRecentWork: true,
+    starters: [],
     playbooks: [],
     routines: [],
     pinned: false,
@@ -186,6 +187,16 @@ describe("settings schema", () => {
     expect(StoreSchema.parse({ bots: [legacy] }).bots[0]!.includeRecentWork).toBe(true);
     expect(StoreSchema.parse({ bots: [bot({ includeRecentWork: false })] }).bots[0]!.includeRecentWork).toBe(false);
     expect(newBot("claude").includeRecentWork).toBe(true);
+  });
+
+  it("keeps starters out of the prompt, and in presets", () => {
+    const starters = [{ text: "egm review docs/designs/", hint: "Review a design" }];
+    const { starters: _none, ...legacy } = bot({ starters });
+    expect(StoreSchema.parse({ bots: [legacy] }).bots[0]!.starters).toEqual([]);
+    expect(StoreSchema.parse({ bots: [bot({ starters: [{ text: "Hi" }] as never })] }).bots[0]!.starters).toEqual([{ text: "Hi", hint: "" }]);
+    const context = { memory: "", memoryPath: "/m/MEMORY.md", recentWork: [], playbooks: [], skills: [], botTools: true, apps: [] };
+    expect(promptSections(bot({ starters }), context).map((section) => section.text).join("\n")).not.toContain("egm review");
+    expect(presetFromBot(bot({ starters })).starters).toEqual(starters);
   });
 
   it("says in the overview that a bot with memory writing off only reads its memory", () => {
