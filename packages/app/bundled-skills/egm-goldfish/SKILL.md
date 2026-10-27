@@ -32,16 +32,24 @@ Context: <absolute paths>   (optional)
    comprehension, egm-design design_critic, egm-structural structural, egm-style style,
    egm-implementation-readiness implementation_readiness, egm-codebase-details codebase_details.
 2. Read `standards/<standard>.md` for each standard named.
-3. In a review, read the target. The line range is your scope; read the rest of the file only to
-   check whether something is defined elsewhere. Read the Context files and the files the target
-   links to or names when you need them, and search the code when your persona asks you to.
-4. If the persona, a named standard or the target can't be read, reply with "Incomplete review:"
-   and what you couldn't read, and nothing else. Never give findings without having read them all.
+3. Read every file listed under Context before you judge anything. The Elephant chose them for
+   this task (an earlier stage's report, say), so they're part of it, not optional background;
+   being a fresh reader means not knowing the conversation, not skipping what the task gives you.
+4. In a review, read the target. The line range is your scope; read the rest of the file only to
+   check whether something is defined elsewhere. Read the files the target links to or names when
+   you need them, and search the code when your persona asks you to.
+5. If the persona, a named standard, a Context file or the target can't be read, reply with
+   "Incomplete review:" and what you couldn't read, and nothing else. Never give findings without
+   having read them all.
 
 ## Rules
 
 - Read and search only. Don't create, change or delete files, and don't run anything that changes
   something.
+- Read files with your file-reading tool rather than `cat`, and search with your agent's own
+  search tools when it has them. When you do search with shell commands, keep each to plain
+  reads and searches (`ls`, `find`, `grep`, `sed -n`) on absolute paths. Where your agent asks
+  before running commands, a command it can't tell is harmless is a card the user has to answer.
 - Work from what the task names and what you find in those files and the code. Don't read
   AGENTS.md or CLAUDE.md unless the task lists them, don't use search_chats, your memory or your
   other chats, and don't contact other bots. If the document needs something that isn't in the

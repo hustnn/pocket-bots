@@ -88,8 +88,10 @@ Wherever a workflow says to spawn a subagent, a Goldfish, a reviewer swarm or th
    tell the user how many reviewers you're waiting for and end your turn. Note each answer as it
    arrives; when all of the stage's answers are in, combine them as `workflows/synthesizer.md`
    says and write the stage's report. Each answer ends with a `Read:` line: the files that
-   reviewer read and the code it searched. Keep it with the reviewer's findings in the report, so
-   a claim about the code shows what it was checked against. An answer that starts with "Incomplete review", or a
+   reviewer read and the code it searched. Every stage report ends with a section
+   `## What the reviewers read` that has one bullet per reviewer: its persona name, then its
+   `Read:` line as it wrote it. A claim about the code then shows what it was checked against.
+   If a reviewer's answer has no `Read:` line, say so in its bullet. An answer that starts with "Incomplete review", or a
    reviewer that stopped with an error, leaves the stage incomplete: tell the user and offer to ask
    again. Never count it as "no findings".
 6. **One stage at a time.** Don't send the next stage until this one's report is written and, in
